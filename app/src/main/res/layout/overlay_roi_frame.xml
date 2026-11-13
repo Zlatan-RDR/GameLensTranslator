@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/roiRoot"
+    android:layout_width="300dp"
+    android:layout_height="180dp"
+    android:background="@drawable/bg_roi_frame">
+
+    <!-- Top drag header with title -->
+    <LinearLayout
+        android:id="@+id/roiHeader"
+        android:layout_width="match_parent"
+        android:layout_height="32dp"
+        android:layout_gravity="top"
+        android:background="#99000000"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
+
+        <TextView
+            android:id="@+id/tvRoiTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/roi_label"
+            android:textColor="@color/accent"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/btnHideRoi"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:src="@android:drawable/ic_menu_close_clear_cancel"
+            android:contentDescription="Close ROI"
+            android:tint="@color/accent" />
+    </LinearLayout>
+
+    <!-- Center transparent area for game view -->
+    <View
+        android:id="@+id/roiCenterArea"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginTop="32dp"
+        android:layout_marginBottom="24dp"
+        android:background="@android:color/transparent" />
+
+    <!-- Bottom-right corner resize handle -->
+    <ImageView
+        android:id="@+id/ivResizeHandle"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:layout_gravity="bottom|end"
+        android:src="@drawable/ic_resize_handle"
+        android:padding="4dp"
+        android:contentDescription="Resize Handle" />
+
+</FrameLayout>

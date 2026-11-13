@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GameLens Translator</string>
+    <string name="app_subtitle">مترجم الألعاب المباشر بتقنية الرؤية الحاسوبية الخالية من الحظر</string>
+    <string name="service_running_title">GameLens Translator قيد التشغيل</string>
+    <string name="service_running_desc">الترجمة الفورية لشاشة اللعبة نشطة في الخلفية</string>
+    <string name="btn_start_service">بدء الخدمة العائمة</string>
+    <string name="btn_stop_service">إيقاف الخدمة العائمة</string>
+    <string name="permission_overlay_title">إذن الظهور فوق التطبيقات</string>
+    <string name="permission_overlay_desc">مطلوب لعرض فقاعة التحكم وإطار تحديد منطقة الترجمة فوق شاشة اللعبة</string>
+    <string name="permission_media_title">إذن التقاط الشاشة (MediaProjection)</string>
+    <string name="permission_media_desc">مطلوب لقراءة نصوص اللعبة بواسطة تقنية ML Kit OCR في الذاكرة فقط بدون حفظ</string>
+    <string name="permission_granted">ممنوح</string>
+    <string name="permission_grant_action">منح الإذن</string>
+    <string name="roi_label">منطقة الترجمة (ROI)</string>
+    <string name="toggle_roi">تبديل إطار ROI</string>
+    <string name="toggle_translation">تبديل الترجمة الفورية</string>
+    <string name="translation_settings_title">إعدادات محرك الترجمة</string>
+    <string name="engine_offline">أوفلاين محلي (ML Kit بدون إنترنت)</string>
+    <string name="engine_cloud">ذكاء اصطناعي سحابي (OpenAI REST)</string>
+    <string name="api_key_hint">OpenAI API Key (sk-…)</string>
+    <string name="endpoint_hint">رابط API Endpoint</string>
+    <string name="save_settings">حفظ الإعدادات</string>
+    <string name="settings_saved">تم حفظ إعدادات الترجمة بنجاح</string>
+</resources>
