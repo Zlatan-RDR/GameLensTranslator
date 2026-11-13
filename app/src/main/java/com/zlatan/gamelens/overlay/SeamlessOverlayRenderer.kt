@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -38,6 +39,8 @@ class SeamlessOverlayRenderer(private val context: Context) {
         val container = FrameLayout(context).apply {
             clipChildren = false
             clipToPadding = false
+            isFocusable = false
+            isClickable = false
         }
 
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -47,7 +50,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // Strictly Touch Pass-Through flags: Zero touch interception, full-screen alignment
+        // 100% Touch Pass-Through flags: Zero touch interception, full-screen alignment
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -63,6 +66,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
             gravity = Gravity.TOP or Gravity.LEFT
             x = 0
             y = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
         }
 
         try {
@@ -107,7 +113,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 val targetH = (box.height() + padY * 2).coerceAtLeast(minBoxH)
                 val targetLeft = (box.left - padX).coerceAtLeast(0)
                 val targetTop = (box.top - padY).coerceAtLeast(0)
-                val renderBox = android.graphics.Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
+                val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
 
                 val colorScheme = EdgeColorSampler.sampleEdgeColors(screenBitmap, box)
 

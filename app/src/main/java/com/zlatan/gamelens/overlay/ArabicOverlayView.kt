@@ -25,6 +25,8 @@ class ArabicOverlayView(
         gravity = Gravity.CENTER
         typeface = Typeface.DEFAULT_BOLD
         includeFontPadding = false
+        isFocusable = false
+        isClickable = false
 
         val padHorizontal = (8 * resources.displayMetrics.density).toInt()
         val padVertical = (3 * resources.displayMetrics.density).toInt()

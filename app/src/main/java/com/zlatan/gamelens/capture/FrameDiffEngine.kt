@@ -1,62 +1,39 @@
 package com.zlatan.gamelens.capture
 
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.Rect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
-data class CropResult(
-    val bitmap: Bitmap,
-    val cropRect: Rect
-)
-
 class FrameDiffEngine(
-    private val sampleGridSize: Int = 32,
-    private val diffThresholdPercent: Float = 0.015f // 1.5% difference threshold for fine subtitles
+    private val sampleGridSize: Int = 36,
+    private val diffThresholdPercent: Float = 0.015f // 1.5% difference threshold
 ) {
     private var previousSampleHash: LongArray? = null
-    private var previousRoi: Rect? = null
+    private var previousWidth: Int = 0
+    private var previousHeight: Int = 0
 
     /**
-     * Crops the full-screen bitmap strictly to the given ROI bounding box.
-     * Returns both the cropped bitmap and the exact clamped cropRect coordinates.
-     */
-    fun cropToRoi(fullBitmap: Bitmap, roi: Rect): CropResult? {
-        if (fullBitmap.isRecycled || fullBitmap.width <= 0 || fullBitmap.height <= 0) return null
-
-        val clampLeft = roi.left.coerceIn(0, fullBitmap.width - 1)
-        val clampTop = roi.top.coerceIn(0, fullBitmap.height - 1)
-        val clampRight = roi.right.coerceIn(clampLeft + 1, fullBitmap.width)
-        val clampBottom = roi.bottom.coerceIn(clampTop + 1, fullBitmap.height)
-
-        val cropWidth = clampRight - clampLeft
-        val cropHeight = clampBottom - clampTop
-
-        if (cropWidth <= 10 || cropHeight <= 10) return null
-
-        return try {
-            val cropped = Bitmap.createBitmap(fullBitmap, clampLeft, clampTop, cropWidth, cropHeight)
-            CropResult(cropped, Rect(clampLeft, clampTop, clampRight, clampBottom))
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    /**
-     * Evaluates whether the cropped ROI bitmap has changed significantly compared to the last frame.
+     * Evaluates whether the full-screen frame has changed significantly compared to the last frame.
+     * Optionally skips pixel samples falling inside the excluded bubble area.
      * Runs on Dispatchers.Default for zero main-thread overhead.
      */
-    suspend fun hasFrameChanged(croppedBitmap: Bitmap, currentRoi: Rect): Boolean = withContext(Dispatchers.Default) {
-        // If ROI frame moved or resized, invalidate previous baseline immediately
-        if (previousRoi == null || previousRoi != currentRoi) {
-            previousRoi = Rect(currentRoi)
-            previousSampleHash = computeSampleHash(croppedBitmap)
+    suspend fun hasFrameChanged(bitmap: Bitmap, excludedRect: Rect? = null): Boolean = withContext(Dispatchers.Default) {
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return@withContext false
+
+        val w = bitmap.width
+        val h = bitmap.height
+
+        // If dimensions changed (e.g. rotation), immediately treat as changed
+        if (previousWidth != w || previousHeight != h) {
+            previousWidth = w
+            previousHeight = h
+            previousSampleHash = computeSampleHash(bitmap, excludedRect)
             return@withContext true
         }
 
-        val currentHash = computeSampleHash(croppedBitmap)
+        val currentHash = computeSampleHash(bitmap, excludedRect)
         val prevHash = previousSampleHash
 
         if (prevHash == null || prevHash.size != currentHash.size) {
@@ -65,23 +42,29 @@ class FrameDiffEngine(
         }
 
         var differingSamples = 0
+        var validSamples = 0
         val totalSamples = currentHash.size
 
         for (i in 0 until totalSamples) {
             val prevPixel = prevHash[i]
             val currPixel = currentHash[i]
 
+            // -1L indicates an excluded/ignored sample (e.g. floating bubble)
+            if (prevPixel == -1L || currPixel == -1L) continue
+            validSamples++
+
             val dr = abs(((prevPixel shr 16) and 0xFF) - ((currPixel shr 16) and 0xFF))
             val dg = abs(((prevPixel shr 8) and 0xFF) - ((currPixel shr 8) and 0xFF))
             val db = abs((prevPixel and 0xFF) - (currPixel and 0xFF))
 
-            // Check if color difference exceeds tolerance
-            if (dr + dg + db > 40) {
+            if (dr + dg + db > 35) {
                 differingSamples++
             }
         }
 
-        val changeRatio = differingSamples.toFloat() / totalSamples.toFloat()
+        if (validSamples == 0) return@withContext false
+
+        val changeRatio = differingSamples.toFloat() / validSamples.toFloat()
         val hasChanged = changeRatio >= diffThresholdPercent
 
         if (hasChanged) {
@@ -91,7 +74,7 @@ class FrameDiffEngine(
         hasChanged
     }
 
-    private fun computeSampleHash(bitmap: Bitmap): LongArray {
+    private fun computeSampleHash(bitmap: Bitmap, excludedRect: Rect?): LongArray {
         val width = bitmap.width
         val height = bitmap.height
         val samples = LongArray(sampleGridSize * sampleGridSize)
@@ -104,8 +87,12 @@ class FrameDiffEngine(
             val sampleY = (y * stepY).coerceAtMost(height - 1)
             for (x in 0 until sampleGridSize) {
                 val sampleX = (x * stepX).coerceAtMost(width - 1)
-                val pixel = bitmap.getPixel(sampleX, sampleY)
-                samples[idx++] = pixel.toLong() and 0xFFFFFFFFL
+                if (excludedRect != null && excludedRect.contains(sampleX, sampleY)) {
+                    samples[idx++] = -1L
+                } else {
+                    val pixel = bitmap.getPixel(sampleX, sampleY)
+                    samples[idx++] = pixel.toLong() and 0xFFFFFFFFL
+                }
             }
         }
         return samples
@@ -113,6 +100,7 @@ class FrameDiffEngine(
 
     fun reset() {
         previousSampleHash = null
-        previousRoi = null
+        previousWidth = 0
+        previousHeight = 0
     }
 }

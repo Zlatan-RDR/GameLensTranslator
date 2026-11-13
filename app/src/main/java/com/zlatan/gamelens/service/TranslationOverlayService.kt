@@ -28,13 +28,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
-import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.R
-import com.zlatan.gamelens.capture.CropResult
 import com.zlatan.gamelens.capture.FrameDiffEngine
 import com.zlatan.gamelens.capture.ScreenCaptureManager
 import com.zlatan.gamelens.db.TranslationCacheManager
@@ -68,6 +66,7 @@ class TranslationOverlayService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "gamelens_translation_channel"
         private const val NOTIFICATION_ID = 1001
         private const val CLICK_DRAG_TOLERANCE = 15f
+        private const val LONG_PRESS_TIMEOUT_MS = 750L
         private const val FRAME_INTERVAL_MS = 300L
         private const val ANTI_FEEDBACK_VSYNC_DELAY_MS = 20L
     }
@@ -78,11 +77,11 @@ class TranslationOverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private var bubbleView: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
+    private var ivBubbleIcon: ImageView? = null
 
-    private var roiView: View? = null
-    private var roiParams: WindowManager.LayoutParams? = null
-    private var tvRoiTitle: TextView? = null
-    private var isRoiVisible = true
+    // Single touchable control state
+    @Volatile
+    private var isAutoTranslationActive = true
 
     private var displayManager: DisplayManager? = null
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -128,7 +127,7 @@ class TranslationOverlayService : Service() {
             val config = loadTranslationConfigFromPreferences()
             translationManager = TranslationManager(this, cacheManager, glossaryManager, config)
 
-            // Initialize Seamless Overlay Renderer
+            // Initialize Seamless Full-Screen Overlay Renderer
             seamlessOverlayRenderer = SeamlessOverlayRenderer(this)
             Log.d(TAG, "TranslationOverlayService onCreate completed successfully.")
         } catch (e: Exception) {
@@ -158,54 +157,21 @@ class TranslationOverlayService : Service() {
     private fun handleDisplayOrOrientationChange() {
         val (w, h, dpi) = getRealScreenDimensions()
         screenCaptureManager?.updateDimensions(w, h, dpi)
-        clampRoiWithinScreen(w, h)
+        clampBubbleWithinScreen(w, h)
     }
 
-    private fun clampRoiWithinScreen(screenW: Int, screenH: Int) {
-        val params = roiParams ?: return
-        val view = roiView ?: return
-        var changed = false
+    private fun clampBubbleWithinScreen(screenW: Int, screenH: Int) {
+        val params = bubbleParams ?: return
+        val view = bubbleView ?: return
+        val bubbleSize = (56 * resources.displayMetrics.density).toInt()
 
-        if (params.width > screenW) {
-            params.width = (screenW * 0.85f).toInt()
-            changed = true
-        }
-        if (params.height > screenH) {
-            params.height = (screenH * 0.45f).toInt()
-            changed = true
-        }
-        if (params.x + params.width > screenW) {
-            params.x = (screenW - params.width).coerceAtLeast(0)
-            changed = true
-        }
-        if (params.y + params.height > screenH) {
-            params.y = (screenH - params.height).coerceAtLeast(0)
-            changed = true
-        }
+        params.x = params.x.coerceIn(0, screenW - bubbleSize)
+        params.y = params.y.coerceIn(0, screenH - bubbleSize)
 
-        if (changed) {
-            mainHandler.post {
-                try {
-                    windowManager.updateViewLayout(view, params)
-                } catch (_: Exception) {}
-            }
-        }
-    }
-
-    fun getScanRoiRect(): Rect? {
-        val params = roiParams ?: return null
-        val density = resources.displayMetrics.density
-        val headerHeight = (32 * density).toInt()
-        val left = params.x
-        val top = params.y + headerHeight
-        val right = params.x + params.width
-        val bottom = params.y + params.height
-        return Rect(left, top, right, bottom)
-    }
-
-    private fun updateRoiBadge(text: String) {
         mainHandler.post {
-            tvRoiTitle?.text = text
+            try {
+                windowManager.updateViewLayout(view, params)
+            } catch (_: Exception) {}
         }
     }
 
@@ -228,7 +194,7 @@ class TranslationOverlayService : Service() {
 
         when (intent.action) {
             ACTION_START -> {
-                // MANDATORY FOR ANDROID 14/15: startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                // MANDATORY FOR ANDROID 14/15/16: startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
                 // MUST be called FIRST before getting MediaProjection instance!
                 try {
                     createNotificationChannel()
@@ -252,9 +218,8 @@ class TranslationOverlayService : Service() {
                     // Refresh config on start
                     translationManager.updateConfig(loadTranslationConfigFromPreferences())
 
-                    // Setup UI overlays with try-catch
+                    // Setup Single Floating Bubble Control
                     setupFloatingBubble()
-                    setupRoiFrame()
 
                     // Initialize MediaProjection after foreground service is established
                     if (resultCode != 0 && resultData != null) {
@@ -308,7 +273,7 @@ class TranslationOverlayService : Service() {
             notification,
             foregroundType
         )
-        Log.d(TAG, "ServiceCompat.startForeground called with type FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION")
+        Log.d(TAG, "ServiceCompat.startForeground called with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION")
     }
 
     private fun createNotificationChannel() {
@@ -359,12 +324,12 @@ class TranslationOverlayService : Service() {
     private fun startCaptureLoop() {
         captureJob?.cancel()
         captureJob = serviceScope.launch {
-            Log.d(TAG, "End-to-End GameLens Pipeline active (interval: ${FRAME_INTERVAL_MS}ms)")
+            Log.d(TAG, "Full-Screen GameLens Pipeline active (interval: ${FRAME_INTERVAL_MS}ms)")
             while (isActive) {
                 try {
                     processFramePipeline()
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error in End-to-End Pipeline: ${e.message}", e)
+                    Log.e(TAG, "Error in Pipeline: ${e.message}", e)
                 }
                 delay(FRAME_INTERVAL_MS)
             }
@@ -372,12 +337,12 @@ class TranslationOverlayService : Service() {
     }
 
     private suspend fun processFramePipeline() {
-        if (!isRoiVisible) {
+        // Paused state: clear overlays and wait
+        if (!isAutoTranslationActive) {
             seamlessOverlayRenderer?.clear()
             return
         }
 
-        val scanRoi = getScanRoiRect() ?: return
         val captureMgr = screenCaptureManager ?: return
 
         // 0. Synchronize capture dimensions with active display orientation
@@ -385,10 +350,10 @@ class TranslationOverlayService : Service() {
         val (curW, curH) = captureMgr.getDimensions()
         if (screenW != curW || screenH != curH) {
             captureMgr.updateDimensions(screenW, screenH, dpi)
-            clampRoiWithinScreen(screenW, screenH)
+            clampBubbleWithinScreen(screenW, screenH)
         }
 
-        // 1. Anti-Feedback Loop: temporarily hide translation overlay container right before frame capture
+        // 1. Anti-Feedback Loop: hide translation overlay container right before frame capture
         seamlessOverlayRenderer?.setVisibility(false)
         delay(ANTI_FEEDBACK_VSYNC_DELAY_MS)
 
@@ -398,67 +363,41 @@ class TranslationOverlayService : Service() {
         // 3. Restore translation overlay visibility immediately after frame acquisition
         seamlessOverlayRenderer?.setVisibility(true)
 
-        if (fullBitmap == null) {
-            updateRoiBadge("ROI [${screenW}x${screenH}] | انتظار الإطار...")
-            return
-        }
+        if (fullBitmap == null) return
 
-        val actualW = fullBitmap.width
-        val actualH = fullBitmap.height
+        val bubbleBounds = getBubbleBounds()
 
-        // 4. Crop strictly to active user-selected ROI (excluding header)
-        val cropResult = frameDiffEngine.cropToRoi(fullBitmap, scanRoi)
-        if (cropResult == null) {
-            fullBitmap.recycle()
-            updateRoiBadge("ROI [${actualW}x${actualH}] | خارج حدود الشاشة")
-            return
-        }
-
-        val croppedBitmap = cropResult.bitmap
-        val cropRect = cropResult.cropRect
-
-        // 5. Fast Frame Diffing: skip unchanged frames to save CPU and battery
-        val hasChanged = frameDiffEngine.hasFrameChanged(croppedBitmap, cropRect)
+        // 4. Fast Full-Screen Frame Diffing: skip unchanged frames, ignoring floating bubble area
+        val hasChanged = frameDiffEngine.hasFrameChanged(fullBitmap, bubbleBounds)
         if (!hasChanged) {
-            croppedBitmap.recycle()
             fullBitmap.recycle()
             return
         }
 
-        // 6. On-Device ML Kit OCR Recognition
-        val detectedBlocks = ocrEngine.recognizeText(croppedBitmap, cropRect)
-        croppedBitmap.recycle()
+        // 5. Full-Screen On-Device ML Kit OCR Recognition (excluding bubble & HUD noise)
+        val detectedBlocks = ocrEngine.recognizeText(fullBitmap, bubbleBounds)
 
-        // 7. Auto-cleanup: If text in ROI has disappeared or changed to empty, clear overlay
+        // 6. Auto-cleanup: If no text is detected on screen, clear overlays
         if (detectedBlocks.isEmpty()) {
             latestDetectedBlocks = emptyList()
             seamlessOverlayRenderer?.clear()
             fullBitmap.recycle()
-            val status = translationManager.getStatusString()
-            updateRoiBadge("ROI [${actualW}x${actualH}] | $status | لا يوجد نص")
             return
         }
 
-        // 8. Asynchronous Translation through Glossary, Cache & Hybrid Engine on Dispatchers.IO
-        var translatedCount = 0
+        // 7. Non-blocking Asynchronous Translation through Glossary, Cache & Translation Engine
         withContext(Dispatchers.IO) {
             for (block in detectedBlocks) {
                 val translated = translationManager.translate(block.text)
                 block.translatedText = translated
-                if (translated.isNotBlank() && translated != block.text) {
-                    translatedCount++
-                }
             }
         }
 
         latestDetectedBlocks = detectedBlocks
 
-        // 9. Seamless Overlay Rendering: Edge color sampling + Native RTL Arabic TextView placement
+        // 8. 100% Touch-Passthrough Seamless Overlay Rendering directly over original text bounding boxes
         seamlessOverlayRenderer?.renderTranslations(detectedBlocks, fullBitmap)
         fullBitmap.recycle()
-
-        val status = translationManager.getStatusString()
-        updateRoiBadge("ROI [${actualW}x${actualH}] | $status | OCR: ${detectedBlocks.size} | ترجم: $translatedCount")
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
@@ -467,6 +406,7 @@ class TranslationOverlayService : Service() {
 
         try {
             bubbleView = LayoutInflater.from(this).inflate(R.layout.overlay_bubble, null)
+            ivBubbleIcon = bubbleView?.findViewById(R.id.ivBubbleIcon)
 
             val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -485,6 +425,9 @@ class TranslationOverlayService : Service() {
                 gravity = Gravity.TOP or Gravity.START
                 x = 40
                 y = 200
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                }
             }
 
             var initialX = 0
@@ -492,6 +435,13 @@ class TranslationOverlayService : Service() {
             var initialTouchX = 0f
             var initialTouchY = 0f
             var isMoved = false
+            var isLongPressed = false
+
+            val longPressRunnable = Runnable {
+                isLongPressed = true
+                showToast("جاري إيقاف خدمة الترجمة...")
+                stopSelf()
+            }
 
             bubbleView?.setOnTouchListener { _, event ->
                 when (event.action) {
@@ -501,23 +451,36 @@ class TranslationOverlayService : Service() {
                         initialTouchX = event.rawX
                         initialTouchY = event.rawY
                         isMoved = false
+                        isLongPressed = false
+                        mainHandler.postDelayed(longPressRunnable, LONG_PRESS_TIMEOUT_MS)
                         true
                     }
                     MotionEvent.ACTION_MOVE -> {
                         val deltaX = event.rawX - initialTouchX
                         val deltaY = event.rawY - initialTouchY
                         if (Math.abs(deltaX) > CLICK_DRAG_TOLERANCE || Math.abs(deltaY) > CLICK_DRAG_TOLERANCE) {
-                            isMoved = true
+                            if (!isMoved) {
+                                isMoved = true
+                                mainHandler.removeCallbacks(longPressRunnable)
+                            }
                         }
-                        bubbleParams?.x = (initialX + deltaX).toInt()
-                        bubbleParams?.y = (initialY + deltaY).toInt()
-                        bubbleParams?.let { windowManager.updateViewLayout(bubbleView, it) }
+                        if (isMoved) {
+                            bubbleParams?.x = (initialX + deltaX).toInt()
+                            bubbleParams?.y = (initialY + deltaY).toInt()
+                            bubbleParams?.let { windowManager.updateViewLayout(bubbleView, it) }
+                        }
                         true
                     }
                     MotionEvent.ACTION_UP -> {
-                        if (!isMoved) {
-                            toggleRoiVisibility()
+                        mainHandler.removeCallbacks(longPressRunnable)
+                        if (!isMoved && !isLongPressed) {
+                            // Single tap: Toggle auto-translation ON / OFF
+                            toggleTranslationState()
                         }
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        mainHandler.removeCallbacks(longPressRunnable)
                         true
                     }
                     else -> false
@@ -525,6 +488,7 @@ class TranslationOverlayService : Service() {
             }
 
             windowManager.addView(bubbleView, bubbleParams)
+            updateBubbleVisualState()
             Log.d(TAG, "Floating control bubble added to WindowManager.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add floating bubble to WindowManager: ${e.message}", e)
@@ -532,141 +496,44 @@ class TranslationOverlayService : Service() {
         }
     }
 
-    @SuppressLint("InflateParams", "ClickableViewAccessibility")
-    private fun setupRoiFrame() {
-        if (roiView != null) return
+    private fun toggleTranslationState() {
+        isAutoTranslationActive = !isAutoTranslationActive
+        updateBubbleVisualState()
 
-        try {
-            roiView = LayoutInflater.from(this).inflate(R.layout.overlay_roi_frame, null)
-
-            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            } else {
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE
-            }
-
-            val (realW, realH, _) = getRealScreenDimensions()
-            val initialWidth = (realW * 0.70f).toInt()
-            val initialHeight = (realH * 0.28f).toInt()
-
-            roiParams = WindowManager.LayoutParams(
-                initialWidth,
-                initialHeight,
-                layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP or Gravity.START
-                x = (realW - initialWidth) / 2
-                y = (realH * 0.58f).toInt()
-            }
-
-            tvRoiTitle = roiView?.findViewById(R.id.tvRoiTitle)
-            val header = roiView?.findViewById<View>(R.id.roiHeader)
-            val btnHide = roiView?.findViewById<ImageView>(R.id.btnHideRoi)
-            val resizeHandle = roiView?.findViewById<ImageView>(R.id.ivResizeHandle)
-
-            var headerInitX = 0
-            var headerInitY = 0
-            var headerTouchX = 0f
-            var headerTouchY = 0f
-
-            header?.setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        headerInitX = roiParams?.x ?: 0
-                        headerInitY = roiParams?.y ?: 0
-                        headerTouchX = event.rawX
-                        headerTouchY = event.rawY
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val deltaX = event.rawX - headerTouchX
-                        val deltaY = event.rawY - headerTouchY
-                        roiParams?.x = (headerInitX + deltaX).toInt()
-                        roiParams?.y = (headerInitY + deltaY).toInt()
-                        roiParams?.let { windowManager.updateViewLayout(roiView, it) }
-                        true
-                    }
-                    else -> false
-                }
-            }
-
-            var resizeStartW = 0
-            var resizeStartH = 0
-            var resizeTouchX = 0f
-            var resizeTouchY = 0f
-            val minWidthPx = (140 * resources.displayMetrics.density).toInt()
-            val minHeightPx = (90 * resources.displayMetrics.density).toInt()
-
-            resizeHandle?.setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        resizeStartW = roiParams?.width ?: initialWidth
-                        resizeStartH = roiParams?.height ?: initialHeight
-                        resizeTouchX = event.rawX
-                        resizeTouchY = event.rawY
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val deltaW = (event.rawX - resizeTouchX).toInt()
-                        val deltaH = (event.rawY - resizeTouchY).toInt()
-                        val newW = (resizeStartW + deltaW).coerceAtLeast(minWidthPx)
-                        val newH = (resizeStartH + deltaH).coerceAtLeast(minHeightPx)
-
-                        roiParams?.width = newW
-                        roiParams?.height = newH
-                        roiParams?.let { windowManager.updateViewLayout(roiView, it) }
-                        true
-                    }
-                    else -> false
-                }
-            }
-
-            btnHide?.setOnClickListener {
-                toggleRoiVisibility()
-            }
-
-            windowManager.addView(roiView, roiParams)
-            isRoiVisible = true
-            Log.d(TAG, "ROI frame added to WindowManager.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to add ROI frame to WindowManager: ${e.message}", e)
+        if (isAutoTranslationActive) {
+            frameDiffEngine.reset()
+            showToast("تم تفعيل الترجمة التلقائية للشاشة")
+        } else {
+            seamlessOverlayRenderer?.clear()
+            showToast("تم إيقاف الترجمة التلقائية مؤقتاً")
         }
     }
 
-    private fun toggleRoiVisibility() {
-        roiView?.let { view ->
-            if (isRoiVisible) {
-                view.visibility = View.GONE
-                isRoiVisible = false
-                seamlessOverlayRenderer?.clear()
-                Toast.makeText(this, "تم إخفاء إطار منطقة الترجمة وإيقاف العرض", Toast.LENGTH_SHORT).show()
+    private fun updateBubbleVisualState() {
+        mainHandler.post {
+            if (isAutoTranslationActive) {
+                bubbleView?.alpha = 1.0f
+                ivBubbleIcon?.alpha = 1.0f
             } else {
-                view.visibility = View.VISIBLE
-                isRoiVisible = true
-                frameDiffEngine.reset()
-                Toast.makeText(this, "تم إظهار إطار منطقة الترجمة واستئناف العرض", Toast.LENGTH_SHORT).show()
+                bubbleView?.alpha = 0.50f
+                ivBubbleIcon?.alpha = 0.50f
             }
         }
     }
 
-    fun getCurrentRoiRect(): Rect? {
-        val params = roiParams ?: return null
-        return Rect(
-            params.x,
-            params.y,
-            params.x + params.width,
-            params.y + params.height
-        )
+    fun getBubbleBounds(): Rect? {
+        val params = bubbleParams ?: return null
+        val view = bubbleView ?: return null
+        val w = if (view.width > 0) view.width else (56 * resources.displayMetrics.density).toInt()
+        val h = if (view.height > 0) view.height else (56 * resources.displayMetrics.density).toInt()
+        return Rect(params.x, params.y, params.x + w, params.y + h)
     }
 
     fun getLatestDetectedBlocks(): List<OcrBlock> = latestDetectedBlocks
 
     private fun showToast(msg: String) {
         mainHandler.post {
-            Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
+            Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -679,7 +546,6 @@ class TranslationOverlayService : Service() {
             displayManager?.unregisterDisplayListener(displayListener)
         } catch (_: Exception) {}
         displayManager = null
-        tvRoiTitle = null
 
         seamlessOverlayRenderer?.release()
         seamlessOverlayRenderer = null
@@ -695,13 +561,6 @@ class TranslationOverlayService : Service() {
                 windowManager.removeView(it)
             } catch (_: Exception) {}
             bubbleView = null
-        }
-
-        roiView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Exception) {}
-            roiView = null
         }
 
         mediaProjection?.stop()
