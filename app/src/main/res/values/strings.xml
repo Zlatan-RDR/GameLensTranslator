@@ -38,6 +38,7 @@
     <string name="model_status_ready">جاهز للعمل أوفلاين</string>
     <string name="model_status_not_downloaded">غير محمل (يلزم التحميل للتشغيل)</string>
     <string name="model_status_downloading">جاري التحميل في الخلفية...</string>
+    <string name="model_status_error">خطأ في تحميل النموذج (إعادة المحاولة)</string>
     <string name="model_btn_download">تحميل نموذج الترجمة أوفلاين</string>
     <string name="model_download_hint">ملاحظة: إذا تأخر التحميل، يرجى التحقق من مدير التنزيلات لنظام أندرويد (Download Manager).</string>
     <string name="toast_model_required">يرجى تحميل نموذج الترجمة العربية أولاً من واجهة التطبيق</string>
