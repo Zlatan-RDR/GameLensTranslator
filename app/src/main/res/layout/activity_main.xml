@@ -157,6 +157,53 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
+        <!-- Card: HyperOS / Xiaomi Background Popup Permission -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/cardHyperOsPermission"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="3dp"
+            app:cardBackgroundColor="@color/surface_card"
+            app:layout_constraintTop_toBottomOf="@id/cardMediaProjection"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/hyperos_perm_title"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/hyperos_perm_desc"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnHyperOsPerm"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_hyperos_perm"
+                    android:textColor="@color/background_dark"
+                    app:backgroundTint="@color/accent"
+                    app:cornerRadius="8dp" />
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
         <!-- Card: Translation Engine Settings -->
         <androidx.cardview.widget.CardView
             android:id="@+id/cardTranslationSettings"
@@ -166,7 +213,7 @@
             app:cardCornerRadius="14dp"
             app:cardElevation="3dp"
             app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardMediaProjection"
+            app:layout_constraintTop_toBottomOf="@id/cardHyperOsPermission"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
 

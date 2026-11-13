@@ -123,11 +123,36 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        binding.btnHyperOsPerm.setOnClickListener {
+            openHyperOsPermissionSettings()
+        }
+
         binding.btnToggleService.setOnClickListener {
             if (isServiceRunning) {
                 stopTranslationService()
             } else {
                 initiateServiceStart()
+            }
+        }
+    }
+
+    private fun openHyperOsPermissionSettings() {
+        try {
+            // Xiaomi / HyperOS specific permission editor
+            val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+                setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
+                putExtra("extra_pkgname", packageName)
+            }
+            startActivity(intent)
+        } catch (_: Exception) {
+            try {
+                // Fallback to standard App Details Settings
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(this, "يرجى فتح إعدادات التطبيق وتفعيل إذن عرض النوافذ المنبثقة بالخلفية", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -178,10 +203,14 @@ class MainActivity : AppCompatActivity() {
             putExtra(TranslationOverlayService.EXTRA_RESULT_CODE, resultCode)
             putExtra(TranslationOverlayService.EXTRA_RESULT_DATA, data)
         }
-        ContextCompat.startForegroundService(this, serviceIntent)
-        isServiceRunning = true
-        updateUiForRunningService()
-        Toast.makeText(this, "تم تشغيل خدمة الترجمة الفورية بنجاح", Toast.LENGTH_SHORT).show()
+        try {
+            ContextCompat.startForegroundService(this, serviceIntent)
+            isServiceRunning = true
+            updateUiForRunningService()
+            Toast.makeText(this, "تم تشغيل خدمة الترجمة الفورية بنجاح", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "فشل بدء الخدمة: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun stopTranslationService() {

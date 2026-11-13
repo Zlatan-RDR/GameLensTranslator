@@ -22,4 +22,9 @@
     <string name="endpoint_hint">رابط API Endpoint</string>
     <string name="save_settings">حفظ الإعدادات</string>
     <string name="settings_saved">تم حفظ إعدادات الترجمة بنجاح</string>
+
+    <!-- HyperOS / Xiaomi Specific Support -->
+    <string name="hyperos_perm_title">إذن النوافذ بالخلفية (HyperOS / Xiaomi)</string>
+    <string name="hyperos_perm_desc">في أجهزة شاومي وHyperOS، يلزم تفعيل إذن \'عرض النوافذ المنبثقة أثناء التشغيل في الخلفية\' لظهور فقاعة وإطار الترجمة فوق الألعاب.</string>
+    <string name="btn_hyperos_perm">ضبط إذن HyperOS</string>
 </resources>

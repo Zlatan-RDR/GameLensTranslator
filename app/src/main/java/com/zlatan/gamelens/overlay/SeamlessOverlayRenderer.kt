@@ -80,6 +80,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
      */
     fun renderTranslations(blocks: List<OcrBlock>, screenBitmap: Bitmap?) {
         mainHandler.post {
+            if (!isContainerAttached || overlayContainer == null) {
+                initOverlayContainer()
+            }
             val container = overlayContainer ?: return@post
             if (!isContainerAttached) return@post
 

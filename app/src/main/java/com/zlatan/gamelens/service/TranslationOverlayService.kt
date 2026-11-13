@@ -15,7 +15,9 @@ import android.graphics.Rect
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -25,6 +27,7 @@ import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.R
 import com.zlatan.gamelens.capture.FrameDiffEngine
@@ -89,22 +92,31 @@ class TranslationOverlayService : Service() {
     private var seamlessOverlayRenderer: SeamlessOverlayRenderer? = null
     private var latestDetectedBlocks: List<OcrBlock> = emptyList()
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        createNotificationChannel()
+        try {
+            windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
-        // Initialize Database, Cache, Glossary and Translation Managers
-        cacheManager = TranslationCacheManager(this)
-        glossaryManager = GlossaryManager(this)
-        val config = loadTranslationConfigFromPreferences()
-        translationManager = TranslationManager(this, cacheManager, glossaryManager, config)
+            createNotificationChannel()
 
-        // Initialize Phase 4 Seamless Overlay Renderer with Touch Pass-Through
-        seamlessOverlayRenderer = SeamlessOverlayRenderer(this)
+            // Initialize Database, Cache, Glossary and Translation Managers
+            cacheManager = TranslationCacheManager(this)
+            glossaryManager = GlossaryManager(this)
+            val config = loadTranslationConfigFromPreferences()
+            translationManager = TranslationManager(this, cacheManager, glossaryManager, config)
+
+            // Initialize Seamless Overlay Renderer
+            seamlessOverlayRenderer = SeamlessOverlayRenderer(this)
+            Log.d(TAG, "TranslationOverlayService onCreate completed successfully.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Fatal error in onCreate: ${e.message}", e)
+            showToast("خطأ أثناء تهيئة خدمة الترجمة: ${e.message}")
+        }
     }
 
     private fun loadTranslationConfigFromPreferences(): TranslationConfig {
@@ -126,7 +138,18 @@ class TranslationOverlayService : Service() {
 
         when (intent.action) {
             ACTION_START -> {
-                startForegroundWithNotification()
+                // MANDATORY FOR ANDROID 14/15: startForeground with FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                // MUST be called FIRST before getting MediaProjection instance!
+                try {
+                    createNotificationChannel()
+                    startForegroundWithNotification()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start foreground service: ${e.message}", e)
+                    showToast("تعذر تشغيل خدمة الواجهة الأمامية: ${e.message}")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
                 val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
@@ -135,14 +158,24 @@ class TranslationOverlayService : Service() {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA)
                 }
 
-                // Refresh config on service start
-                translationManager.updateConfig(loadTranslationConfigFromPreferences())
+                try {
+                    // Refresh config on start
+                    translationManager.updateConfig(loadTranslationConfigFromPreferences())
 
-                setupFloatingBubble()
-                setupRoiFrame()
+                    // Setup UI overlays with try-catch
+                    setupFloatingBubble()
+                    setupRoiFrame()
 
-                if (resultCode != 0 && resultData != null) {
-                    initMediaProjectionAndCapture(resultCode, resultData)
+                    // Initialize MediaProjection after foreground service is established
+                    if (resultCode != 0 && resultData != null) {
+                        initMediaProjectionAndCapture(resultCode, resultData)
+                    } else {
+                        Log.w(TAG, "MediaProjection token missing or canceled: resultCode=$resultCode")
+                        showToast("تنبيه: لم يتم استلام رمز إذن التقاط الشاشة")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error starting overlay or capture: ${e.message}", e)
+                    showToast("خطأ أثناء بدء الخدمة: ${e.message}")
                 }
             }
             ACTION_STOP -> {
@@ -170,17 +203,22 @@ class TranslationOverlayService : Service() {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
+        val foregroundType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
         } else {
-            startForeground(NOTIFICATION_ID, notification)
+            0
         }
+
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            notification,
+            foregroundType
+        )
+        Log.d(TAG, "ServiceCompat.startForeground called with type FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION")
     }
 
     private fun createNotificationChannel() {
@@ -188,9 +226,10 @@ class TranslationOverlayService : Service() {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "GameLens Translator Service",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "قناة إشعارات خدمة ترجمة الألعاب الفورية"
+                setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(channel)
@@ -198,23 +237,33 @@ class TranslationOverlayService : Service() {
     }
 
     private fun initMediaProjectionAndCapture(resultCode: Int, resultData: Intent) {
-        val proj = mediaProjectionManager?.getMediaProjection(resultCode, resultData)
-        if (proj == null) {
-            Log.e(TAG, "Unable to obtain MediaProjection from token")
-            return
+        try {
+            val proj = mediaProjectionManager?.getMediaProjection(resultCode, resultData)
+            if (proj == null) {
+                Log.e(TAG, "Unable to obtain MediaProjection from token")
+                showToast("فشل استخراج MediaProjection من النظام")
+                return
+            }
+            mediaProjection = proj
+
+            val metrics = resources.displayMetrics
+            screenCaptureManager = ScreenCaptureManager(
+                context = this,
+                mediaProjection = proj,
+                screenWidth = metrics.widthPixels,
+                screenHeight = metrics.heightPixels,
+                screenDensityDpi = metrics.densityDpi
+            )
+
+            startCaptureLoop()
+            Log.d(TAG, "MediaProjection & ScreenCaptureManager initialized successfully.")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "SecurityException acquiring MediaProjection: ${e.message}", e)
+            showToast("خطأ أمني في إذن التقاط الشاشة: ${e.message}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception acquiring MediaProjection: ${e.message}", e)
+            showToast("تعذر بدء التقاط الشاشة: ${e.message}")
         }
-        mediaProjection = proj
-
-        val metrics = resources.displayMetrics
-        screenCaptureManager = ScreenCaptureManager(
-            context = this,
-            mediaProjection = proj,
-            screenWidth = metrics.widthPixels,
-            screenHeight = metrics.heightPixels,
-            screenDensityDpi = metrics.densityDpi
-        )
-
-        startCaptureLoop()
     }
 
     private fun startCaptureLoop() {
@@ -299,165 +348,174 @@ class TranslationOverlayService : Service() {
     private fun setupFloatingBubble() {
         if (bubbleView != null) return
 
-        bubbleView = LayoutInflater.from(this).inflate(R.layout.overlay_bubble, null)
+        try {
+            bubbleView = LayoutInflater.from(this).inflate(R.layout.overlay_bubble, null)
 
-        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-
-        bubbleParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 40
-            y = 200
-        }
-
-        var initialX = 0
-        var initialY = 0
-        var initialTouchX = 0f
-        var initialTouchY = 0f
-        var isMoved = false
-
-        bubbleView?.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initialX = bubbleParams?.x ?: 0
-                    initialY = bubbleParams?.y ?: 0
-                    initialTouchX = event.rawX
-                    initialTouchY = event.rawY
-                    isMoved = false
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val deltaX = event.rawX - initialTouchX
-                    val deltaY = event.rawY - initialTouchY
-                    if (Math.abs(deltaX) > CLICK_DRAG_TOLERANCE || Math.abs(deltaY) > CLICK_DRAG_TOLERANCE) {
-                        isMoved = true
-                    }
-                    bubbleParams?.x = (initialX + deltaX).toInt()
-                    bubbleParams?.y = (initialY + deltaY).toInt()
-                    bubbleParams?.let { windowManager.updateViewLayout(bubbleView, it) }
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!isMoved) {
-                        toggleRoiVisibility()
-                    }
-                    true
-                }
-                else -> false
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
             }
-        }
 
-        windowManager.addView(bubbleView, bubbleParams)
+            bubbleParams = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 40
+                y = 200
+            }
+
+            var initialX = 0
+            var initialY = 0
+            var initialTouchX = 0f
+            var initialTouchY = 0f
+            var isMoved = false
+
+            bubbleView?.setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialX = bubbleParams?.x ?: 0
+                        initialY = bubbleParams?.y ?: 0
+                        initialTouchX = event.rawX
+                        initialTouchY = event.rawY
+                        isMoved = false
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val deltaX = event.rawX - initialTouchX
+                        val deltaY = event.rawY - initialTouchY
+                        if (Math.abs(deltaX) > CLICK_DRAG_TOLERANCE || Math.abs(deltaY) > CLICK_DRAG_TOLERANCE) {
+                            isMoved = true
+                        }
+                        bubbleParams?.x = (initialX + deltaX).toInt()
+                        bubbleParams?.y = (initialY + deltaY).toInt()
+                        bubbleParams?.let { windowManager.updateViewLayout(bubbleView, it) }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        if (!isMoved) {
+                            toggleRoiVisibility()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            windowManager.addView(bubbleView, bubbleParams)
+            Log.d(TAG, "Floating control bubble added to WindowManager.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add floating bubble to WindowManager: ${e.message}", e)
+            showToast("تنبيه: تعذر إظهار الفقاعة العائمة. يرجى تفعيل إذن 'عرض النوافذ بالخلفية' في HyperOS")
+        }
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
     private fun setupRoiFrame() {
         if (roiView != null) return
 
-        roiView = LayoutInflater.from(this).inflate(R.layout.overlay_roi_frame, null)
+        try {
+            roiView = LayoutInflater.from(this).inflate(R.layout.overlay_roi_frame, null)
 
-        val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-
-        val displayMetrics = resources.displayMetrics
-        val initialWidth = (displayMetrics.widthPixels * 0.75f).toInt()
-        val initialHeight = (displayMetrics.heightPixels * 0.35f).toInt()
-
-        roiParams = WindowManager.LayoutParams(
-            initialWidth,
-            initialHeight,
-            layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = (displayMetrics.widthPixels - initialWidth) / 2
-            y = (displayMetrics.heightPixels - initialHeight) / 3
-        }
-
-        val header = roiView?.findViewById<View>(R.id.roiHeader)
-        val btnHide = roiView?.findViewById<ImageView>(R.id.btnHideRoi)
-        val resizeHandle = roiView?.findViewById<ImageView>(R.id.ivResizeHandle)
-
-        // Dragging ROI Frame via header
-        var headerInitX = 0
-        var headerInitY = 0
-        var headerTouchX = 0f
-        var headerTouchY = 0f
-
-        header?.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    headerInitX = roiParams?.x ?: 0
-                    headerInitY = roiParams?.y ?: 0
-                    headerTouchX = event.rawX
-                    headerTouchY = event.rawY
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val deltaX = event.rawX - headerTouchX
-                    val deltaY = event.rawY - headerTouchY
-                    roiParams?.x = (headerInitX + deltaX).toInt()
-                    roiParams?.y = (headerInitY + deltaY).toInt()
-                    roiParams?.let { windowManager.updateViewLayout(roiView, it) }
-                    true
-                }
-                else -> false
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
             }
-        }
 
-        // Resizing ROI Frame via bottom-right handle
-        var resizeStartW = 0
-        var resizeStartH = 0
-        var resizeTouchX = 0f
-        var resizeTouchY = 0f
-        val minWidthPx = (140 * resources.displayMetrics.density).toInt()
-        val minHeightPx = (90 * resources.displayMetrics.density).toInt()
+            val displayMetrics = resources.displayMetrics
+            val initialWidth = (displayMetrics.widthPixels * 0.75f).toInt()
+            val initialHeight = (displayMetrics.heightPixels * 0.35f).toInt()
 
-        resizeHandle?.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    resizeStartW = roiParams?.width ?: initialWidth
-                    resizeStartH = roiParams?.height ?: initialHeight
-                    resizeTouchX = event.rawX
-                    resizeTouchY = event.rawY
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val deltaW = (event.rawX - resizeTouchX).toInt()
-                    val deltaH = (event.rawY - resizeTouchY).toInt()
-                    val newW = (resizeStartW + deltaW).coerceAtLeast(minWidthPx)
-                    val newH = (resizeStartH + deltaH).coerceAtLeast(minHeightPx)
-
-                    roiParams?.width = newW
-                    roiParams?.height = newH
-                    roiParams?.let { windowManager.updateViewLayout(roiView, it) }
-                    true
-                }
-                else -> false
+            roiParams = WindowManager.LayoutParams(
+                initialWidth,
+                initialHeight,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = (displayMetrics.widthPixels - initialWidth) / 2
+                y = (displayMetrics.heightPixels - initialHeight) / 3
             }
-        }
 
-        btnHide?.setOnClickListener {
-            toggleRoiVisibility()
-        }
+            val header = roiView?.findViewById<View>(R.id.roiHeader)
+            val btnHide = roiView?.findViewById<ImageView>(R.id.btnHideRoi)
+            val resizeHandle = roiView?.findViewById<ImageView>(R.id.ivResizeHandle)
 
-        windowManager.addView(roiView, roiParams)
-        isRoiVisible = true
+            var headerInitX = 0
+            var headerInitY = 0
+            var headerTouchX = 0f
+            var headerTouchY = 0f
+
+            header?.setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        headerInitX = roiParams?.x ?: 0
+                        headerInitY = roiParams?.y ?: 0
+                        headerTouchX = event.rawX
+                        headerTouchY = event.rawY
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val deltaX = event.rawX - headerTouchX
+                        val deltaY = event.rawY - headerTouchY
+                        roiParams?.x = (headerInitX + deltaX).toInt()
+                        roiParams?.y = (headerInitY + deltaY).toInt()
+                        roiParams?.let { windowManager.updateViewLayout(roiView, it) }
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            var resizeStartW = 0
+            var resizeStartH = 0
+            var resizeTouchX = 0f
+            var resizeTouchY = 0f
+            val minWidthPx = (140 * resources.displayMetrics.density).toInt()
+            val minHeightPx = (90 * resources.displayMetrics.density).toInt()
+
+            resizeHandle?.setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        resizeStartW = roiParams?.width ?: initialWidth
+                        resizeStartH = roiParams?.height ?: initialHeight
+                        resizeTouchX = event.rawX
+                        resizeTouchY = event.rawY
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val deltaW = (event.rawX - resizeTouchX).toInt()
+                        val deltaH = (event.rawY - resizeTouchY).toInt()
+                        val newW = (resizeStartW + deltaW).coerceAtLeast(minWidthPx)
+                        val newH = (resizeStartH + deltaH).coerceAtLeast(minHeightPx)
+
+                        roiParams?.width = newW
+                        roiParams?.height = newH
+                        roiParams?.let { windowManager.updateViewLayout(roiView, it) }
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            btnHide?.setOnClickListener {
+                toggleRoiVisibility()
+            }
+
+            windowManager.addView(roiView, roiParams)
+            isRoiVisible = true
+            Log.d(TAG, "ROI frame added to WindowManager.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to add ROI frame to WindowManager: ${e.message}", e)
+        }
     }
 
     private fun toggleRoiVisibility() {
@@ -487,6 +545,12 @@ class TranslationOverlayService : Service() {
     }
 
     fun getLatestDetectedBlocks(): List<OcrBlock> = latestDetectedBlocks
+
+    private fun showToast(msg: String) {
+        mainHandler.post {
+            Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
+        }
+    }
 
     override fun onDestroy() {
         super.onDestroy()
