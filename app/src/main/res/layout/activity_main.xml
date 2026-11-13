@@ -310,6 +310,80 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
+        <!-- Diagnostic Live Logs Card -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/cardDiagnostics"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardBackgroundColor="@color/card_background"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="2dp"
+            app:layout_constraintTop_toBottomOf="@id/cardTranslationSettings"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="سجل التشخيص المباشر (Live Diagnostic Log)"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnCopyLog"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="نسخ"
+                        android:textColor="@color/accent"
+                        android:textSize="12sp"
+                        android:padding="0dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnClearLog"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="مسح"
+                        android:textColor="@color/status_inactive"
+                        android:textSize="12sp"
+                        android:padding="0dp" />
+                </LinearLayout>
+
+                <androidx.core.widget.NestedScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="140dp"
+                    android:layout_marginTop="8dp"
+                    android:background="#1A000000"
+                    android:padding="8dp">
+
+                    <TextView
+                        android:id="@+id/tvDiagnosticLogs"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="monospace"
+                        android:text="جاري انتظار أحداث التشغيل..."
+                        android:textColor="#B0BEC5"
+                        android:textSize="11sp" />
+                </androidx.core.widget.NestedScrollView>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
         <!-- Master Action Button -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnToggleService"
@@ -325,7 +399,7 @@
             app:cornerRadius="12dp"
             app:strokeColor="@color/accent"
             app:strokeWidth="1.5dp"
-            app:layout_constraintTop_toBottomOf="@id/cardTranslationSettings"
+            app:layout_constraintTop_toBottomOf="@id/cardDiagnostics"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent" />

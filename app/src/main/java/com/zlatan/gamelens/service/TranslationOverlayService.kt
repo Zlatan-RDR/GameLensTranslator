@@ -38,6 +38,7 @@ import com.zlatan.gamelens.R
 import com.zlatan.gamelens.capture.FrameDiffEngine
 import com.zlatan.gamelens.capture.ScreenCaptureManager
 import com.zlatan.gamelens.db.TranslationCacheManager
+import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.glossary.GlossaryManager
 import com.zlatan.gamelens.ocr.OcrBlock
 import com.zlatan.gamelens.ocr.OcrEngine
@@ -118,6 +119,7 @@ class TranslationOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         try {
+            DiagnosticLogger.log("Service: onCreate")
             windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
@@ -196,6 +198,7 @@ class TranslationOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) return START_NOT_STICKY
+        DiagnosticLogger.log("Service: onStartCommand action=${intent.action}")
 
         when (intent.action) {
             ACTION_START -> {
@@ -330,11 +333,13 @@ class TranslationOverlayService : Service() {
         captureJob?.cancel()
         captureJob = serviceScope.launch {
             Log.d(TAG, "Full-Screen GameLens Pipeline active (interval: ${FRAME_INTERVAL_MS}ms)")
+            DiagnosticLogger.log("Pipeline loop started")
             while (isActive) {
                 try {
                     processFramePipeline()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error in Pipeline: ${e.message}", e)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Error in Pipeline: ${t.message}", t)
+                    DiagnosticLogger.log("Pipeline error: ${t.javaClass.simpleName} - ${t.message}")
                 }
                 delay(FRAME_INTERVAL_MS)
             }
@@ -381,6 +386,8 @@ class TranslationOverlayService : Service() {
             return
         }
 
+        DiagnosticLogger.log("Frame: ${fullBitmap.width}x${fullBitmap.height}")
+
         // 5. Full-Screen On-Device ML Kit OCR Recognition (excluding bubble & HUD noise)
         val detectedBlocks = ocrEngine.recognizeText(fullBitmap, bubbleBounds)
 
@@ -391,6 +398,8 @@ class TranslationOverlayService : Service() {
             fullBitmap.recycle()
             return
         }
+
+        DiagnosticLogger.log("OCR detected: ${detectedBlocks.size} blocks")
 
         // 7. Non-blocking Asynchronous Translation through Glossary, Cache & Translation Engine
         withContext(Dispatchers.IO) {
@@ -405,6 +414,7 @@ class TranslationOverlayService : Service() {
         // 8. 100% Touch-Passthrough Seamless Overlay Rendering directly over original text bounding boxes
         seamlessOverlayRenderer?.renderTranslations(detectedBlocks, fullBitmap)
         fullBitmap.recycle()
+        DiagnosticLogger.log("Rendered ${detectedBlocks.size} translations")
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
@@ -498,10 +508,12 @@ class TranslationOverlayService : Service() {
 
             windowManager.addView(bubbleView, bubbleParams)
             updateBubbleVisualState()
+            DiagnosticLogger.log("Bubble attached (56dp emerald)")
             Log.d(TAG, "Floating control bubble added to WindowManager successfully.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to add floating bubble to WindowManager: ${e.message}", e)
-            showToast("فشل إظهار الفقاعة العائمة: ${e.message}")
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to add floating bubble to WindowManager: ${t.message}", t)
+            DiagnosticLogger.log("Bubble attach failed: ${t.javaClass.simpleName} - ${t.message}")
+            showToast("فشل إظهار الفقاعة العائمة: ${t.message}")
         }
     }
 
@@ -556,6 +568,7 @@ class TranslationOverlayService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        DiagnosticLogger.log("Service: onDestroy")
         captureJob?.cancel()
         serviceScope.cancel()
 

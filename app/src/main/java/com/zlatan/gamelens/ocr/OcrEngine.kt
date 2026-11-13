@@ -40,68 +40,78 @@ class OcrEngine {
             bitmap
         }
 
-        val inputImage = InputImage.fromBitmap(argbBitmap, 0)
+        try {
+            val inputImage = InputImage.fromBitmap(argbBitmap, 0)
 
-        recognizer.process(inputImage)
-            .addOnSuccessListener { visionText ->
-                val resultBlocks = mutableListOf<OcrBlock>()
+            recognizer.process(inputImage)
+                .addOnSuccessListener { visionText ->
+                    val resultBlocks = mutableListOf<OcrBlock>()
 
-                for (block in visionText.textBlocks) {
-                    val rawBox = block.boundingBox ?: continue
-                    val textTrimmed = block.text.trim()
+                    for (block in visionText.textBlocks) {
+                        val rawBox = block.boundingBox ?: continue
+                        val textTrimmed = block.text.trim()
 
-                    // 1. Filter out empty, standalone numbers or pure symbols (HUD ammo, health, scores)
-                    if (isNoiseOrSymbol(textTrimmed)) {
-                        continue
-                    }
+                        // 1. Filter out empty, standalone numbers or pure symbols (HUD ammo, health, scores)
+                        if (isNoiseOrSymbol(textTrimmed)) {
+                            continue
+                        }
 
-                    // 2. Filter out elements intersecting the floating control bubble
-                    if (excludedBounds != null && Rect.intersects(rawBox, excludedBounds)) {
-                        continue
-                    }
+                        // 2. Filter out elements intersecting the floating control bubble
+                        if (excludedBounds != null && Rect.intersects(rawBox, excludedBounds)) {
+                            continue
+                        }
 
-                    // 3. Minimum size threshold
-                    if (rawBox.width() < 12 || rawBox.height() < 10) {
-                        continue
-                    }
+                        // 3. Minimum size threshold
+                        if (rawBox.width() < 12 || rawBox.height() < 10) {
+                            continue
+                        }
 
-                    val lines = block.lines.mapNotNull { line ->
-                        val lineBox = line.boundingBox ?: return@mapNotNull null
-                        val lineText = line.text.trim()
-                        if (isNoiseOrSymbol(lineText)) return@mapNotNull null
-                        OcrLine(
-                            text = lineText,
-                            boundingBox = lineBox
+                        val lines = block.lines.mapNotNull { line ->
+                            val lineBox = line.boundingBox ?: return@mapNotNull null
+                            val lineText = line.text.trim()
+                            if (isNoiseOrSymbol(lineText)) return@mapNotNull null
+                            OcrLine(
+                                text = lineText,
+                                boundingBox = lineBox
+                            )
+                        }
+
+                        resultBlocks.add(
+                            OcrBlock(
+                                text = textTrimmed,
+                                boundingBox = rawBox,
+                                confidence = null,
+                                lines = lines
+                            )
                         )
                     }
 
-                    resultBlocks.add(
-                        OcrBlock(
-                            text = textTrimmed,
-                            boundingBox = rawBox,
-                            confidence = null,
-                            lines = lines
-                        )
-                    )
-                }
+                    if (argbBitmap != bitmap) {
+                        argbBitmap.recycle()
+                    }
 
-                if (argbBitmap != bitmap) {
-                    argbBitmap.recycle()
+                    if (continuation.isActive) {
+                        continuation.resume(resultBlocks)
+                    }
                 }
-
-                if (continuation.isActive) {
-                    continuation.resume(resultBlocks)
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "ML Kit text recognition failed: ${e.message}", e)
+                    if (argbBitmap != bitmap) {
+                        argbBitmap.recycle()
+                    }
+                    if (continuation.isActive) {
+                        continuation.resume(emptyList())
+                    }
                 }
+        } catch (t: Throwable) {
+            Log.e(TAG, "ML Kit InputImage error: ${t.message}", t)
+            if (argbBitmap != bitmap) {
+                argbBitmap.recycle()
             }
-            .addOnFailureListener { e ->
-                Log.e(TAG, "ML Kit text recognition failed: ${e.message}", e)
-                if (argbBitmap != bitmap) {
-                    argbBitmap.recycle()
-                }
-                if (continuation.isActive) {
-                    continuation.resume(emptyList())
-                }
+            if (continuation.isActive) {
+                continuation.resume(emptyList())
             }
+        }
     }
 
     private fun isNoiseOrSymbol(text: String): Boolean {

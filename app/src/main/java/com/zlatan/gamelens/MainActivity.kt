@@ -2,6 +2,8 @@ package com.zlatan.gamelens
 
 import android.Manifest
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -10,6 +12,8 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.widget.Toast
@@ -17,6 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.zlatan.gamelens.databinding.ActivityMainBinding
+import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.service.TranslationOverlayService
 
 class MainActivity : AppCompatActivity() {
@@ -74,6 +79,11 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updatePermissionStates()
+        refreshDiagnosticLogs()
+    }
+
+    private fun refreshDiagnosticLogs() {
+        binding.tvDiagnosticLogs.text = DiagnosticLogger.getFormattedLogs()
     }
 
     private fun loadSettings() {
@@ -133,6 +143,18 @@ class MainActivity : AppCompatActivity() {
             } else {
                 initiateServiceStart()
             }
+        }
+
+        binding.btnCopyLog.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("GameLens Logs", DiagnosticLogger.getFormattedLogs()))
+            Toast.makeText(this, "تم نسخ سجل التشخيص للحافظة", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnClearLog.setOnClickListener {
+            DiagnosticLogger.clear()
+            refreshDiagnosticLogs()
+            Toast.makeText(this, "تم مسح السجل", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -208,7 +230,12 @@ class MainActivity : AppCompatActivity() {
             isServiceRunning = true
             updateUiForRunningService()
             Toast.makeText(this, "تم تشغيل خدمة الترجمة الفورية بنجاح", Toast.LENGTH_SHORT).show()
-            moveTaskToBack(true)
+            // Delay moveTaskToBack by 800ms so HyperOS completes bubble window attachment in foreground
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (!isFinishing && !isDestroyed) {
+                    moveTaskToBack(true)
+                }
+            }, 800L)
         } catch (e: Exception) {
             Toast.makeText(this, "فشل بدء الخدمة: ${e.message}", Toast.LENGTH_LONG).show()
         }
