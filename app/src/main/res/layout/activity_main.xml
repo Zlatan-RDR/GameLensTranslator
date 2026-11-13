@@ -482,6 +482,200 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
+        <!-- Card: Game Patch Engine (0ms human translations) -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/cardGamePatch"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="3dp"
+            app:cardBackgroundColor="@color/surface_card"
+            app:layout_constraintTop_toBottomOf="@id/cardGameAudio"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/game_patch_title"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/game_patch_desc"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <TextView
+                    android:id="@+id/tvActivePatchBadge"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/patch_badge_empty"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnLoadGamePatch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/btn_load_game_patch"
+                        android:textColor="@color/background_dark"
+                        app:backgroundTint="@color/accent"
+                        app:cornerRadius="8dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnClearPatch"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:text="@string/btn_clear_patch"
+                        android:textColor="@color/text_primary"
+                        app:backgroundTint="#37474F"
+                        app:cornerRadius="8dp"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
+        <!-- Card: Visual Calibration & Opaque Cover Mode -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/cardCalibration"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="3dp"
+            app:cardBackgroundColor="@color/surface_card"
+            app:layout_constraintTop_toBottomOf="@id/cardGamePatch"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/calibration_title"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/calibration_desc"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <!-- RadioGroup for Cover Mode -->
+                <RadioGroup
+                    android:id="@+id/rgCoverMode"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp">
+
+                    <RadioButton
+                        android:id="@+id/rbOpaqueCover"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/mode_opaque_cover"
+                        android:textColor="@color/text_primary"
+                        android:checked="true" />
+
+                    <RadioButton
+                        android:id="@+id/rbOffsetAbove"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/mode_offset_above"
+                        android:textColor="@color/text_primary" />
+                </RadioGroup>
+
+                <!-- Preset Quick Buttons & Calibration Launcher -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="8dp">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnCalibrateBox"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/btn_calibrate_box"
+                        android:textColor="@color/background_dark"
+                        app:backgroundTint="@color/accent"
+                        app:cornerRadius="8dp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginTop="6dp">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnPresetFull"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:textSize="11sp"
+                        android:text="@string/preset_full_screen"
+                        android:textColor="@color/text_primary"
+                        app:backgroundTint="#37474F"
+                        app:cornerRadius="6dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnPresetCenter"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginEnd="4dp"
+                        android:textSize="11sp"
+                        android:text="@string/preset_center_dialog"
+                        android:textColor="@color/text_primary"
+                        app:backgroundTint="#37474F"
+                        app:cornerRadius="6dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnPresetBottom"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:textSize="11sp"
+                        android:text="@string/preset_bottom_subtitles"
+                        android:textColor="@color/text_primary"
+                        app:backgroundTint="#37474F"
+                        app:cornerRadius="6dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
         <!-- Diagnostic Live Logs Card -->
         <androidx.cardview.widget.CardView
             android:id="@+id/cardDiagnostics"
@@ -491,7 +685,7 @@
             app:cardBackgroundColor="@color/surface_card"
             app:cardCornerRadius="12dp"
             app:cardElevation="2dp"
-            app:layout_constraintTop_toBottomOf="@id/cardGameAudio"
+            app:layout_constraintTop_toBottomOf="@id/cardCalibration"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
 

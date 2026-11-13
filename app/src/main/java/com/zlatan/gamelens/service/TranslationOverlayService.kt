@@ -65,6 +65,7 @@ class TranslationOverlayService : Service() {
 
         const val ACTION_START = "com.zlatan.gamelens.ACTION_START"
         const val ACTION_STOP = "com.zlatan.gamelens.ACTION_STOP"
+        const val ACTION_CALIBRATE = "com.zlatan.gamelens.ACTION_CALIBRATE"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
 
@@ -91,6 +92,11 @@ class TranslationOverlayService : Service() {
 
     @Volatile
     private var isAudioModeActive = false
+
+    @Volatile
+    private var isCalibrationActive = false
+
+    private var calibrationOverlay: com.zlatan.gamelens.overlay.CalibrationOverlay? = null
 
     @Volatile
     private var forceInstantPass = true
@@ -262,6 +268,9 @@ class TranslationOverlayService : Service() {
             }
             ACTION_STOP -> {
                 stopSelf()
+            }
+            ACTION_CALIBRATE -> {
+                startVisualCalibration()
             }
         }
         return START_NOT_STICKY
@@ -678,12 +687,35 @@ class TranslationOverlayService : Service() {
 
                 val bubbleBounds = getBubbleBounds()
 
-                // 5. ML Kit OCR with confidence >= 0.78 & English token linguistic filter (>= 60%)
-                val detectedBlocks = ocrEngine.recognizeText(fullBitmap, bubbleBounds)
+                // 5. Restrict OCR strictly to Calibrated Reading Box if configured
+                val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
+
+                val cropX = (calRect.left * fullBitmap.width).toInt().coerceIn(0, fullBitmap.width - 1)
+                val cropY = (calRect.top * fullBitmap.height).toInt().coerceIn(0, fullBitmap.height - 1)
+                val cropW = (calRect.width() * fullBitmap.width).toInt().coerceIn(1, fullBitmap.width - cropX)
+                val cropH = (calRect.height() * fullBitmap.height).toInt().coerceIn(1, fullBitmap.height - cropY)
+
+                val isCropped = (cropW < fullBitmap.width || cropH < fullBitmap.height)
+                val ocrBitmap = if (isCropped) {
+                    Bitmap.createBitmap(fullBitmap, cropX, cropY, cropW, cropH)
+                } else {
+                    fullBitmap
+                }
+
+                // ML Kit OCR with confidence >= 0.78 & English token linguistic filter (>= 60%)
+                val detectedBlocks = ocrEngine.recognizeText(ocrBitmap, bubbleBounds)
                 if (detectedBlocks.isEmpty()) {
                     showToast("لم يتم العثور على نصوص واضحة في القائمة")
                     updateBubbleVisualState()
                     return@launch
+                }
+
+                // If cropped, remap bounding boxes back to full screen space
+                if (isCropped) {
+                    for (block in detectedBlocks) {
+                        block.boundingBox.offset(cropX, cropY)
+                    }
                 }
 
                 // 6. Translate detected blocks
@@ -727,6 +759,22 @@ class TranslationOverlayService : Service() {
         }
     }
 
+    private fun startVisualCalibration() {
+        mainHandler.post {
+            if (isCalibrationActive) return@post
+            isCalibrationActive = true
+            updateBubbleVisualState()
+            calibrationOverlay?.dismiss()
+            calibrationOverlay = com.zlatan.gamelens.overlay.CalibrationOverlay(this) {
+                isCalibrationActive = false
+                updateBubbleVisualState()
+                showToast("تم تحديث وحفظ منطقة معايرة القراءة")
+            }.also {
+                it.show()
+            }
+        }
+    }
+
     private fun updateBubbleVisualState() {
         mainHandler.post {
             val density = resources.displayMetrics.density
@@ -735,6 +783,11 @@ class TranslationOverlayService : Service() {
             val backgroundDrawable = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 when {
+                    isCalibrationActive -> {
+                        // Amber when Calibration is Active
+                        setColor(Color.parseColor("#FFB300"))
+                        setStroke((2.5f * density).toInt(), Color.WHITE)
+                    }
                     isAudioModeActive -> {
                         // Cyan when Audio Mode is active
                         setColor(Color.parseColor("#00838F"))
@@ -785,6 +838,9 @@ class TranslationOverlayService : Service() {
 
         seamlessOverlayRenderer?.release()
         seamlessOverlayRenderer = null
+
+        calibrationOverlay?.dismiss()
+        calibrationOverlay = null
 
         gameAudioTranslator?.stop()
         gameAudioTranslator = null

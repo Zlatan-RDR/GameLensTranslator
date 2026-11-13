@@ -38,17 +38,20 @@ class ArabicOverlayView(
 
     /**
      * Updates the content and styling of the overlay view using the translated Arabic text.
-     * Renders an opaque dark card (#F210141D) with subtle borders for high contrast and zero-flicker readability.
+     * In Opaque Cover Mode (#FA0D1117), completely conceals original English text underneath for clean native look.
      */
     fun bindTranslation(translatedText: String, colorScheme: SampledColorScheme? = null) {
         text = translatedText
         setTextColor(Color.WHITE) // High contrast crisp white text
 
-        // Pinned opaque dark card (#F210141D)
+        val prefs = context.getSharedPreferences("GameLensPrefs", Context.MODE_PRIVATE)
+        val isOpaqueCover = prefs.getString("overlay_render_mode", "opaque_cover") == "opaque_cover"
+        val bgColor = if (isOpaqueCover) 0xFA0D1117.toInt() else 0xF210141D.toInt()
+
         val cornerRadiusPx = 6f * resources.displayMetrics.density
         val backgroundDrawable = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(0xF210141D.toInt()) // Opaque dark card #F210141D
+            setColor(bgColor)
             cornerRadius = cornerRadiusPx
             setStroke((1.2f * resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
         }

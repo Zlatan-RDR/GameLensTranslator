@@ -53,4 +53,21 @@
     <string name="game_audio_status_extracting">جاري فك ضغط وتثبيت ملفات int8 (~22 MB)...</string>
     <string name="btn_download_asr_pack">تنزيل نموذج الصوت (~122 MB)</string>
     <string name="btn_resume_asr_pack">استئناف تنزيل نموذج الصوت</string>
+
+    <!-- Game Patch Engine -->
+    <string name="game_patch_title">محرك باتشات الألعاب الفورية (0ms Patch)</string>
+    <string name="game_patch_desc">تحميل ملفات ترجمة مسبقة (.json / .srt / .txt) للحصول على ترجمة فورية 0ms وتصحيح أخطاء التعرف الصوتي تلقائياً.</string>
+    <string name="btn_load_game_patch">تحميل باتش (.json / .srt / .txt)</string>
+    <string name="btn_clear_patch">إلغاء الباتش</string>
+    <string name="patch_badge_empty">لا يوجد باتش نشط (ترجمة تلقائية)</string>
+
+    <!-- Visual Calibration & Cover Mode -->
+    <string name="calibration_title">معايرة منطقة القراءة ونمط العرض</string>
+    <string name="calibration_desc">تحديد صندوق القراءة المخصص (Calibration Box) لتقليل المعالجة، وتحديد أسلوب تغطية النص الإنجليزي.</string>
+    <string name="btn_calibrate_box">معايرة المربع المرئي على الشاشة</string>
+    <string name="mode_opaque_cover">تغطية تامة معتمة للنص الأصلي (Opaque Cover)</string>
+    <string name="mode_offset_above">عرض الترجمة أعلى النص الإنجليزي (Offset Above)</string>
+    <string name="preset_full_screen">كامل الشاشة</string>
+    <string name="preset_center_dialog">وسط الشاشة</string>
+    <string name="preset_bottom_subtitles">شريط سفلي</string>
 </resources>

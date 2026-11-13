@@ -196,11 +196,19 @@ class SeamlessOverlayRenderer(private val context: Context) {
                     bindTranslation(arabicText, colorScheme)
                 }
 
+                val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                val isOffsetAbove = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OFFSET_ABOVE
+                val finalTop = if (isOffsetAbove) {
+                    (targetTop - targetH - (4 * context.resources.displayMetrics.density).toInt()).coerceAtLeast(0)
+                } else {
+                    targetTop
+                }
+
                 // Explicit Gravity.TOP or Gravity.LEFT guarantees exact absolute X/Y positioning in RTL
                 val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
                     gravity = Gravity.TOP or Gravity.LEFT
                     leftMargin = targetLeft
-                    topMargin = targetTop
+                    topMargin = finalTop
                 }
 
                 container.addView(overlayView, layoutParams)
@@ -223,7 +231,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
     /**
      * Renders speech translations in the zero-flicker centered bottom cinematic subtitle bar.
-     * Auto-hides after 4.0 seconds of silence.
+     * Auto-hides after 2.2 seconds of silence so old lines never linger over game scenes.
      */
     fun renderSubtitle(arabicText: String) {
         mainHandler.post {
@@ -238,7 +246,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             sub.text = arabicText
             sub.visibility = View.VISIBLE
             mainHandler.removeCallbacks(hideSubtitleRunnable)
-            mainHandler.postDelayed(hideSubtitleRunnable, 4000L)
+            mainHandler.postDelayed(hideSubtitleRunnable, 2200L)
         }
     }
 

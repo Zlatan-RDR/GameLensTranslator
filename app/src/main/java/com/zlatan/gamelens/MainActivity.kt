@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.RectF
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
@@ -28,6 +29,8 @@ import com.zlatan.gamelens.databinding.ActivityMainBinding
 import com.zlatan.gamelens.db.TranslationCacheManager
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.glossary.GlossaryManager
+import com.zlatan.gamelens.overlay.CalibrationOverlay
+import com.zlatan.gamelens.patch.PatchManager
 import com.zlatan.gamelens.service.ModelDownloadService
 import com.zlatan.gamelens.service.TranslationOverlayService
 import com.zlatan.gamelens.translation.ModelStatus
@@ -44,6 +47,9 @@ class MainActivity : AppCompatActivity() {
         const val KEY_API_KEY = "key_api_key"
         const val KEY_API_ENDPOINT = "key_api_endpoint"
         const val KEY_GAME_AUDIO_ENABLED = "key_game_audio_enabled"
+        const val KEY_OVERLAY_RENDER_MODE = "overlay_render_mode"
+        const val MODE_OPAQUE_COVER = "opaque_cover"
+        const val MODE_OFFSET_ABOVE = "offset_above"
 
         const val MODE_OFFLINE = "mode_offline"
         const val MODE_CLOUD = "mode_cloud"
@@ -86,6 +92,35 @@ class MainActivity : AppCompatActivity() {
         updateAudioModelStatus()
     }
 
+    private val patchFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val fileName = getFileNameFromUri(uri)
+            lifecycleScope.launch {
+                val count = PatchManager.loadPatchFromUri(this@MainActivity, uri, fileName)
+                if (count > 0) {
+                    Toast.makeText(this@MainActivity, "تم تحميل باتش اللعبة بنجاح ($count نص)", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "تعذر قراءة نصوص الترجمة من الملف المختار", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun getFileNameFromUri(uri: Uri): String {
+        var name = "game_patch"
+        try {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && cursor.moveToFirst()) {
+                    name = cursor.getString(nameIndex)
+                }
+            }
+        } catch (_: Exception) {}
+        return name
+    }
+
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -118,6 +153,7 @@ class MainActivity : AppCompatActivity() {
         observeDiagnosticLogs()
         observeModelStatus()
         observeModelDownloadState()
+        observePatchStatus()
     }
 
     override fun onResume() {
@@ -308,6 +344,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun observePatchStatus() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                PatchManager.activePatchNameFlow.collect { name ->
+                    val count = PatchManager.patchCountFlow.value
+                    if (name != null && count > 0) {
+                        binding.tvActivePatchBadge.text = "باتش نشط: $name ($count نص)"
+                        binding.tvActivePatchBadge.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_active))
+                        binding.btnClearPatch.visibility = View.VISIBLE
+                    } else {
+                        binding.tvActivePatchBadge.text = getString(R.string.patch_badge_empty)
+                        binding.tvActivePatchBadge.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+                        binding.btnClearPatch.visibility = View.GONE
+                    }
+                }
+            }
+        }
+    }
+
     private fun refreshDiagnosticLogs() {
         binding.tvDiagnosticLogs.text = DiagnosticLogger.getFormattedLogs()
     }
@@ -326,6 +381,13 @@ class MainActivity : AppCompatActivity() {
         binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions"))
 
         binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
+
+        val coverMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OPAQUE_COVER)
+        if (coverMode == MODE_OFFSET_ABOVE) {
+            binding.rbOffsetAbove.isChecked = true
+        } else {
+            binding.rbOpaqueCover.isChecked = true
+        }
     }
 
     private fun setupListeners() {
@@ -414,6 +476,51 @@ class MainActivity : AppCompatActivity() {
             DiagnosticLogger.log("MainActivity: Triggering ModelDownloadService startOrResume")
             ModelDownloadService.startOrResume(this@MainActivity)
             Toast.makeText(this@MainActivity, "بدأ تنزيل نموذج الصوت في الخلفية مع إمكانية الاستئناف", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnLoadGamePatch.setOnClickListener {
+            patchFilePickerLauncher.launch(arrayOf("*/*"))
+        }
+
+        binding.btnClearPatch.setOnClickListener {
+            PatchManager.clearPatch()
+            Toast.makeText(this, "تم إلغاء الباتش والعودة للترجمة التلقائية", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.rgCoverMode.setOnCheckedChangeListener { _, checkedId ->
+            val mode = if (checkedId == R.id.rbOffsetAbove) MODE_OFFSET_ABOVE else MODE_OPAQUE_COVER
+            prefs.edit().putString(KEY_OVERLAY_RENDER_MODE, mode).apply()
+        }
+
+        binding.btnCalibrateBox.setOnClickListener {
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "يرجى منح إذن الظهور فوق التطبيقات أولاً", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (isServiceRunning) {
+                val intent = Intent(this, TranslationOverlayService::class.java).apply {
+                    action = TranslationOverlayService.ACTION_CALIBRATE
+                }
+                startService(intent)
+            } else {
+                CalibrationOverlay(this) {}.show()
+            }
+            Toast.makeText(this, "اسحب المربع لتحديد منطقة قراءة النصوص ثم اضغط حفظ", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnPresetFull.setOnClickListener {
+            CalibrationOverlay.saveCalibration(prefs, RectF(0f, 0f, 1f, 1f))
+            Toast.makeText(this, "تم ضبط المعايرة: كامل الشاشة", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnPresetCenter.setOnClickListener {
+            CalibrationOverlay.saveCalibration(prefs, RectF(0.12f, 0.32f, 0.88f, 0.68f))
+            Toast.makeText(this, "تم ضبط المعايرة: وسط الشاشة", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnPresetBottom.setOnClickListener {
+            CalibrationOverlay.saveCalibration(prefs, RectF(0.08f, 0.70f, 0.92f, 0.95f))
+            Toast.makeText(this, "تم ضبط المعايرة: شريط الترجمة السفلي", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnGrantOverlay.setOnClickListener {

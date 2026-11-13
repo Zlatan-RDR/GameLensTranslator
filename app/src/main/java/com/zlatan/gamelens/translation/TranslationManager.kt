@@ -156,13 +156,23 @@ class TranslationManager(
 
     /**
      * Translates the given English text to Arabic through:
+     * 0. Unified 0ms Game Patch Match (.json/.srt/.txt exact or fuzzy Levenshtein >= 0.86)
      * 1. Direct Glossary Match (0ms)
      * 2. L1/L2 Cache Match (0ms)
-     * 3. Selected Engine (ML Kit Offline or OpenAI Cloud REST API with automatic fallback)
+     * 3. Pre-translation OCR repair & gaming term normalization
+     * 4. Selected Engine (ML Kit Offline or OpenAI Cloud REST API with automatic fallback)
+     * 5. Post-translation glossary replacements & neural loop de-duplication
+     * 6. Session auto-exporter for community patch generation
      */
     suspend fun translate(text: String): String = withContext(Dispatchers.IO) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return@withContext ""
+
+        // 0. Unified 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86)
+        val patchMatch = com.zlatan.gamelens.patch.PatchManager.findOcrMatch(trimmed)
+        if (patchMatch != null) {
+            return@withContext patchMatch
+        }
 
         // 1. Direct Game Glossary Exact Match
         val glossaryMatch = glossaryManager.findExactMatch(trimmed)
@@ -176,30 +186,66 @@ class TranslationManager(
             return@withContext cached
         }
 
-        // 3. Translate via configured engine
+        // 3. Pre-translation OCR repair & gaming term normalization
+        val preprocessed = preprocessGamingText(trimmed)
+
+        // 4. Translate via configured engine
         val translated = when (config.mode) {
             TranslationMode.CLOUD_OPENAI -> {
                 if (config.apiKey.isNotBlank()) {
-                    translateViaOpenAi(trimmed) ?: translateViaMlKit(trimmed)
+                    translateViaOpenAi(preprocessed) ?: translateViaMlKit(preprocessed)
                 } else {
-                    translateViaMlKit(trimmed)
+                    translateViaMlKit(preprocessed)
                 }
             }
             TranslationMode.OFFLINE_MLKIT -> {
-                translateViaMlKit(trimmed)
+                translateViaMlKit(preprocessed)
             }
         }
 
-        // 4. Post-process with glossary term replacements
+        // 5. Post-process with glossary term replacements
         val glossaryReplaced = glossaryManager.applyTermReplacements(translated)
 
-        // 5. Strip ML Kit neural repetition loops
+        // 6. Strip ML Kit neural repetition loops
         val finalResult = deduplicateRepetitions(glossaryReplaced)
 
-        // 6. Save to Cache for subsequent 0ms hits
+        // 7. Save to Cache for subsequent 0ms hits
         cacheManager.put(trimmed, finalResult)
 
+        // 8. Log unique pair to Session Exporter
+        com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, trimmed, finalResult)
+
         finalResult
+    }
+
+    /**
+     * Pre-translation OCR repair & gaming terminology normalizer.
+     * Repairs broken monospace hyphenations, joins split uppercase tokens,
+     * and normalizes gaming slang that ML Kit otherwise mistranslates into literal gibberish.
+     */
+    fun preprocessGamingText(rawText: String): String {
+        var processed = rawText.trim()
+        if (processed.isEmpty()) return ""
+
+        // 1. Repair broken hyphenation across line breaks: "AVAI- LABLE" -> "AVAILABLE"
+        processed = processed.replace(Regex("([a-zA-Z]{2,})-\\s+([a-zA-Z]{2,})"), "$1$2")
+
+        // 2. Repair common monospace split tokens
+        processed = processed.replace(Regex("\\b(AVAI)\\s+(LABLE|LABLE)\\b", RegexOption.IGNORE_CASE), "Available")
+        processed = processed.replace(Regex("\\b(OPTI)\\s+(ONS)\\b", RegexOption.IGNORE_CASE), "Options")
+        processed = processed.replace(Regex("\\b(DIFFI)\\s+(CULTY)\\b", RegexOption.IGNORE_CASE), "Difficulty")
+        processed = processed.replace(Regex("\\b(CONTRO)\\s+(LLER|LS)\\b", RegexOption.IGNORE_CASE), "Controls")
+        processed = processed.replace(Regex("\\b(INVEN)\\s+(TORY)\\b", RegexOption.IGNORE_CASE), "Inventory")
+        processed = processed.replace(Regex("\\b(CHECK)\\s+(POINT)\\b", RegexOption.IGNORE_CASE), "Checkpoint")
+
+        // 3. Normalize tactical gaming terms for ML Kit neural stability
+        processed = processed.replace(Regex("\\bAUTOSAVES?\\b", RegexOption.IGNORE_CASE), "Auto-save")
+        processed = processed.replace(Regex("\\bRESPAWNS?\\b", RegexOption.IGNORE_CASE), "reappear at checkpoint")
+        processed = processed.replace(Regex("\\b(take|into|behind|in)\\s+cover\\b", RegexOption.IGNORE_CASE), "$1 shielded cover")
+        processed = processed.replace(Regex("\\bHITBOX(ES)?\\b", RegexOption.IGNORE_CASE), "damage zone")
+        processed = processed.replace(Regex("\\bCOOLDOWNS?\\b", RegexOption.IGNORE_CASE), "recharge duration")
+
+        return processed
     }
 
     /**

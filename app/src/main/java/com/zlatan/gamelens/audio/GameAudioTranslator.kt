@@ -47,7 +47,9 @@ class GameAudioTranslator(
         private const val SAMPLE_RATE = 16000
         private const val READ_BUFFER_SIZE = 2048
         private const val RMS_SILENCE_THRESHOLD = 250.0
-        private const val MAX_PHRASE_DURATION_MS = 3200L // Fast 3.2s phrase segmentation window
+        private const val MIN_ACTIVE_SPEECH_MS = 450L // Minimum speech duration to prevent false clicks
+        private const val SILENCE_PAUSE_FLUSH_MS = 300L // 300ms pause triggers sub-400ms subtitle output
+        private const val MAX_MONOLOGUE_HARD_CAP_MS = 5500L // 5.5s hard cap for continuous monologues
 
         fun getAsrModelDir(context: Context): File {
             val dir = File(context.filesDir, "asr-model")
@@ -201,7 +203,9 @@ class GameAudioTranslator(
                 val shortBuffer = ShortArray(READ_BUFFER_SIZE)
                 var lastRecognizedPhrase = ""
                 var speechFrames = 0
-                var phraseStartTimestamp = 0L
+                var speechStartTimeMs = 0L
+                var lastSpeechDetectedTimeMs = 0L
+                var silenceStartTimeMs = 0L
 
                 while (isActive && isRunning) {
                     val readShorts = record.read(shortBuffer, 0, shortBuffer.size)
@@ -219,12 +223,15 @@ class GameAudioTranslator(
 
                     val rec = recognizer
                     val st = stream
+                    val now = System.currentTimeMillis()
 
                     if (rms > RMS_SILENCE_THRESHOLD) {
                         speechFrames++
-                        if (phraseStartTimestamp == 0L) {
-                            phraseStartTimestamp = System.currentTimeMillis()
+                        if (speechStartTimeMs == 0L) {
+                            speechStartTimeMs = now
                         }
+                        lastSpeechDetectedTimeMs = now
+                        silenceStartTimeMs = 0L
 
                         if (rec != null && st != null) {
                             st.acceptWaveform(floatSamples, sampleRate = SAMPLE_RATE)
@@ -236,30 +243,41 @@ class GameAudioTranslator(
                                 lastRecognizedPhrase = text
                             }
 
-                            val phraseDuration = System.currentTimeMillis() - phraseStartTimestamp
+                            val phraseDuration = now - speechStartTimeMs
                             val isEndpoint = rec.isEndpoint(st)
-                            // Segment every 2.5s-3.5s at natural word boundary or on endpoint
-                            val isTimeSegmentExceeded = phraseDuration >= MAX_PHRASE_DURATION_MS && lastRecognizedPhrase.length >= 8 && lastRecognizedPhrase.contains(" ")
+                            val isMonologueHardCap = phraseDuration >= MAX_MONOLOGUE_HARD_CAP_MS && lastRecognizedPhrase.isNotBlank()
 
-                            if (isEndpoint || isTimeSegmentExceeded) {
-                                if (lastRecognizedPhrase.isNotBlank()) {
+                            if (isEndpoint || isMonologueHardCap) {
+                                if (phraseDuration >= MIN_ACTIVE_SPEECH_MS && lastRecognizedPhrase.isNotBlank()) {
                                     flushAndTranslate(lastRecognizedPhrase, phraseDuration)
                                 }
                                 rec.reset(st)
                                 lastRecognizedPhrase = ""
                                 speechFrames = 0
-                                phraseStartTimestamp = 0L
+                                speechStartTimeMs = 0L
+                                silenceStartTimeMs = 0L
                             }
                         }
                     } else {
-                        // Silence detected
-                        if (speechFrames > 0 && rec != null && st != null && lastRecognizedPhrase.isNotBlank()) {
-                            val phraseDuration = if (phraseStartTimestamp > 0L) System.currentTimeMillis() - phraseStartTimestamp else 0L
-                            flushAndTranslate(lastRecognizedPhrase, phraseDuration)
-                            rec.reset(st)
-                            lastRecognizedPhrase = ""
-                            speechFrames = 0
-                            phraseStartTimestamp = 0L
+                        // RMS Silence
+                        if (speechStartTimeMs > 0L) {
+                            if (silenceStartTimeMs == 0L) {
+                                silenceStartTimeMs = now
+                            }
+                            val silenceDuration = now - silenceStartTimeMs
+                            val speechDuration = lastSpeechDetectedTimeMs - speechStartTimeMs
+
+                            // Sub-400ms VAD Pause Flush: 300ms pause after >450ms speech triggers immediate subtitle output!
+                            if (silenceDuration >= SILENCE_PAUSE_FLUSH_MS && rec != null && st != null) {
+                                if (speechDuration >= MIN_ACTIVE_SPEECH_MS && lastRecognizedPhrase.isNotBlank()) {
+                                    flushAndTranslate(lastRecognizedPhrase, speechDuration)
+                                }
+                                rec.reset(st)
+                                lastRecognizedPhrase = ""
+                                speechFrames = 0
+                                speechStartTimeMs = 0L
+                                silenceStartTimeMs = 0L
+                            }
                         }
                     }
                 }
@@ -278,12 +296,22 @@ class GameAudioTranslator(
         val normalizedEn = normalizeAsrText(trimmed)
         DiagnosticLogger.log("ASR Voice ($durationMs ms): \"$normalizedEn\"")
 
-        val arabicTranslation = translationManager.translate(normalizedEn)
-        val sanitizedArabic = translationManager.deduplicateRepetitions(arabicTranslation)
+        // 1. Check Fuzzy Patch Auto-Correction (snaps ASR phonetic typos like "caver" -> "cover")
+        val patchMatch = com.zlatan.gamelens.patch.PatchManager.findAsrMatch(normalizedEn)
+        val finalArabic = if (patchMatch != null) {
+            val (correctedEn, patchArabic) = patchMatch
+            DiagnosticLogger.log("ASR Patch Snap: \"$normalizedEn\" -> \"$correctedEn\" = \"$patchArabic\"")
+            patchArabic
+        } else {
+            val arabicTranslation = translationManager.translate(normalizedEn)
+            translationManager.deduplicateRepetitions(arabicTranslation)
+        }
 
-        if (sanitizedArabic.isNotBlank() && !sanitizedArabic.equals(normalizedEn, ignoreCase = true)) {
-            DiagnosticLogger.log("ASR Subtitle: \"$sanitizedArabic\"")
-            onSubtitleReady(sanitizedArabic)
+        if (finalArabic.isNotBlank() && !finalArabic.equals(normalizedEn, ignoreCase = true)) {
+            DiagnosticLogger.log("ASR Subtitle: \"$finalArabic\"")
+            onSubtitleReady(finalArabic)
+            // Log to Session Exporter for automatic user patch generation
+            com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, normalizedEn, finalArabic)
         }
     }
 
