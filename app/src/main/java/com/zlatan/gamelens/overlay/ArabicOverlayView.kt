@@ -37,26 +37,20 @@ class ArabicOverlayView(
     }
 
     /**
-     * Updates the content and styling of the overlay view using the translated Arabic text
-     * and the sampled edge colors from the game surface.
+     * Updates the content and styling of the overlay view using the translated Arabic text.
+     * Renders an opaque dark card (#F210141D) with subtle borders for high contrast and zero-flicker readability.
      */
-    fun bindTranslation(translatedText: String, colorScheme: SampledColorScheme) {
+    fun bindTranslation(translatedText: String, colorScheme: SampledColorScheme? = null) {
         text = translatedText
-        setTextColor(Color.WHITE) // High contrast white text
+        setTextColor(Color.WHITE) // High contrast crisp white text
 
-        // Seamless high-contrast background with subtle border
+        // Pinned opaque dark card (#F210141D)
         val cornerRadiusPx = 6f * resources.displayMetrics.density
         val backgroundDrawable = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            // Ensure strong opacity (#E6121212 or adaptive)
-            val bg = if (Color.alpha(colorScheme.backgroundColor) < 200) {
-                Color.argb(235, Color.red(colorScheme.backgroundColor), Color.green(colorScheme.backgroundColor), Color.blue(colorScheme.backgroundColor))
-            } else {
-                colorScheme.backgroundColor
-            }
-            setColor(bg)
+            setColor(0xF210141D.toInt()) // Opaque dark card #F210141D
             cornerRadius = cornerRadiusPx
-            setStroke(1, Color.parseColor("#44FFFFFF"))
+            setStroke((1.2f * resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
         }
         background = backgroundDrawable
 

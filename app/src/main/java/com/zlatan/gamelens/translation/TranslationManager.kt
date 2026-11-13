@@ -191,12 +191,31 @@ class TranslationManager(
         }
 
         // 4. Post-process with glossary term replacements
-        val finalResult = glossaryManager.applyTermReplacements(translated)
+        val glossaryReplaced = glossaryManager.applyTermReplacements(translated)
 
-        // 5. Save to Cache for subsequent 0ms hits
+        // 5. Strip ML Kit neural repetition loops
+        val finalResult = deduplicateRepetitions(glossaryReplaced)
+
+        // 6. Save to Cache for subsequent 0ms hits
         cacheManager.put(trimmed, finalResult)
 
         finalResult
+    }
+
+    /**
+     * Collapses neural repetition loops (e.g. repeated words or phrases like "أغسطس / أغسطس / أغسطس")
+     * into a single clean instance.
+     */
+    fun deduplicateRepetitions(arabicText: String): String {
+        if (arabicText.isBlank()) return ""
+        var sanitized = arabicText.trim()
+        val phraseRepetitionRegex = Regex("(\\b\\S+(?:\\s+\\S+){0,3})(?:\\s*[/،,-]?\\s*\\1){2,}", RegexOption.IGNORE_CASE)
+        while (phraseRepetitionRegex.containsMatchIn(sanitized)) {
+            sanitized = sanitized.replace(phraseRepetitionRegex, "$1")
+        }
+        val singleWordRepeatRegex = Regex("(\\b\\S+)(?:\\s*[/،,]\\s*\\1)+", RegexOption.IGNORE_CASE)
+        sanitized = sanitized.replace(singleWordRepeatRegex, "$1")
+        return sanitized.trim()
     }
 
     private suspend fun translateViaMlKit(text: String): String = suspendCancellableCoroutine { continuation ->

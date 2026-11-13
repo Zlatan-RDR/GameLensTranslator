@@ -90,6 +90,9 @@ class TranslationOverlayService : Service() {
     private var isAutoTranslationActive = true
 
     @Volatile
+    private var isAudioModeActive = false
+
+    @Volatile
     private var forceInstantPass = true
 
     private var displayManager: DisplayManager? = null
@@ -340,7 +343,8 @@ class TranslationOverlayService : Service() {
             // Initialize Internal Game Audio Translation (Sherpa-ONNX + AudioPlaybackCapture)
             val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             val isAudioEnabled = prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, false)
-            if (isAudioEnabled) {
+            if (isAudioEnabled && GameAudioTranslator.isAsrModelInstalled(this)) {
+                isAudioModeActive = true
                 gameAudioTranslator?.stop()
                 gameAudioTranslator = GameAudioTranslator(
                     context = this,
@@ -354,7 +358,10 @@ class TranslationOverlayService : Service() {
                 ).also {
                     it.start()
                 }
+            } else {
+                isAudioModeActive = false
             }
+            updateBubbleVisualState()
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException acquiring MediaProjection: ${e.message}", e)
             showToast("خطأ أمني في إذن التقاط الشاشة: ${e.message}")
@@ -382,9 +389,8 @@ class TranslationOverlayService : Service() {
     }
 
     private suspend fun processFramePipeline() {
-        // Paused state: clear overlays and wait
-        if (!isAutoTranslationActive) {
-            seamlessOverlayRenderer?.clear()
+        // When Audio Mode is active, NEVER run continuous background OCR to prevent texture clutter
+        if (isAudioModeActive || !isAutoTranslationActive) {
             return
         }
 
@@ -510,6 +516,13 @@ class TranslationOverlayService : Service() {
             var isMoved = false
             var isLongPressed = false
 
+            var lastTapTimestamp = 0L
+            val DOUBLE_TAP_TIMEOUT_MS = 280L
+
+            val singleTapRunnable = Runnable {
+                handleSingleTap()
+            }
+
             val longPressRunnable = Runnable {
                 isLongPressed = true
                 showToast("جاري إيقاف خدمة الترجمة...")
@@ -535,6 +548,7 @@ class TranslationOverlayService : Service() {
                             if (!isMoved) {
                                 isMoved = true
                                 mainHandler.removeCallbacks(longPressRunnable)
+                                mainHandler.removeCallbacks(singleTapRunnable)
                             }
                         }
                         if (isMoved) {
@@ -547,13 +561,22 @@ class TranslationOverlayService : Service() {
                     MotionEvent.ACTION_UP -> {
                         mainHandler.removeCallbacks(longPressRunnable)
                         if (!isMoved && !isLongPressed) {
-                            // Single tap: Toggle auto-translation ON / OFF
-                            toggleTranslationState()
+                            val now = System.currentTimeMillis()
+                            if (now - lastTapTimestamp <= DOUBLE_TAP_TIMEOUT_MS) {
+                                // Double Tap detected: cancel single tap action and toggle Audio Mode
+                                mainHandler.removeCallbacks(singleTapRunnable)
+                                lastTapTimestamp = 0L
+                                handleDoubleTap()
+                            } else {
+                                lastTapTimestamp = now
+                                mainHandler.postDelayed(singleTapRunnable, DOUBLE_TAP_TIMEOUT_MS)
+                            }
                         }
                         true
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         mainHandler.removeCallbacks(longPressRunnable)
+                        mainHandler.removeCallbacks(singleTapRunnable)
                         true
                     }
                     else -> false
@@ -571,37 +594,166 @@ class TranslationOverlayService : Service() {
         }
     }
 
-    private fun toggleTranslationState() {
-        isAutoTranslationActive = !isAutoTranslationActive
-        updateBubbleVisualState()
-
-        if (isAutoTranslationActive) {
-            forceInstantPass = true
-            frameDiffEngine.reset()
-            showToast("تم تفعيل الترجمة التلقائية للشاشة")
+    private fun handleSingleTap() {
+        if (seamlessOverlayRenderer?.hasPinnedMenuCards() == true) {
+            seamlessOverlayRenderer?.clearMenuCards()
+            showToast("تم إخفاء ترجمة القائمة والعودة للعب")
+            updateBubbleVisualState()
         } else {
-            seamlessOverlayRenderer?.clear()
-            showToast("تم إيقاف الترجمة التلقائية مؤقتاً")
+            triggerZeroSelfReadMenuScan()
+        }
+    }
+
+    private fun handleDoubleTap() {
+        toggleAudioMode()
+    }
+
+    private fun toggleAudioMode() {
+        if (isAudioModeActive) {
+            isAudioModeActive = false
+            gameAudioTranslator?.stop()
+            gameAudioTranslator = null
+            seamlessOverlayRenderer?.renderSubtitle("")
+            showToast("تم إيقاف ترجمة صوت اللعبة (وضع الاستعداد)")
+            updateBubbleVisualState()
+        } else {
+            if (!GameAudioTranslator.isAsrModelInstalled(this)) {
+                showToast("يلزم تنزيل وتثبيت نموذج الصوت أولاً من التطبيق (~122 MB)")
+                return
+            }
+
+            val proj = mediaProjection
+            if (proj == null) {
+                showToast("إذن التقاط الشاشة/الصوت غير متاح")
+                return
+            }
+
+            isAudioModeActive = true
+            // Clear any pinned menu cards when activating audio subtitle mode
+            seamlessOverlayRenderer?.clearMenuCards()
+
+            gameAudioTranslator?.stop()
+            gameAudioTranslator = GameAudioTranslator(
+                context = this,
+                mediaProjection = proj,
+                translationManager = translationManager,
+                onSubtitleReady = { subtitle ->
+                    mainHandler.post {
+                        seamlessOverlayRenderer?.renderSubtitle(subtitle)
+                    }
+                }
+            ).also {
+                it.start()
+            }
+
+            showToast("تم تفعيل ترجمة صوت اللعبة المباشرة (الشريط السينمائي)")
+            updateBubbleVisualState()
+        }
+    }
+
+    private fun triggerZeroSelfReadMenuScan() {
+        showToast("جاري مسح وترجمة القوائم (Zero Self-Read)...")
+        serviceScope.launch {
+            try {
+                val captureMgr = screenCaptureManager ?: run {
+                    showToast("خدمة التقاط الشاشة غير متصلة")
+                    return@launch
+                }
+
+                // 1. Temporarily hide active overlays to eliminate self-reading bug
+                seamlessOverlayRenderer?.setVisibility(false)
+                // 2. Wait 40ms for the display compositor / SurfaceFlinger to refresh clean game frame
+                delay(40L)
+
+                // 3. Acquire clean raw bitmap
+                val fullBitmap = captureMgr.acquireLatestBitmap()
+
+                // 4. Restore visibility
+                seamlessOverlayRenderer?.setVisibility(true)
+
+                if (fullBitmap == null) {
+                    showToast("تعذر التقاط إطار الشاشة، يرجى المحاولة ثانية")
+                    return@launch
+                }
+
+                val bubbleBounds = getBubbleBounds()
+
+                // 5. ML Kit OCR with confidence >= 0.78 & English token linguistic filter (>= 60%)
+                val detectedBlocks = ocrEngine.recognizeText(fullBitmap, bubbleBounds)
+                if (detectedBlocks.isEmpty()) {
+                    showToast("لم يتم العثور على نصوص واضحة في القائمة")
+                    updateBubbleVisualState()
+                    return@launch
+                }
+
+                // 6. Translate detected blocks
+                withContext(Dispatchers.IO) {
+                    for (block in detectedBlocks) {
+                        val translated = translationManager.translate(block.text)
+                        block.translatedText = translated
+                    }
+                }
+
+                val arabicBlocks = detectedBlocks.filter { block ->
+                    val trans = block.translatedText
+                    !trans.isNullOrBlank() &&
+                    !trans.trim().equals(block.text.trim(), ignoreCase = true) &&
+                    ARABIC_REGEX.containsMatchIn(trans)
+                }
+
+                if (arabicBlocks.isEmpty()) {
+                    showToast("لم تتوفر ترجمة عربية للنصوص المكتشفة")
+                    updateBubbleVisualState()
+                    return@launch
+                }
+
+                // 7. Render menu translations with opaque dark cards (#F210141D) pinned stably
+                val (screenW, screenH, _) = getRealScreenDimensions()
+                seamlessOverlayRenderer?.renderTranslations(
+                    blocks = arabicBlocks,
+                    screenW = screenW,
+                    screenH = screenH,
+                    bitmapW = fullBitmap.width,
+                    bitmapH = fullBitmap.height
+                )
+
+                updateBubbleVisualState()
+                showToast("تم تثبيت ترجمة القائمة (انقر نقرة واحدة للإخفاء)")
+            } catch (e: Exception) {
+                Log.e(TAG, "Zero-Self-Read scan error: ${e.message}", e)
+                seamlessOverlayRenderer?.setVisibility(true)
+                showToast("خطأ أثناء مسح القائمة: ${e.message}")
+            }
         }
     }
 
     private fun updateBubbleVisualState() {
         mainHandler.post {
             val density = resources.displayMetrics.density
+            val hasPinned = seamlessOverlayRenderer?.hasPinnedMenuCards() == true
+
             val backgroundDrawable = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
-                if (isAutoTranslationActive) {
-                    // Bright emerald green when active
-                    setColor(Color.parseColor("#00C853"))
-                    setStroke((2 * density).toInt(), Color.parseColor("#FFFFFF"))
-                } else {
-                    // Dark slate with bright cyan border when paused
-                    setColor(Color.parseColor("#263238"))
-                    setStroke((2.5f * density).toInt(), Color.parseColor("#00E5FF"))
+                when {
+                    isAudioModeActive -> {
+                        // Cyan when Audio Mode is active
+                        setColor(Color.parseColor("#00838F"))
+                        setStroke((2.5f * density).toInt(), Color.parseColor("#00E5FF"))
+                    }
+                    hasPinned -> {
+                        // Green when Menu Overlays are pinned
+                        setColor(Color.parseColor("#00C853"))
+                        setStroke((2 * density).toInt(), Color.parseColor("#FFFFFF"))
+                    }
+                    else -> {
+                        // Slate when standby
+                        setColor(Color.parseColor("#263238"))
+                        setStroke((2 * density).toInt(), Color.parseColor("#90A4AE"))
+                    }
                 }
             }
             bubbleView?.background = backgroundDrawable
-            bubbleView?.alpha = if (isAutoTranslationActive) 1.0f else 0.90f
+            bubbleView?.alpha = if (isAudioModeActive || hasPinned) 1.0f else 0.85f
             ivBubbleIcon?.setColorFilter(Color.WHITE)
         }
     }

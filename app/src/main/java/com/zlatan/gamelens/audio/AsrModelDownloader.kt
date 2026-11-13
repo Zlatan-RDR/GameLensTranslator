@@ -7,13 +7,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.net.SocketException
 import java.util.concurrent.TimeUnit
 
 sealed class AsrDownloadState {
@@ -21,55 +22,126 @@ sealed class AsrDownloadState {
     data class Downloading(val progressPercent: Int, val bytesDownloaded: Long, val totalBytes: Long) : AsrDownloadState()
     object Extracting : AsrDownloadState()
     object Completed : AsrDownloadState()
-    data class Error(val message: String) : AsrDownloadState()
+    data class Error(val message: String, val canResume: Boolean = true) : AsrDownloadState()
 }
 
 /**
- * Downloads and extracts the official Sherpa-ONNX streaming Zipformer English ASR model (~20MB)
- * into internal app storage for zero-internet, offline game voice translation.
+ * Downloads and extracts the official Sherpa-ONNX streaming Zipformer English ASR model (~122 MB compressed archive).
+ * Supports HTTP Range resume into `asr_model.tar.bz2.part` so connection interruptions or app restarts
+ * never lose downloaded bytes.
+ * Extracts ONLY the 4 required int8 files (~22 MB total) and deletes the archive immediately.
  */
 object AsrModelDownloader {
 
     private const val TAG = "AsrModelDownloader"
     const val MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
+    private const val PART_FILE_NAME = "asr_model.tar.bz2.part"
+    private const val EXPECTED_ARCHIVE_SIZE_ESTIMATE = 122L * 1024L * 1024L // ~122 MB
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        .retryOnConnectionFailure(true)
         .build()
+
+    fun getPartFile(context: Context): File {
+        return File(context.filesDir, PART_FILE_NAME)
+    }
+
+    fun hasResumablePart(context: Context): Boolean {
+        val part = getPartFile(context)
+        return part.exists() && part.length() > 0 && !GameAudioTranslator.isAsrModelInstalled(context)
+    }
+
+    fun getPartFileSizeBytes(context: Context): Long {
+        val part = getPartFile(context)
+        return if (part.exists()) part.length() else 0L
+    }
 
     suspend fun downloadAndExtract(
         context: Context,
         onStateChange: (AsrDownloadState) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val destDir = GameAudioTranslator.getAsrModelDir(context)
-        val tempArchive = File(context.cacheDir, "zipformer-model.tar.bz2")
+        val partFile = getPartFile(context)
+
+        // If model already fully installed, mark complete
+        if (GameAudioTranslator.isAsrModelInstalled(context)) {
+            DiagnosticLogger.log("ASR Downloader: Model already installed and verified on disk")
+            onStateChange(AsrDownloadState.Completed)
+            return@withContext true
+        }
 
         try {
-            DiagnosticLogger.log("ASR Downloader: Starting model fetch (~22MB)...")
-            onStateChange(AsrDownloadState.Downloading(0, 0L, -1L))
+            var existingBytes = if (partFile.exists()) partFile.length() else 0L
+            DiagnosticLogger.log("ASR Downloader: Starting fetch (existingBytes=$existingBytes, target ~122 MB)...")
 
-            val request = Request.Builder()
-                .url(MODEL_URL)
-                .build()
-
-            val response = httpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                throw IOException("HTTP response failed: code=${response.code}")
+            val requestBuilder = Request.Builder().url(MODEL_URL)
+            if (existingBytes > 0) {
+                requestBuilder.header("Range", "bytes=$existingBytes-")
+                DiagnosticLogger.log("ASR Downloader: Requesting Range bytes=$existingBytes-")
             }
 
-            val body = response.body ?: throw IOException("Empty response body from model server")
-            val totalBytes = body.contentLength()
-            var downloadedBytes = 0L
+            val response = httpClient.newCall(requestBuilder.build()).execute()
+            val responseCode = response.code
 
-            tempArchive.parentFile?.mkdirs()
-            FileOutputStream(tempArchive).use { output ->
+            val appendMode: Boolean
+            var totalBytes: Long
+            var downloadedBytes: Long
+
+            when (responseCode) {
+                206 -> {
+                    // Partial Content accepted by server
+                    appendMode = true
+                    downloadedBytes = existingBytes
+                    val remaining = response.body?.contentLength() ?: -1L
+                    totalBytes = if (remaining > 0) existingBytes + remaining else EXPECTED_ARCHIVE_SIZE_ESTIMATE
+                    DiagnosticLogger.log("ASR Downloader: Resuming from byte $existingBytes (remaining: $remaining)")
+                }
+                200 -> {
+                    // Server responded with full content
+                    appendMode = false
+                    downloadedBytes = 0L
+                    totalBytes = response.body?.contentLength() ?: EXPECTED_ARCHIVE_SIZE_ESTIMATE
+                    DiagnosticLogger.log("ASR Downloader: Starting fresh download (total: $totalBytes)")
+                }
+                416 -> {
+                    // Range Not Satisfiable: partFile might already be complete
+                    response.close()
+                    if (existingBytes > 20_000_000L) {
+                        DiagnosticLogger.log("ASR Downloader: Range 416 received with $existingBytes bytes. Attempting extraction...")
+                        onStateChange(AsrDownloadState.Extracting)
+                        val extracted = extractTarBz2(partFile, destDir)
+                        if (extracted && GameAudioTranslator.isAsrModelInstalled(context)) {
+                            partFile.delete()
+                            onStateChange(AsrDownloadState.Completed)
+                            return@withContext true
+                        }
+                    }
+                    // If extraction failed or incomplete, reset part file and restart
+                    partFile.delete()
+                    existingBytes = 0L
+                    return@withContext downloadAndExtract(context, onStateChange)
+                }
+                else -> {
+                    response.close()
+                    throw IOException("HTTP response failed with code $responseCode")
+                }
+            }
+
+            val body = response.body ?: throw IOException("Empty response body from server")
+
+            // Write incoming stream into part file
+            FileOutputStream(partFile, appendMode).use { output ->
                 body.byteStream().use { input ->
-                    val buffer = ByteArray(8192)
+                    val buffer = ByteArray(32768)
                     var read: Int
-                    var lastReportedPercent = -1
+                    var lastPercent = -1
+
+                    val initialPercent = if (totalBytes > 0) ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100) else 0
+                    onStateChange(AsrDownloadState.Downloading(initialPercent, downloadedBytes, totalBytes))
 
                     while (input.read(buffer).also { read = it } != -1) {
                         output.write(buffer, 0, read)
@@ -77,96 +149,111 @@ object AsrModelDownloader {
 
                         if (totalBytes > 0) {
                             val percent = ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
-                            if (percent != lastReportedPercent) {
-                                lastReportedPercent = percent
-                                onStateChange(
-                                    AsrDownloadState.Downloading(
-                                        percent,
-                                        downloadedBytes,
-                                        totalBytes
-                                    )
-                                )
+                            if (percent != lastPercent) {
+                                lastPercent = percent
+                                onStateChange(AsrDownloadState.Downloading(percent, downloadedBytes, totalBytes))
                             }
                         }
                     }
                 }
             }
 
-            DiagnosticLogger.log("ASR Downloader: Download finished ($downloadedBytes bytes). Extracting...")
+            DiagnosticLogger.log("ASR Downloader: Download stream complete ($downloadedBytes bytes). Extracting...")
             onStateChange(AsrDownloadState.Extracting)
 
-            extractTarBz2(tempArchive, destDir)
+            // Extract ONLY the 4 int8 ONNX files and tokens
+            val extracted = extractTarBz2(partFile, destDir)
+            if (!extracted) {
+                throw IOException("Archive extraction did not unpack all required int8 ONNX files")
+            }
 
-            // Cleanup downloaded archive
-            tempArchive.delete()
+            // Immediately delete archive part to conserve flash storage
+            if (partFile.exists()) {
+                partFile.delete()
+                DiagnosticLogger.log("ASR Downloader: Deleted temporary archive part to save storage")
+            }
 
             val isVerified = GameAudioTranslator.isAsrModelInstalled(context)
             if (isVerified) {
-                DiagnosticLogger.log("ASR Downloader: All model files verified on disk")
+                DiagnosticLogger.log("ASR Downloader: All 4 int8 files verified on disk (~22 MB)")
                 onStateChange(AsrDownloadState.Completed)
                 return@withContext true
             } else {
-                throw IOException("Verification failed: Required ONNX weights or tokens.txt missing after unpack")
+                throw IOException("Verification failed: Required Zipformer int8 weights missing after unpack")
             }
+
         } catch (e: Exception) {
-            Log.e(TAG, "Error downloading or unpacking ASR model: ${e.message}", e)
-            DiagnosticLogger.log("ASR Downloader Error: ${e.message}")
-            tempArchive.delete()
-            onStateChange(AsrDownloadState.Error(e.message ?: "Unknown download error"))
+            val isSocket = e is SocketException || e.cause is SocketException
+            Log.e(TAG, "ASR Download/Unpack error: ${e.message} (SocketException=$isSocket)", e)
+            DiagnosticLogger.log("ASR Downloader error: ${e.message} (Resumable from ${partFile.length()} bytes)")
+            // Keep partFile intact for HTTP Range resume!
+            onStateChange(AsrDownloadState.Error(e.message ?: "Unknown download interruption", canResume = true))
             return@withContext false
         }
     }
 
-    private fun extractTarBz2(archiveFile: File, outputDir: File) {
-        outputDir.mkdirs()
-        FileInputStream(archiveFile).use { fis ->
-            BufferedInputStream(fis).use { bis ->
-                BZip2CompressorInputStream(bis).use { bzIn ->
-                    TarArchiveInputStream(bzIn).use { tarIn ->
-                        var entry = tarIn.nextTarEntry
-                        while (entry != null) {
-                            val entryName = entry.name.substringAfterLast("/")
-                            if (!entry.isDirectory && entryName.isNotBlank()) {
-                                // Extract weights and tokens into destination
-                                val targetFile = File(outputDir, entryName)
-                                FileOutputStream(targetFile).use { fos ->
-                                    tarIn.copyTo(fos)
-                                }
-                                Log.d(TAG, "Extracted: ${targetFile.name} (${targetFile.length()} bytes)")
+    /**
+     * Streams through the bzip2-compressed tar archive and extracts ONLY the 4 essential int8 model files:
+     * 1. encoder-epoch-99-avg-1.int8.onnx (also creates canonical alias encoder.int8.onnx)
+     * 2. decoder-epoch-99-avg-1.int8.onnx (also creates canonical alias decoder.int8.onnx)
+     * 3. joiner-epoch-99-avg-1.int8.onnx (also creates canonical alias joiner.int8.onnx)
+     * 4. tokens.txt
+     */
+    private fun extractTarBz2(archiveFile: File, outputDir: File): Boolean {
+        if (!archiveFile.exists() || archiveFile.length() == 0L) {
+            Log.e(TAG, "Archive file does not exist or is empty: ${archiveFile.absolutePath}")
+            return false
+        }
 
-                                // Normalize canonical aliases for instant lookup
-                                when {
-                                    entryName.contains("encoder", ignoreCase = true) -> {
-                                        val canonical = File(outputDir, "encoder.int8.onnx")
-                                        if (canonical.canonicalPath != targetFile.canonicalPath) {
+        outputDir.mkdirs()
+
+        try {
+            FileInputStream(archiveFile).use { fis ->
+                BufferedInputStream(fis, 65536).use { bis ->
+                    BZip2CompressorInputStream(bis).use { bzIn ->
+                        TarArchiveInputStream(bzIn).use { tarIn ->
+                            var entry = tarIn.nextTarEntry
+                            while (entry != null) {
+                                val entryName = entry.name.substringAfterLast("/")
+                                val isTarget = entryName == "encoder-epoch-99-avg-1.int8.onnx" ||
+                                        entryName == "decoder-epoch-99-avg-1.int8.onnx" ||
+                                        entryName == "joiner-epoch-99-avg-1.int8.onnx" ||
+                                        entryName == "tokens.txt"
+
+                                if (!entry.isDirectory && isTarget) {
+                                    val targetFile = File(outputDir, entryName)
+                                    FileOutputStream(targetFile).use { fos ->
+                                        tarIn.copyTo(fos)
+                                    }
+                                    Log.d(TAG, "Extracted target: ${targetFile.name} (${targetFile.length()} bytes)")
+
+                                    // Create canonical aliases for instant zero-overhead lookups
+                                    when (entryName) {
+                                        "encoder-epoch-99-avg-1.int8.onnx" -> {
+                                            val canonical = File(outputDir, "encoder.int8.onnx")
                                             targetFile.copyTo(canonical, overwrite = true)
                                         }
-                                    }
-                                    entryName.contains("decoder", ignoreCase = true) -> {
-                                        val canonical = File(outputDir, "decoder.int8.onnx")
-                                        if (canonical.canonicalPath != targetFile.canonicalPath) {
+                                        "decoder-epoch-99-avg-1.int8.onnx" -> {
+                                            val canonical = File(outputDir, "decoder.int8.onnx")
                                             targetFile.copyTo(canonical, overwrite = true)
                                         }
-                                    }
-                                    entryName.contains("joiner", ignoreCase = true) -> {
-                                        val canonical = File(outputDir, "joiner.int8.onnx")
-                                        if (canonical.canonicalPath != targetFile.canonicalPath) {
-                                            targetFile.copyTo(canonical, overwrite = true)
-                                        }
-                                    }
-                                    entryName.equals("tokens.txt", ignoreCase = true) -> {
-                                        val canonical = File(outputDir, "tokens.txt")
-                                        if (canonical.canonicalPath != targetFile.canonicalPath) {
+                                        "joiner-epoch-99-avg-1.int8.onnx" -> {
+                                            val canonical = File(outputDir, "joiner.int8.onnx")
                                             targetFile.copyTo(canonical, overwrite = true)
                                         }
                                     }
                                 }
+                                entry = tarIn.nextTarEntry
                             }
-                            entry = tarIn.nextTarEntry
                         }
                     }
                 }
             }
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed extracting tar.bz2 archive: ${e.message}", e)
+            DiagnosticLogger.log("ASR Extract error: ${e.message}")
+            return false
         }
     }
 }

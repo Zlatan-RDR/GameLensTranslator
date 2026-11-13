@@ -47,6 +47,7 @@ class GameAudioTranslator(
         private const val SAMPLE_RATE = 16000
         private const val READ_BUFFER_SIZE = 2048
         private const val RMS_SILENCE_THRESHOLD = 250.0
+        private const val MAX_PHRASE_DURATION_MS = 3200L // Fast 3.2s phrase segmentation window
 
         fun getAsrModelDir(context: Context): File {
             val dir = File(context.filesDir, "asr-model")
@@ -200,6 +201,7 @@ class GameAudioTranslator(
                 val shortBuffer = ShortArray(READ_BUFFER_SIZE)
                 var lastRecognizedPhrase = ""
                 var speechFrames = 0
+                var phraseStartTimestamp = 0L
 
                 while (isActive && isRunning) {
                     val readShorts = record.read(shortBuffer, 0, shortBuffer.size)
@@ -220,6 +222,10 @@ class GameAudioTranslator(
 
                     if (rms > RMS_SILENCE_THRESHOLD) {
                         speechFrames++
+                        if (phraseStartTimestamp == 0L) {
+                            phraseStartTimestamp = System.currentTimeMillis()
+                        }
+
                         if (rec != null && st != null) {
                             st.acceptWaveform(floatSamples, sampleRate = SAMPLE_RATE)
                             while (rec.isReady(st)) {
@@ -230,34 +236,30 @@ class GameAudioTranslator(
                                 lastRecognizedPhrase = text
                             }
 
-                            if (rec.isEndpoint(st)) {
+                            val phraseDuration = System.currentTimeMillis() - phraseStartTimestamp
+                            val isEndpoint = rec.isEndpoint(st)
+                            // Segment every 2.5s-3.5s at natural word boundary or on endpoint
+                            val isTimeSegmentExceeded = phraseDuration >= MAX_PHRASE_DURATION_MS && lastRecognizedPhrase.length >= 8 && lastRecognizedPhrase.contains(" ")
+
+                            if (isEndpoint || isTimeSegmentExceeded) {
                                 if (lastRecognizedPhrase.isNotBlank()) {
-                                    val phraseToTranslate = lastRecognizedPhrase
-                                    DiagnosticLogger.log("ASR Voice: \"$phraseToTranslate\"")
-                                    val arabicTranslation = translationManager.translate(phraseToTranslate)
-                                    if (!arabicTranslation.isNullOrBlank() && !arabicTranslation.equals(phraseToTranslate, ignoreCase = true)) {
-                                        DiagnosticLogger.log("ASR Subtitle: \"$arabicTranslation\"")
-                                        onSubtitleReady(arabicTranslation)
-                                    }
+                                    flushAndTranslate(lastRecognizedPhrase, phraseDuration)
                                 }
                                 rec.reset(st)
                                 lastRecognizedPhrase = ""
                                 speechFrames = 0
+                                phraseStartTimestamp = 0L
                             }
                         }
                     } else {
                         // Silence detected
                         if (speechFrames > 0 && rec != null && st != null && lastRecognizedPhrase.isNotBlank()) {
-                            val phraseToTranslate = lastRecognizedPhrase
-                            DiagnosticLogger.log("ASR Phrase: \"$phraseToTranslate\"")
-                            val arabicTranslation = translationManager.translate(phraseToTranslate)
-                            if (!arabicTranslation.isNullOrBlank() && !arabicTranslation.equals(phraseToTranslate, ignoreCase = true)) {
-                                DiagnosticLogger.log("ASR Subtitle: \"$arabicTranslation\"")
-                                onSubtitleReady(arabicTranslation)
-                            }
+                            val phraseDuration = if (phraseStartTimestamp > 0L) System.currentTimeMillis() - phraseStartTimestamp else 0L
+                            flushAndTranslate(lastRecognizedPhrase, phraseDuration)
                             rec.reset(st)
                             lastRecognizedPhrase = ""
                             speechFrames = 0
+                            phraseStartTimestamp = 0L
                         }
                     }
                 }
@@ -265,6 +267,35 @@ class GameAudioTranslator(
                 Log.e(TAG, "Error in GameAudio capture loop: ${t.message}", t)
                 DiagnosticLogger.log("GameAudio Error: ${t.message}")
             }
+        }
+    }
+
+    private suspend fun flushAndTranslate(phrase: String, durationMs: Long) {
+        val trimmed = phrase.trim()
+        if (trimmed.isBlank()) return
+
+        // Normalize ASR unpunctuated ALL CAPS to clean sentence case with terminal period
+        val normalizedEn = normalizeAsrText(trimmed)
+        DiagnosticLogger.log("ASR Voice ($durationMs ms): \"$normalizedEn\"")
+
+        val arabicTranslation = translationManager.translate(normalizedEn)
+        val sanitizedArabic = translationManager.deduplicateRepetitions(arabicTranslation)
+
+        if (sanitizedArabic.isNotBlank() && !sanitizedArabic.equals(normalizedEn, ignoreCase = true)) {
+            DiagnosticLogger.log("ASR Subtitle: \"$sanitizedArabic\"")
+            onSubtitleReady(sanitizedArabic)
+        }
+    }
+
+    private fun normalizeAsrText(rawText: String): String {
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty()) return ""
+        val lower = trimmed.lowercase()
+        val sentenceCase = lower.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        return if (!sentenceCase.endsWith(".") && !sentenceCase.endsWith("?") && !sentenceCase.endsWith("!")) {
+            "$sentenceCase."
+        } else {
+            sentenceCase
         }
     }
 

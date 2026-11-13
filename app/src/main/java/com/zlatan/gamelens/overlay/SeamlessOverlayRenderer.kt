@@ -89,19 +89,19 @@ class SeamlessOverlayRenderer(private val context: Context) {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             typeface = Typeface.DEFAULT_BOLD
             includeFontPadding = false
-            setShadowLayer(5f, 0f, 2f, Color.BLACK)
-            val padH = (16 * context.resources.displayMetrics.density).toInt()
-            val padV = (8 * context.resources.displayMetrics.density).toInt()
+            setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            val padH = (20 * context.resources.displayMetrics.density).toInt()
+            val padV = (10 * context.resources.displayMetrics.density).toInt()
             setPadding(padH, padV, padH, padV)
 
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                setColor(0xE6121212.toInt()) // High opacity dark
+                setColor(0xE60B0F17.toInt()) // Dark-translucent cinematic #E60B0F17
                 cornerRadius = 10f * context.resources.displayMetrics.density
-                setStroke(1, Color.parseColor("#44FFFFFF"))
+                setStroke((1.5f * context.resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
             }
             background = bg
             visibility = View.GONE
@@ -205,12 +205,25 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
                 container.addView(overlayView, layoutParams)
             }
+            _hasPinnedCards = blocks.isNotEmpty()
+        }
+    }
+
+    @Volatile
+    private var _hasPinnedCards = false
+
+    fun hasPinnedMenuCards(): Boolean = _hasPinnedCards
+
+    fun clearMenuCards() {
+        mainHandler.post {
+            clearOcrViews()
+            _hasPinnedCards = false
         }
     }
 
     /**
      * Renders speech translations in the zero-flicker centered bottom cinematic subtitle bar.
-     * Auto-hides after 4.5 seconds of silence.
+     * Auto-hides after 4.0 seconds of silence.
      */
     fun renderSubtitle(arabicText: String) {
         mainHandler.post {
@@ -225,7 +238,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             sub.text = arabicText
             sub.visibility = View.VISIBLE
             mainHandler.removeCallbacks(hideSubtitleRunnable)
-            mainHandler.postDelayed(hideSubtitleRunnable, 4500L)
+            mainHandler.postDelayed(hideSubtitleRunnable, 4000L)
         }
     }
 
@@ -235,6 +248,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
     fun clear() {
         mainHandler.post {
             clearOcrViews()
+            _hasPinnedCards = false
             subtitleView?.visibility = View.GONE
         }
     }

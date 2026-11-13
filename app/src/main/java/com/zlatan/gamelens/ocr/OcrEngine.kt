@@ -14,7 +14,12 @@ class OcrEngine {
 
     companion object {
         private const val TAG = "OcrEngine"
+        private const val MIN_CONFIDENCE_THRESHOLD = 0.78f
         private val STANDALONE_NUMBER_OR_SYMBOL_REGEX = Regex("^[0-9\\s.,/:\\-+%$#@!&*()_=\\[\\]{}|<>?~^]+$")
+        private val SHORT_VALID_WORDS = setOf(
+            "a", "i", "to", "in", "on", "at", "by", "of", "or", "is", "it",
+            "no", "go", "up", "we", "he", "me", "my", "do", "so", "ok", "am", "an", "as"
+        )
     }
 
     private val recognizer: TextRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -22,6 +27,7 @@ class OcrEngine {
     /**
      * Processes full-screen game bitmap, detects English text blocks,
      * filters out noise, HUD numbers, and text intersecting the floating bubble.
+     * Enforces strict confidence (>= 0.78) and English token linguistic validity (>= 60%).
      */
     suspend fun recognizeText(bitmap: Bitmap, excludedBounds: Rect? = null): List<OcrBlock> = suspendCancellableCoroutine { continuation ->
         if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
@@ -56,31 +62,54 @@ class OcrEngine {
                             continue
                         }
 
-                        // 2. Filter out elements strictly intersecting the floating control bubble
+                        // 2. Strict Linguistic Pattern Filter: reject blocks where < 60% of tokens are valid English words
+                        if (!passesEnglishTokenRatioFilter(textTrimmed)) {
+                            continue
+                        }
+
+                        // 3. Filter out elements strictly intersecting the floating control bubble
                         if (excludedBounds != null && (excludedBounds.contains(rawBox.centerX(), rawBox.centerY()) || Rect.intersects(rawBox, excludedBounds))) {
                             continue
                         }
 
-                        // 3. Minimum size threshold
-                        if (rawBox.width() < 8 || rawBox.height() < 8) {
+                        // 4. Minimum size threshold
+                        if (rawBox.width() < 10 || rawBox.height() < 10) {
                             continue
                         }
+
+                        // Calculate average line confidence if provided by ML Kit
+                        var totalConf = 0.0f
+                        var confCount = 0
 
                         val lines = block.lines.mapNotNull { line ->
                             val lineBox = line.boundingBox ?: return@mapNotNull null
                             val lineText = line.text.trim()
                             if (isNoiseOrSymbol(lineText)) return@mapNotNull null
+
+                            // ML Kit Line confidence check
+                            line.confidence?.let { conf ->
+                                totalConf += conf
+                                confCount++
+                            }
+
                             OcrLine(
                                 text = lineText,
                                 boundingBox = lineBox
                             )
                         }
 
+                        val blockConfidence = if (confCount > 0) totalConf / confCount else null
+
+                        // 5. Strict Confidence Filter: Reject if ML Kit confidence < 0.78
+                        if (blockConfidence != null && blockConfidence < MIN_CONFIDENCE_THRESHOLD) {
+                            continue
+                        }
+
                         resultBlocks.add(
                             OcrBlock(
                                 text = textTrimmed,
                                 boundingBox = rawBox,
-                                confidence = null,
+                                confidence = blockConfidence,
                                 lines = lines
                             )
                         )
@@ -110,6 +139,32 @@ class OcrEngine {
             return true
         }
         return STANDALONE_NUMBER_OR_SYMBOL_REGEX.matches(text)
+    }
+
+    /**
+     * Rejects gibberish strings and HUD noise by requiring at least 60% of tokens to have
+     * valid English vowel/consonant letter patterns (>= 3 letters) or known short English words.
+     */
+    private fun passesEnglishTokenRatioFilter(text: String): Boolean {
+        val tokens = text.split(Regex("\\s+")).map { it.trim() }.filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return false
+
+        var validCount = 0
+        for (token in tokens) {
+            val letters = token.filter { it.isLetter() }
+            if (letters.length >= 3) {
+                val hasVowel = letters.any { it in "aeiouyAEIOUY" }
+                val hasConsonant = letters.any { it in "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ" }
+                if (hasVowel && hasConsonant) {
+                    validCount++
+                }
+            } else if (letters.isNotEmpty() && SHORT_VALID_WORDS.contains(letters.lowercase())) {
+                validCount++
+            }
+        }
+
+        val ratio = validCount.toDouble() / tokens.size.toDouble()
+        return ratio >= 0.60
     }
 
     fun close() {

@@ -28,6 +28,7 @@ import com.zlatan.gamelens.databinding.ActivityMainBinding
 import com.zlatan.gamelens.db.TranslationCacheManager
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.glossary.GlossaryManager
+import com.zlatan.gamelens.service.ModelDownloadService
 import com.zlatan.gamelens.service.TranslationOverlayService
 import com.zlatan.gamelens.translation.ModelStatus
 import com.zlatan.gamelens.translation.TranslationConfig
@@ -116,6 +117,7 @@ class MainActivity : AppCompatActivity() {
         requestNotificationPermissionIfNeeded()
         observeDiagnosticLogs()
         observeModelStatus()
+        observeModelDownloadState()
     }
 
     override fun onResume() {
@@ -210,11 +212,85 @@ class MainActivity : AppCompatActivity() {
             binding.pbAsrDownload.visibility = View.GONE
             binding.tvAsrDownloadProgress.visibility = View.GONE
         } else {
-            binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_pending)
-            binding.tvAudioModelStatus.setTextColor(ContextCompat.getColor(this, R.color.accent))
-            binding.btnDownloadAsrPack.isEnabled = true
-            binding.btnDownloadAsrPack.alpha = 1.0f
-            binding.btnDownloadAsrPack.text = getString(R.string.btn_download_asr_pack)
+            val hasPart = AsrModelDownloader.hasResumablePart(this)
+            val partMb = AsrModelDownloader.getPartFileSizeBytes(this) / (1024.0 * 1024.0)
+            if (hasPart) {
+                binding.tvAudioModelStatus.text = String.format(java.util.Locale.US, "تنزيل جزئي محفوظ على الذاكرة: %.1f MB (جاهز للاستئناف)", partMb)
+                binding.tvAudioModelStatus.setTextColor(ContextCompat.getColor(this, R.color.accent))
+                binding.btnDownloadAsrPack.isEnabled = true
+                binding.btnDownloadAsrPack.alpha = 1.0f
+                binding.btnDownloadAsrPack.text = getString(R.string.btn_resume_asr_pack)
+            } else {
+                binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_pending)
+                binding.tvAudioModelStatus.setTextColor(ContextCompat.getColor(this, R.color.accent))
+                binding.btnDownloadAsrPack.isEnabled = true
+                binding.btnDownloadAsrPack.alpha = 1.0f
+                binding.btnDownloadAsrPack.text = getString(R.string.btn_download_asr_pack)
+            }
+        }
+    }
+
+    private fun observeModelDownloadState() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ModelDownloadService.downloadStateFlow.collect { state ->
+                    when (state) {
+                        is AsrDownloadState.Downloading -> {
+                            binding.pbAsrDownload.visibility = View.VISIBLE
+                            binding.pbAsrDownload.isIndeterminate = false
+                            binding.pbAsrDownload.progress = state.progressPercent
+                            val downloadedMb = state.bytesDownloaded / (1024.0 * 1024.0)
+                            val totalMb = if (state.totalBytes > 0) state.totalBytes / (1024.0 * 1024.0) else 122.0
+                            binding.tvAsrDownloadProgress.visibility = View.VISIBLE
+                            binding.tvAsrDownloadProgress.text = String.format(
+                                java.util.Locale.US,
+                                "جاري التنزيل في الخلفية: %d%% (%.1f MB / %.1f MB)",
+                                state.progressPercent,
+                                downloadedMb,
+                                totalMb
+                            )
+                            binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_downloading)
+                            binding.btnDownloadAsrPack.isEnabled = false
+                            binding.btnDownloadAsrPack.alpha = 0.5f
+                            binding.btnDownloadAsrPack.text = "جاري التنزيل بالخدمة الخلفية..."
+                        }
+                        is AsrDownloadState.Extracting -> {
+                            binding.pbAsrDownload.visibility = View.VISIBLE
+                            binding.pbAsrDownload.isIndeterminate = true
+                            binding.tvAsrDownloadProgress.visibility = View.VISIBLE
+                            binding.tvAsrDownloadProgress.text = "جاري فك ضغط وتثبيت ملفات Zipformer int8..."
+                            binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_extracting)
+                            binding.btnDownloadAsrPack.isEnabled = false
+                            binding.btnDownloadAsrPack.alpha = 0.5f
+                            binding.btnDownloadAsrPack.text = "جاري التثبيت..."
+                        }
+                        is AsrDownloadState.Completed -> {
+                            binding.pbAsrDownload.visibility = View.GONE
+                            binding.tvAsrDownloadProgress.visibility = View.GONE
+                            updateAudioModelStatus()
+                            Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح!", Toast.LENGTH_SHORT).show()
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
+                                == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
+                                binding.switchGameAudio.isChecked = true
+                            }
+                        }
+                        is AsrDownloadState.Error -> {
+                            binding.pbAsrDownload.visibility = View.GONE
+                            binding.tvAsrDownloadProgress.visibility = View.VISIBLE
+                            binding.tvAsrDownloadProgress.text = "توقف التنزيل: ${state.message} (يمكن الاستئناف)"
+                            binding.btnDownloadAsrPack.isEnabled = true
+                            binding.btnDownloadAsrPack.alpha = 1.0f
+                            binding.btnDownloadAsrPack.text = getString(R.string.btn_resume_asr_pack)
+                            updateAudioModelStatus()
+                        }
+                        AsrDownloadState.Idle -> {
+                            updateAudioModelStatus()
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -331,67 +407,13 @@ class MainActivity : AppCompatActivity() {
             binding.btnDownloadAsrPack.isEnabled = false
             binding.btnDownloadAsrPack.alpha = 0.5f
             binding.pbAsrDownload.visibility = View.VISIBLE
-            binding.pbAsrDownload.isIndeterminate = false
-            binding.pbAsrDownload.progress = 0
+            binding.pbAsrDownload.isIndeterminate = true
             binding.tvAsrDownloadProgress.visibility = View.VISIBLE
-            binding.tvAsrDownloadProgress.text = "جاري الاتصال بالسيرفر..."
+            binding.tvAsrDownloadProgress.text = "جاري بدء التنزيل في خدمة الخلفية..."
 
-            lifecycleScope.launch {
-                val success = AsrModelDownloader.downloadAndExtract(this@MainActivity) { state ->
-                    runOnUiThread {
-                        when (state) {
-                            is AsrDownloadState.Downloading -> {
-                                binding.pbAsrDownload.visibility = View.VISIBLE
-                                binding.pbAsrDownload.isIndeterminate = false
-                                binding.pbAsrDownload.progress = state.progressPercent
-                                val downloadedMb = state.bytesDownloaded / (1024.0 * 1024.0)
-                                val totalMb = if (state.totalBytes > 0) state.totalBytes / (1024.0 * 1024.0) else 22.0
-                                binding.tvAsrDownloadProgress.visibility = View.VISIBLE
-                                binding.tvAsrDownloadProgress.text = String.format(
-                                    java.util.Locale.US,
-                                    "جاري التنزيل: %d%% (%.1f MB / %.1f MB)",
-                                    state.progressPercent,
-                                    downloadedMb,
-                                    totalMb
-                                )
-                                binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_downloading)
-                            }
-                            is AsrDownloadState.Extracting -> {
-                                binding.pbAsrDownload.visibility = View.VISIBLE
-                                binding.pbAsrDownload.isIndeterminate = true
-                                binding.tvAsrDownloadProgress.text = "جاري فك ضغط وتثبيت ملفات Zipformer ONNX..."
-                                binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_extracting)
-                            }
-                            is AsrDownloadState.Completed -> {
-                                binding.pbAsrDownload.visibility = View.GONE
-                                binding.tvAsrDownloadProgress.visibility = View.GONE
-                                updateAudioModelStatus()
-                                Toast.makeText(this@MainActivity, "تم تنزيل وتثبيت نموذج الصوت بنجاح!", Toast.LENGTH_SHORT).show()
-                                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
-                                    == PackageManager.PERMISSION_GRANTED
-                                ) {
-                                    prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
-                                    binding.switchGameAudio.isChecked = true
-                                    Toast.makeText(this@MainActivity, "تم تفعيل الترجمة الصوتية الداخلية تلقائياً", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                            }
-                            is AsrDownloadState.Error -> {
-                                binding.pbAsrDownload.visibility = View.GONE
-                                binding.tvAsrDownloadProgress.visibility = View.VISIBLE
-                                binding.tvAsrDownloadProgress.text = "خطأ أثناء التنزيل: ${state.message}"
-                                binding.btnDownloadAsrPack.isEnabled = true
-                                binding.btnDownloadAsrPack.alpha = 1.0f
-                                binding.btnDownloadAsrPack.text = "إعادة محاولة التنزيل"
-                                updateAudioModelStatus()
-                                Toast.makeText(this@MainActivity, "فشل تنزيل نموذج الصوت: ${state.message}", Toast.LENGTH_LONG).show()
-                            }
-                            AsrDownloadState.Idle -> {}
-                        }
-                    }
-                }
-            }
+            DiagnosticLogger.log("MainActivity: Triggering ModelDownloadService startOrResume")
+            ModelDownloadService.startOrResume(this@MainActivity)
+            Toast.makeText(this@MainActivity, "بدأ تنزيل نموذج الصوت في الخلفية مع إمكانية الاستئناف", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnGrantOverlay.setOnClickListener {
