@@ -9,15 +9,18 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -25,11 +28,13 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.R
+import com.zlatan.gamelens.capture.CropResult
 import com.zlatan.gamelens.capture.FrameDiffEngine
 import com.zlatan.gamelens.capture.ScreenCaptureManager
 import com.zlatan.gamelens.db.TranslationCacheManager
@@ -76,7 +81,17 @@ class TranslationOverlayService : Service() {
 
     private var roiView: View? = null
     private var roiParams: WindowManager.LayoutParams? = null
+    private var tvRoiTitle: TextView? = null
     private var isRoiVisible = true
+
+    private var displayManager: DisplayManager? = null
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) {}
+        override fun onDisplayRemoved(displayId: Int) {}
+        override fun onDisplayChanged(displayId: Int) {
+            handleDisplayOrOrientationChange()
+        }
+    }
 
     private var mediaProjection: MediaProjection? = null
     private var mediaProjectionManager: MediaProjectionManager? = null
@@ -102,6 +117,9 @@ class TranslationOverlayService : Service() {
             windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
+            displayManager = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+            displayManager?.registerDisplayListener(displayListener, mainHandler)
+
             createNotificationChannel()
 
             // Initialize Database, Cache, Glossary and Translation Managers
@@ -116,6 +134,78 @@ class TranslationOverlayService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Fatal error in onCreate: ${e.message}", e)
             showToast("خطأ أثناء تهيئة خدمة الترجمة: ${e.message}")
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        handleDisplayOrOrientationChange()
+    }
+
+    private fun getRealScreenDimensions(): Triple<Int, Int, Int> {
+        val densityDpi = resources.displayMetrics.densityDpi
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.currentWindowMetrics.bounds
+            Triple(bounds.width(), bounds.height(), densityDpi)
+        } else {
+            val dm = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(dm)
+            Triple(dm.widthPixels, dm.heightPixels, dm.densityDpi)
+        }
+    }
+
+    private fun handleDisplayOrOrientationChange() {
+        val (w, h, dpi) = getRealScreenDimensions()
+        screenCaptureManager?.updateDimensions(w, h, dpi)
+        clampRoiWithinScreen(w, h)
+    }
+
+    private fun clampRoiWithinScreen(screenW: Int, screenH: Int) {
+        val params = roiParams ?: return
+        val view = roiView ?: return
+        var changed = false
+
+        if (params.width > screenW) {
+            params.width = (screenW * 0.85f).toInt()
+            changed = true
+        }
+        if (params.height > screenH) {
+            params.height = (screenH * 0.45f).toInt()
+            changed = true
+        }
+        if (params.x + params.width > screenW) {
+            params.x = (screenW - params.width).coerceAtLeast(0)
+            changed = true
+        }
+        if (params.y + params.height > screenH) {
+            params.y = (screenH - params.height).coerceAtLeast(0)
+            changed = true
+        }
+
+        if (changed) {
+            mainHandler.post {
+                try {
+                    windowManager.updateViewLayout(view, params)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun getScanRoiRect(): Rect? {
+        val params = roiParams ?: return null
+        val density = resources.displayMetrics.density
+        val headerHeight = (32 * density).toInt()
+        val left = params.x
+        val top = params.y + headerHeight
+        val right = params.x + params.width
+        val bottom = params.y + params.height
+        return Rect(left, top, right, bottom)
+    }
+
+    private fun updateRoiBadge(text: String) {
+        mainHandler.post {
+            tvRoiTitle?.text = text
         }
     }
 
@@ -246,17 +336,17 @@ class TranslationOverlayService : Service() {
             }
             mediaProjection = proj
 
-            val metrics = resources.displayMetrics
+            val (realW, realH, realDpi) = getRealScreenDimensions()
             screenCaptureManager = ScreenCaptureManager(
                 context = this,
                 mediaProjection = proj,
-                screenWidth = metrics.widthPixels,
-                screenHeight = metrics.heightPixels,
-                screenDensityDpi = metrics.densityDpi
+                screenWidth = realW,
+                screenHeight = realH,
+                screenDensityDpi = realDpi
             )
 
             startCaptureLoop()
-            Log.d(TAG, "MediaProjection & ScreenCaptureManager initialized successfully.")
+            Log.d(TAG, "MediaProjection & ScreenCaptureManager initialized successfully: ${realW}x${realH} @ ${realDpi}dpi")
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException acquiring MediaProjection: ${e.message}", e)
             showToast("خطأ أمني في إذن التقاط الشاشة: ${e.message}")
@@ -287,8 +377,16 @@ class TranslationOverlayService : Service() {
             return
         }
 
-        val currentRoi = getCurrentRoiRect() ?: return
+        val scanRoi = getScanRoiRect() ?: return
         val captureMgr = screenCaptureManager ?: return
+
+        // 0. Synchronize capture dimensions with active display orientation
+        val (screenW, screenH, dpi) = getRealScreenDimensions()
+        val (curW, curH) = captureMgr.getDimensions()
+        if (screenW != curW || screenH != curH) {
+            captureMgr.updateDimensions(screenW, screenH, dpi)
+            clampRoiWithinScreen(screenW, screenH)
+        }
 
         // 1. Anti-Feedback Loop: temporarily hide translation overlay container right before frame capture
         seamlessOverlayRenderer?.setVisibility(false)
@@ -300,17 +398,27 @@ class TranslationOverlayService : Service() {
         // 3. Restore translation overlay visibility immediately after frame acquisition
         seamlessOverlayRenderer?.setVisibility(true)
 
-        if (fullBitmap == null) return
-
-        // 4. Crop strictly to active user-selected ROI
-        val croppedBitmap: Bitmap? = frameDiffEngine.cropToRoi(fullBitmap, currentRoi)
-        if (croppedBitmap == null) {
-            fullBitmap.recycle()
+        if (fullBitmap == null) {
+            updateRoiBadge("ROI [${screenW}x${screenH}] | انتظار الإطار...")
             return
         }
 
+        val actualW = fullBitmap.width
+        val actualH = fullBitmap.height
+
+        // 4. Crop strictly to active user-selected ROI (excluding header)
+        val cropResult = frameDiffEngine.cropToRoi(fullBitmap, scanRoi)
+        if (cropResult == null) {
+            fullBitmap.recycle()
+            updateRoiBadge("ROI [${actualW}x${actualH}] | خارج حدود الشاشة")
+            return
+        }
+
+        val croppedBitmap = cropResult.bitmap
+        val cropRect = cropResult.cropRect
+
         // 5. Fast Frame Diffing: skip unchanged frames to save CPU and battery
-        val hasChanged = frameDiffEngine.hasFrameChanged(croppedBitmap, currentRoi)
+        val hasChanged = frameDiffEngine.hasFrameChanged(croppedBitmap, cropRect)
         if (!hasChanged) {
             croppedBitmap.recycle()
             fullBitmap.recycle()
@@ -318,7 +426,7 @@ class TranslationOverlayService : Service() {
         }
 
         // 6. On-Device ML Kit OCR Recognition
-        val detectedBlocks = ocrEngine.recognizeText(croppedBitmap, currentRoi)
+        val detectedBlocks = ocrEngine.recognizeText(croppedBitmap, cropRect)
         croppedBitmap.recycle()
 
         // 7. Auto-cleanup: If text in ROI has disappeared or changed to empty, clear overlay
@@ -326,14 +434,20 @@ class TranslationOverlayService : Service() {
             latestDetectedBlocks = emptyList()
             seamlessOverlayRenderer?.clear()
             fullBitmap.recycle()
+            val status = translationManager.getStatusString()
+            updateRoiBadge("ROI [${actualW}x${actualH}] | $status | لا يوجد نص")
             return
         }
 
         // 8. Asynchronous Translation through Glossary, Cache & Hybrid Engine on Dispatchers.IO
+        var translatedCount = 0
         withContext(Dispatchers.IO) {
             for (block in detectedBlocks) {
                 val translated = translationManager.translate(block.text)
                 block.translatedText = translated
+                if (translated.isNotBlank() && translated != block.text) {
+                    translatedCount++
+                }
             }
         }
 
@@ -342,6 +456,9 @@ class TranslationOverlayService : Service() {
         // 9. Seamless Overlay Rendering: Edge color sampling + Native RTL Arabic TextView placement
         seamlessOverlayRenderer?.renderTranslations(detectedBlocks, fullBitmap)
         fullBitmap.recycle()
+
+        val status = translationManager.getStatusString()
+        updateRoiBadge("ROI [${actualW}x${actualH}] | $status | OCR: ${detectedBlocks.size} | ترجم: $translatedCount")
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
@@ -429,9 +546,9 @@ class TranslationOverlayService : Service() {
                 WindowManager.LayoutParams.TYPE_PHONE
             }
 
-            val displayMetrics = resources.displayMetrics
-            val initialWidth = (displayMetrics.widthPixels * 0.75f).toInt()
-            val initialHeight = (displayMetrics.heightPixels * 0.35f).toInt()
+            val (realW, realH, _) = getRealScreenDimensions()
+            val initialWidth = (realW * 0.70f).toInt()
+            val initialHeight = (realH * 0.28f).toInt()
 
             roiParams = WindowManager.LayoutParams(
                 initialWidth,
@@ -441,10 +558,11 @@ class TranslationOverlayService : Service() {
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                x = (displayMetrics.widthPixels - initialWidth) / 2
-                y = (displayMetrics.heightPixels - initialHeight) / 3
+                x = (realW - initialWidth) / 2
+                y = (realH * 0.58f).toInt()
             }
 
+            tvRoiTitle = roiView?.findViewById(R.id.tvRoiTitle)
             val header = roiView?.findViewById<View>(R.id.roiHeader)
             val btnHide = roiView?.findViewById<ImageView>(R.id.btnHideRoi)
             val resizeHandle = roiView?.findViewById<ImageView>(R.id.ivResizeHandle)
@@ -556,6 +674,12 @@ class TranslationOverlayService : Service() {
         super.onDestroy()
         captureJob?.cancel()
         serviceScope.cancel()
+
+        try {
+            displayManager?.unregisterDisplayListener(displayListener)
+        } catch (_: Exception) {}
+        displayManager = null
+        tvRoiTitle = null
 
         seamlessOverlayRenderer?.release()
         seamlessOverlayRenderer = null

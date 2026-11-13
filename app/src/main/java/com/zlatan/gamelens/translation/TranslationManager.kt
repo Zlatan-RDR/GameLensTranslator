@@ -40,7 +40,13 @@ class TranslationManager(
         .build()
 
     private var mlKitTranslator: Translator? = null
-    private var isMlKitModelReady = false
+    @Volatile
+    var isMlKitModelReady = false
+        private set
+
+    @Volatile
+    var modelStatusString = "جاري التحميل..."
+        private set
 
     init {
         initMlKitTranslator()
@@ -49,6 +55,17 @@ class TranslationManager(
     fun updateConfig(newConfig: TranslationConfig) {
         this.config = newConfig
         Log.d(TAG, "TranslationConfig updated: Mode=${config.mode}, Model=${config.modelName}")
+    }
+
+    fun getStatusString(): String {
+        return when (config.mode) {
+            TranslationMode.OFFLINE_MLKIT -> {
+                if (isMlKitModelReady) "جاهز (محلي)" else modelStatusString
+            }
+            TranslationMode.CLOUD_OPENAI -> {
+                if (config.apiKey.isNotBlank()) "سحابي (${config.modelName})" else "مفتاح API مفقود"
+            }
+        }
     }
 
     private fun initMlKitTranslator() {
@@ -63,13 +80,16 @@ class TranslationManager(
         val conditions = DownloadConditions.Builder()
             .build()
 
+        modelStatusString = "جاري تحميل النموذج..."
         translator.downloadModelIfNeeded(conditions)
             .addOnSuccessListener {
                 isMlKitModelReady = true
+                modelStatusString = "جاهز (محلي)"
                 Log.d(TAG, "ML Kit English-to-Arabic translation model downloaded and ready.")
             }
             .addOnFailureListener { e ->
                 isMlKitModelReady = false
+                modelStatusString = "يتطلب إنترنت للتحميل لأول مرة"
                 Log.e(TAG, "Failed to download ML Kit translation model: ${e.message}", e)
             }
     }

@@ -47,9 +47,10 @@ class SeamlessOverlayRenderer(private val context: Context) {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // Strictly Touch Pass-Through flags: Zero touch interception
+        // Strictly Touch Pass-Through flags: Zero touch interception, full-screen alignment
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
         val params = WindowManager.LayoutParams(
@@ -99,15 +100,24 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 val box = block.boundingBox
                 if (box.width() <= 5 || box.height() <= 5) continue
 
+                val padX = (8 * context.resources.displayMetrics.density).toInt()
+                val padY = (4 * context.resources.displayMetrics.density).toInt()
+                val targetW = box.width() + padX * 2
+                val minBoxH = (26 * context.resources.displayMetrics.density).toInt()
+                val targetH = (box.height() + padY * 2).coerceAtLeast(minBoxH)
+                val targetLeft = (box.left - padX).coerceAtLeast(0)
+                val targetTop = (box.top - padY).coerceAtLeast(0)
+                val renderBox = android.graphics.Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
+
                 val colorScheme = EdgeColorSampler.sampleEdgeColors(screenBitmap, box)
 
-                val overlayView = ArabicOverlayView(context, box).apply {
+                val overlayView = ArabicOverlayView(context, renderBox).apply {
                     bindTranslation(arabicText, colorScheme)
                 }
 
-                val layoutParams = FrameLayout.LayoutParams(box.width(), box.height()).apply {
-                    leftMargin = box.left
-                    topMargin = box.top
+                val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
+                    leftMargin = targetLeft
+                    topMargin = targetTop
                 }
 
                 container.addView(overlayView, layoutParams)

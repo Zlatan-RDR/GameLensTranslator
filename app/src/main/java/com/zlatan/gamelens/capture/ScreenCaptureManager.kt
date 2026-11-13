@@ -16,9 +16,9 @@ import java.nio.ByteBuffer
 class ScreenCaptureManager(
     private val context: Context,
     private val mediaProjection: MediaProjection,
-    private val screenWidth: Int,
-    private val screenHeight: Int,
-    private val screenDensityDpi: Int
+    private var screenWidth: Int,
+    private var screenHeight: Int,
+    private var screenDensityDpi: Int
 ) {
     companion object {
         private const val TAG = "ScreenCaptureManager"
@@ -33,8 +33,12 @@ class ScreenCaptureManager(
         setupVirtualDisplay()
     }
 
+    @Synchronized
     private fun setupVirtualDisplay() {
         try {
+            imageReader?.close()
+            virtualDisplay?.release()
+
             imageReader = ImageReader.newInstance(
                 screenWidth,
                 screenHeight,
@@ -59,23 +63,61 @@ class ScreenCaptureManager(
     }
 
     /**
-     * Grabs the latest frame from the ImageReader and returns it as a Bitmap.
-     * Accurately handles pixel stride and row padding to prevent slanted/corrupted frames.
+     * Recreates or resizes ImageReader & VirtualDisplay when screen orientation changes.
      */
+    @Synchronized
+    fun updateDimensions(newWidth: Int, newHeight: Int, newDpi: Int) {
+        if (newWidth <= 0 || newHeight <= 0) return
+        if (screenWidth == newWidth && screenHeight == newHeight && screenDensityDpi == newDpi) return
+
+        Log.d(TAG, "Orientation/Size changed: ${screenWidth}x${screenHeight} -> ${newWidth}x${newHeight} @ ${newDpi}dpi")
+        this.screenWidth = newWidth
+        this.screenHeight = newHeight
+        this.screenDensityDpi = newDpi
+
+        try {
+            imageReader?.close()
+            imageReader = ImageReader.newInstance(
+                newWidth,
+                newHeight,
+                PixelFormat.RGBA_8888,
+                2
+            )
+
+            if (virtualDisplay != null) {
+                virtualDisplay?.resize(newWidth, newHeight, newDpi)
+                virtualDisplay?.surface = imageReader?.surface
+                Log.d(TAG, "VirtualDisplay resized successfully to ${newWidth}x${newHeight}")
+            } else {
+                setupVirtualDisplay()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating capture dimensions: ${e.message}", e)
+            setupVirtualDisplay()
+        }
+    }
+
+    /**
+     * Grabs the latest frame from the ImageReader and returns it as a Bitmap.
+     * Uses actual Image dimensions and handles pixel stride and row padding safely.
+     */
+    @Synchronized
     fun acquireLatestBitmap(): Bitmap? {
         val reader = imageReader ?: return null
         val image: Image = reader.acquireLatestImage() ?: return null
 
         return try {
+            val imgW = image.width
+            val imgH = image.height
             val planes = image.planes
             val buffer: ByteBuffer = planes[0].buffer
             val pixelStride = planes[0].pixelStride
             val rowStride = planes[0].rowStride
-            val rowPadding = rowStride - pixelStride * screenWidth
+            val rowPadding = rowStride - pixelStride * imgW
 
             val bitmap = Bitmap.createBitmap(
-                screenWidth + rowPadding / pixelStride,
-                screenHeight,
+                imgW + rowPadding / pixelStride,
+                imgH,
                 Bitmap.Config.ARGB_8888
             )
             bitmap.copyPixelsFromBuffer(buffer)
@@ -83,7 +125,7 @@ class ScreenCaptureManager(
             if (rowPadding == 0) {
                 bitmap
             } else {
-                val cleanBitmap = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+                val cleanBitmap = Bitmap.createBitmap(bitmap, 0, 0, imgW, imgH)
                 bitmap.recycle()
                 cleanBitmap
             }
@@ -95,6 +137,9 @@ class ScreenCaptureManager(
         }
     }
 
+    fun getDimensions(): Pair<Int, Int> = Pair(screenWidth, screenHeight)
+
+    @Synchronized
     fun release() {
         try {
             virtualDisplay?.release()

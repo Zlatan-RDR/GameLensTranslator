@@ -7,17 +7,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
+data class CropResult(
+    val bitmap: Bitmap,
+    val cropRect: Rect
+)
+
 class FrameDiffEngine(
     private val sampleGridSize: Int = 32,
-    private val diffThresholdPercent: Float = 0.035f // 3.5% difference threshold
+    private val diffThresholdPercent: Float = 0.015f // 1.5% difference threshold for fine subtitles
 ) {
     private var previousSampleHash: LongArray? = null
     private var previousRoi: Rect? = null
 
     /**
      * Crops the full-screen bitmap strictly to the given ROI bounding box.
+     * Returns both the cropped bitmap and the exact clamped cropRect coordinates.
      */
-    fun cropToRoi(fullBitmap: Bitmap, roi: Rect): Bitmap? {
+    fun cropToRoi(fullBitmap: Bitmap, roi: Rect): CropResult? {
+        if (fullBitmap.isRecycled || fullBitmap.width <= 0 || fullBitmap.height <= 0) return null
+
         val clampLeft = roi.left.coerceIn(0, fullBitmap.width - 1)
         val clampTop = roi.top.coerceIn(0, fullBitmap.height - 1)
         val clampRight = roi.right.coerceIn(clampLeft + 1, fullBitmap.width)
@@ -29,7 +37,8 @@ class FrameDiffEngine(
         if (cropWidth <= 10 || cropHeight <= 10) return null
 
         return try {
-            Bitmap.createBitmap(fullBitmap, clampLeft, clampTop, cropWidth, cropHeight)
+            val cropped = Bitmap.createBitmap(fullBitmap, clampLeft, clampTop, cropWidth, cropHeight)
+            CropResult(cropped, Rect(clampLeft, clampTop, clampRight, clampBottom))
         } catch (_: Exception) {
             null
         }

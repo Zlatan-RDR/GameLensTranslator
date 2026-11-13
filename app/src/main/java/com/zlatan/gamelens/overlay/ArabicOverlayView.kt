@@ -2,6 +2,7 @@ package com.zlatan.gamelens.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -25,9 +26,12 @@ class ArabicOverlayView(
         typeface = Typeface.DEFAULT_BOLD
         includeFontPadding = false
 
-        val padHorizontal = (3 * resources.displayMetrics.density).toInt()
-        val padVertical = (1 * resources.displayMetrics.density).toInt()
+        val padHorizontal = (8 * resources.displayMetrics.density).toInt()
+        val padVertical = (3 * resources.displayMetrics.density).toInt()
         setPadding(padHorizontal, padVertical, padHorizontal, padVertical)
+
+        // Text shadow for crisp legibility over dynamic game graphics
+        setShadowLayer(4f, 0f, 2f, Color.BLACK)
     }
 
     /**
@@ -36,18 +40,25 @@ class ArabicOverlayView(
      */
     fun bindTranslation(translatedText: String, colorScheme: SampledColorScheme) {
         text = translatedText
-        setTextColor(colorScheme.textColor)
+        setTextColor(Color.WHITE) // High contrast white text
 
-        // Seamless rounded background matching game background
-        val cornerRadiusPx = 4f * resources.displayMetrics.density
+        // Seamless high-contrast background with subtle border
+        val cornerRadiusPx = 6f * resources.displayMetrics.density
         val backgroundDrawable = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(colorScheme.backgroundColor)
+            // Ensure strong opacity (#E6121212 or adaptive)
+            val bg = if (Color.alpha(colorScheme.backgroundColor) < 200) {
+                Color.argb(235, Color.red(colorScheme.backgroundColor), Color.green(colorScheme.backgroundColor), Color.blue(colorScheme.backgroundColor))
+            } else {
+                colorScheme.backgroundColor
+            }
+            setColor(bg)
             cornerRadius = cornerRadiusPx
+            setStroke(1, Color.parseColor("#44FFFFFF"))
         }
         background = backgroundDrawable
 
-        // Dynamic Text Auto-Sizing
+        // Dynamic Text Auto-Sizing with guaranteed readable minimum
         calculateOptimalTextSize(translatedText, targetBox.width(), targetBox.height())
     }
 
@@ -55,11 +66,11 @@ class ArabicOverlayView(
         if (availableWidthPx <= 0 || availableHeightPx <= 0 || arabicText.isEmpty()) return
 
         val density = resources.displayMetrics.scaledDensity
-        val minTextSizeSp = 9f
-        val maxTextSizeSp = 22f
+        val minTextSizeSp = 14f
+        val maxTextSizeSp = 24f
 
         // Initial estimate based on bounding box height
-        var candidateSp = (availableHeightPx / density * 0.70f).coerceIn(minTextSizeSp, maxTextSizeSp)
+        var candidateSp = (availableHeightPx / density * 0.85f).coerceIn(minTextSizeSp, maxTextSizeSp)
 
         val paint = TextPaint(paint)
         val padPx = compoundPaddingLeft + compoundPaddingRight
@@ -72,7 +83,7 @@ class ArabicOverlayView(
             if (textWidth <= usableWidth) {
                 break
             }
-            candidateSp -= 0.75f
+            candidateSp -= 0.5f
         }
 
         setTextSize(TypedValue.COMPLEX_UNIT_SP, candidateSp)
