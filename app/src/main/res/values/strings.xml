@@ -25,4 +25,10 @@
     <string name="hyperos_perm_title">إذن النوافذ بالخلفية (HyperOS / Xiaomi)</string>
     <string name="hyperos_perm_desc">في أجهزة شاومي وHyperOS، يلزم تفعيل إذن \'عرض النوافذ المنبثقة أثناء التشغيل في الخلفية\' لظهور فقاعة التحكم والترجمة الفورية فوق الألعاب.</string>
     <string name="btn_hyperos_perm">ضبط إذن HyperOS</string>
+
+    <!-- Live Diagnostic Logger -->
+    <string name="diagnostic_log_title">سجل التشخيص المباشر (Live Diagnostic Log)</string>
+    <string name="btn_copy_log">نسخ</string>
+    <string name="btn_clear_log">مسح</string>
+    <string name="diagnostic_log_waiting">جاري انتظار أحداث التشغيل...</string>
 </resources>
