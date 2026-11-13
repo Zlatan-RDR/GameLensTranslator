@@ -71,8 +71,9 @@ class TranslationOverlayService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CLICK_DRAG_TOLERANCE = 15f
         private const val LONG_PRESS_TIMEOUT_MS = 750L
-        private const val FRAME_INTERVAL_MS = 300L
+        private const val FRAME_INTERVAL_MS = 200L // 200ms for fast subtitle responsiveness
         private const val ANTI_FEEDBACK_VSYNC_DELAY_MS = 20L
+        private val ARABIC_REGEX = Regex("[\\u0600-\\u06FF]")
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -415,12 +416,26 @@ class TranslationOverlayService : Service() {
 
         DiagnosticLogger.log("Translated: ${detectedBlocks.size}")
 
-        latestDetectedBlocks = detectedBlocks
+        // Filter out non-Arabic or unchanged translations (e.g. Latin app names or untranslated UI)
+        val arabicBlocks = detectedBlocks.filter { block ->
+            val trans = block.translatedText
+            !trans.isNullOrBlank() &&
+            !trans.trim().equals(block.text.trim(), ignoreCase = true) &&
+            ARABIC_REGEX.containsMatchIn(trans)
+        }
+
+        latestDetectedBlocks = arabicBlocks
+
+        if (arabicBlocks.isEmpty()) {
+            seamlessOverlayRenderer?.clear()
+            DiagnosticLogger.log("Rendered: 0 overlays (no valid Arabic text)")
+            return
+        }
 
         // 8. 100% Touch-Passthrough Seamless Overlay Rendering directly over original text bounding boxes
-        // Uses pre-computed colorScheme; does not touch fullBitmap asynchronously
-        seamlessOverlayRenderer?.renderTranslations(detectedBlocks)
-        DiagnosticLogger.log("Rendered: ${detectedBlocks.size} overlays")
+        // Passes valid Arabic blocks and dimensions for accurate coordinate scaling
+        seamlessOverlayRenderer?.renderTranslations(arabicBlocks, screenW, screenH, fullBitmap.width, fullBitmap.height)
+        DiagnosticLogger.log("Rendered: ${arabicBlocks.size} overlays")
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
@@ -447,7 +462,7 @@ class TranslationOverlayService : Service() {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
             ).apply {
-                gravity = Gravity.TOP or Gravity.START
+                gravity = Gravity.TOP or Gravity.LEFT
                 x = 24
                 y = 320
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

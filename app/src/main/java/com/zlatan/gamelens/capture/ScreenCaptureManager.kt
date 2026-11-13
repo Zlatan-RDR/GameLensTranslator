@@ -158,6 +158,7 @@ class ScreenCaptureManager(
 
             val plane = planes[0]
             val buffer: ByteBuffer = plane.buffer
+            buffer.rewind()
             val pixelStride = plane.pixelStride
             val rowStride = plane.rowStride
             val rowPadding = rowStride - pixelStride * imgW
@@ -167,12 +168,13 @@ class ScreenCaptureManager(
             // Adreno GPU buffer padding fix: if driver does not allocate trailing padding on the last row,
             // copy available bytes into a direct buffer of exact requiredBytes to prevent BufferUnderflowException
             val safeBuffer = if (buffer.remaining() >= requiredBytes) {
+                buffer.position(0)
                 buffer
             } else {
                 val padded = ByteBuffer.allocateDirect(requiredBytes)
-                buffer.rewind()
+                buffer.position(0)
                 padded.put(buffer)
-                padded.rewind()
+                padded.position(0)
                 padded
             }
 

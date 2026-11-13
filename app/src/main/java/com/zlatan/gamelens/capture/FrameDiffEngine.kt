@@ -8,7 +8,7 @@ import kotlin.math.abs
 
 class FrameDiffEngine(
     private val sampleGridSize: Int = 36,
-    private val diffThresholdPercent: Float = 0.015f // 1.5% difference threshold
+    private val diffThresholdPercent: Float = 0.005f // 0.5% difference threshold for sensitive subtitle detection
 ) {
     private var previousSampleHash: LongArray? = null
     private var previousWidth: Int = 0

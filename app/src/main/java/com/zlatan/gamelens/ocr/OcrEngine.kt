@@ -56,13 +56,13 @@ class OcrEngine {
                             continue
                         }
 
-                        // 2. Filter out elements intersecting the floating control bubble
-                        if (excludedBounds != null && Rect.intersects(rawBox, excludedBounds)) {
+                        // 2. Filter out elements strictly intersecting the floating control bubble
+                        if (excludedBounds != null && (excludedBounds.contains(rawBox.centerX(), rawBox.centerY()) || Rect.intersects(rawBox, excludedBounds))) {
                             continue
                         }
 
                         // 3. Minimum size threshold
-                        if (rawBox.width() < 12 || rawBox.height() < 10) {
+                        if (rawBox.width() < 8 || rawBox.height() < 8) {
                             continue
                         }
 

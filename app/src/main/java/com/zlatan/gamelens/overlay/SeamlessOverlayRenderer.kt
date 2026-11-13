@@ -37,7 +37,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
     private fun initOverlayContainer() {
         if (overlayContainer != null) return
 
+        // Explicit LTR layout direction prevents Android from inverting leftMargin in RTL locales
         val container = FrameLayout(context).apply {
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
             clipChildren = false
             clipToPadding = false
             isFocusable = false
@@ -84,10 +86,17 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
     /**
      * Renders Arabic translations over the game screen at exact BoundingBox coordinates.
-     * Uses pre-computed colorScheme to avoid touching any Bitmap on the main UI thread.
+     * Uses explicit Gravity.TOP or Gravity.LEFT to avoid RTL coordinate inversion.
+     * Maps coordinates proportionally when captured frame dimensions differ from screen metrics.
      * Always posted to MainLooper for thread-safe UI updates.
      */
-    fun renderTranslations(blocks: List<OcrBlock>) {
+    fun renderTranslations(
+        blocks: List<OcrBlock>,
+        screenW: Int = 0,
+        screenH: Int = 0,
+        bitmapW: Int = 0,
+        bitmapH: Int = 0
+    ) {
         mainHandler.post {
             if (!isContainerAttached || overlayContainer == null) {
                 initOverlayContainer()
@@ -101,6 +110,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 return@post
             }
 
+            val scaleX = if (bitmapW > 0 && screenW > 0) screenW.toFloat() / bitmapW.toFloat() else 1.0f
+            val scaleY = if (bitmapH > 0 && screenH > 0) screenH.toFloat() / bitmapH.toFloat() else 1.0f
+
             for (block in blocks) {
                 val arabicText = block.translatedText ?: continue
                 if (arabicText.isBlank()) continue
@@ -108,13 +120,18 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 val box = block.boundingBox
                 if (box.width() <= 5 || box.height() <= 5) continue
 
-                val padX = (8 * context.resources.displayMetrics.density).toInt()
-                val padY = (4 * context.resources.displayMetrics.density).toInt()
-                val targetW = box.width() + padX * 2
-                val minBoxH = (26 * context.resources.displayMetrics.density).toInt()
-                val targetH = (box.height() + padY * 2).coerceAtLeast(minBoxH)
-                val targetLeft = (box.left - padX).coerceAtLeast(0)
-                val targetTop = (box.top - padY).coerceAtLeast(0)
+                val scaledLeft = (box.left * scaleX).toInt()
+                val scaledTop = (box.top * scaleY).toInt()
+                val scaledW = (box.width() * scaleX).toInt()
+                val scaledH = (box.height() * scaleY).toInt()
+
+                val padX = (6 * context.resources.displayMetrics.density).toInt()
+                val padY = (3 * context.resources.displayMetrics.density).toInt()
+                val targetW = scaledW + padX * 2
+                val minBoxH = (24 * context.resources.displayMetrics.density).toInt()
+                val targetH = (scaledH + padY * 2).coerceAtLeast(minBoxH)
+                val targetLeft = (scaledLeft - padX).coerceAtLeast(0)
+                val targetTop = (scaledTop - padY).coerceAtLeast(0)
                 val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
 
                 val colorScheme = block.colorScheme ?: FALLBACK_SCHEME
@@ -123,7 +140,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
                     bindTranslation(arabicText, colorScheme)
                 }
 
+                // Explicit Gravity.TOP or Gravity.LEFT guarantees exact absolute X/Y positioning in RTL
                 val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
+                    gravity = Gravity.TOP or Gravity.LEFT
                     leftMargin = targetLeft
                     topMargin = targetTop
                 }
