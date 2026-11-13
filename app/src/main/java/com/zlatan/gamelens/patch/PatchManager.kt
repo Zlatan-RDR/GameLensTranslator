@@ -322,12 +322,18 @@ object PatchManager {
 
     /**
      * Automatically logs captured gameplay translations to export as a reusable patch.
+     * Deduplicates in memory: skips disk and MediaStore writes if the exact (en -> ar) pair was already saved.
      */
     fun logSessionEntry(context: Context, english: String, arabic: String) {
         val enTrimmed = english.trim()
         val arTrimmed = arabic.trim()
         if (enTrimmed.isBlank() || arTrimmed.isBlank()) return
 
+        // Skip duplicate write if this key already exists with the same Arabic value
+        val existing = sessionPairs[enTrimmed]
+        if (existing == arTrimmed) {
+            return
+        }
         sessionPairs[enTrimmed] = arTrimmed
 
         // Debounced flush to storage
@@ -338,6 +344,10 @@ object PatchManager {
                 Log.w(TAG, "Session export error: ${t.message}")
             }
         }
+    }
+
+    fun logSessionPair(context: Context, english: String, arabic: String) {
+        logSessionEntry(context, english, arabic)
     }
 
     private fun flushSessionToDownloads(context: Context) {

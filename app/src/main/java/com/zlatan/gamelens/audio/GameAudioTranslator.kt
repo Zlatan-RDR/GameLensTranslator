@@ -28,6 +28,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
@@ -46,10 +48,11 @@ class GameAudioTranslator(
         private const val TAG = "GameAudioTranslator"
         private const val SAMPLE_RATE = 16000
         private const val READ_BUFFER_SIZE = 2048
-        private const val RMS_SILENCE_THRESHOLD = 250.0
-        private const val MIN_ACTIVE_SPEECH_MS = 450L // Minimum speech duration to prevent false clicks
-        private const val SILENCE_PAUSE_FLUSH_MS = 300L // 300ms pause triggers sub-400ms subtitle output
+        private const val MIN_ACTIVE_SPEECH_MS = 350L // 350ms speech duration before finalization
+        private const val SILENCE_PAUSE_FLUSH_MS = 250L // 250ms pause triggers finalization
         private const val MAX_MONOLOGUE_HARD_CAP_MS = 5500L // 5.5s hard cap for continuous monologues
+        private const val PARTIAL_POLL_INTERVAL_MS = 250L // 250ms live streaming partial poll
+        private const val PARTIAL_MIN_WORDS_DIFF = 3 // Translate partial text when >= 3 new words added
 
         fun getAsrModelDir(context: Context): File {
             val dir = File(context.filesDir, "asr-model")
@@ -202,33 +205,49 @@ class GameAudioTranslator(
 
                 val shortBuffer = ShortArray(READ_BUFFER_SIZE)
                 var lastRecognizedPhrase = ""
+                var lastTranslatedWordCount = 0
+                var lastPartialPollTimeMs = 0L
                 var speechFrames = 0
                 var speechStartTimeMs = 0L
                 var lastSpeechDetectedTimeMs = 0L
                 var silenceStartTimeMs = 0L
+                var noiseFloorRms = 0.005f
 
                 while (isActive && isRunning) {
                     val readShorts = record.read(shortBuffer, 0, shortBuffer.size)
                     if (readShorts <= 0) continue
 
-                    // Calculate RMS energy for VAD (Voice Activity Detection)
+                    // Calculate normalized float RMS energy for Adaptive Noise-Floor VAD
                     var sumSquare = 0.0
                     val floatSamples = FloatArray(readShorts)
                     for (i in 0 until readShorts) {
                         val s = shortBuffer[i]
-                        floatSamples[i] = s / 32768.0f
-                        sumSquare += (s * s).toDouble()
+                        val f = s / 32768.0f
+                        floatSamples[i] = f
+                        sumSquare += (f * f).toDouble()
                     }
-                    val rms = sqrt(sumSquare / readShorts)
+                    val currentRms = sqrt(sumSquare / readShorts).toFloat()
+
+                    // Track exponential moving average (EMA) of ambient noise/music floor
+                    if (speechStartTimeMs == 0L) {
+                        noiseFloorRms = noiseFloorRms * 0.95f + currentRms * 0.05f
+                    } else {
+                        noiseFloorRms = noiseFloorRms * 0.99f + min(currentRms, noiseFloorRms * 1.25f) * 0.01f
+                    }
+
+                    // Dynamic threshold: music cutscenes won't stall ASR because cutoff adapts to background music
+                    val silenceCutoff = max(noiseFloorRms * 1.40f, 0.008f)
+                    val isSpeechRms = currentRms >= silenceCutoff
 
                     val rec = recognizer
                     val st = stream
                     val now = System.currentTimeMillis()
 
-                    if (rms > RMS_SILENCE_THRESHOLD) {
+                    if (isSpeechRms) {
                         speechFrames++
                         if (speechStartTimeMs == 0L) {
                             speechStartTimeMs = now
+                            lastPartialPollTimeMs = now
                         }
                         lastSpeechDetectedTimeMs = now
                         silenceStartTimeMs = 0L
@@ -243,6 +262,16 @@ class GameAudioTranslator(
                                 lastRecognizedPhrase = text
                             }
 
+                            // Live Partial Translation While Speaking: Poll every 250ms; if >= 3 new words, translate in-place!
+                            if (now - lastPartialPollTimeMs >= PARTIAL_POLL_INTERVAL_MS && lastRecognizedPhrase.isNotBlank()) {
+                                lastPartialPollTimeMs = now
+                                val words = lastRecognizedPhrase.split(Regex("\\s+")).filter { it.isNotBlank() }
+                                if (words.size - lastTranslatedWordCount >= PARTIAL_MIN_WORDS_DIFF) {
+                                    lastTranslatedWordCount = words.size
+                                    translatePartialInPlace(lastRecognizedPhrase)
+                                }
+                            }
+
                             val phraseDuration = now - speechStartTimeMs
                             val isEndpoint = rec.isEndpoint(st)
                             val isMonologueHardCap = phraseDuration >= MAX_MONOLOGUE_HARD_CAP_MS && lastRecognizedPhrase.isNotBlank()
@@ -253,13 +282,15 @@ class GameAudioTranslator(
                                 }
                                 rec.reset(st)
                                 lastRecognizedPhrase = ""
+                                lastTranslatedWordCount = 0
+                                lastPartialPollTimeMs = 0L
                                 speechFrames = 0
                                 speechStartTimeMs = 0L
                                 silenceStartTimeMs = 0L
                             }
                         }
                     } else {
-                        // RMS Silence
+                        // Ambient floor or silence
                         if (speechStartTimeMs > 0L) {
                             if (silenceStartTimeMs == 0L) {
                                 silenceStartTimeMs = now
@@ -267,16 +298,31 @@ class GameAudioTranslator(
                             val silenceDuration = now - silenceStartTimeMs
                             val speechDuration = lastSpeechDetectedTimeMs - speechStartTimeMs
 
-                            // Sub-400ms VAD Pause Flush: 300ms pause after >450ms speech triggers immediate subtitle output!
-                            if (silenceDuration >= SILENCE_PAUSE_FLUSH_MS && rec != null && st != null) {
-                                if (speechDuration >= MIN_ACTIVE_SPEECH_MS && lastRecognizedPhrase.isNotBlank()) {
-                                    flushAndTranslate(lastRecognizedPhrase, speechDuration)
+                            if (rec != null && st != null) {
+                                st.acceptWaveform(floatSamples, sampleRate = SAMPLE_RATE)
+                                while (rec.isReady(st)) {
+                                    rec.decode(st)
                                 }
-                                rec.reset(st)
-                                lastRecognizedPhrase = ""
-                                speechFrames = 0
-                                speechStartTimeMs = 0L
-                                silenceStartTimeMs = 0L
+                                val text = rec.getResult(st).text.trim()
+                                if (text.isNotBlank() && text != lastRecognizedPhrase) {
+                                    lastRecognizedPhrase = text
+                                }
+
+                                val isEndpoint = rec.isEndpoint(st)
+
+                                // Trigger finalization when silenceDuration >= 250ms (after >= 350ms speech) OR isEndpoint
+                                if ((silenceDuration >= SILENCE_PAUSE_FLUSH_MS && speechDuration >= MIN_ACTIVE_SPEECH_MS) || isEndpoint) {
+                                    if (speechDuration >= MIN_ACTIVE_SPEECH_MS && lastRecognizedPhrase.isNotBlank()) {
+                                        flushAndTranslate(lastRecognizedPhrase, speechDuration)
+                                    }
+                                    rec.reset(st)
+                                    lastRecognizedPhrase = ""
+                                    lastTranslatedWordCount = 0
+                                    lastPartialPollTimeMs = 0L
+                                    speechFrames = 0
+                                    speechStartTimeMs = 0L
+                                    silenceStartTimeMs = 0L
+                                }
                             }
                         }
                     }
@@ -285,6 +331,24 @@ class GameAudioTranslator(
                 Log.e(TAG, "Error in GameAudio capture loop: ${t.message}", t)
                 DiagnosticLogger.log("GameAudio Error: ${t.message}")
             }
+        }
+    }
+
+    private suspend fun translatePartialInPlace(phrase: String) {
+        val trimmed = phrase.trim()
+        if (trimmed.isBlank()) return
+
+        val normalizedEn = normalizeAsrText(trimmed)
+        val patchMatch = com.zlatan.gamelens.patch.PatchManager.findAsrMatch(normalizedEn)
+        val arabicText = if (patchMatch != null) {
+            patchMatch.second
+        } else {
+            val trans = translationManager.translate(normalizedEn)
+            translationManager.deduplicateRepetitions(trans)
+        }
+
+        if (arabicText.isNotBlank() && !arabicText.equals(normalizedEn, ignoreCase = true)) {
+            onSubtitleReady(arabicText)
         }
     }
 
@@ -310,8 +374,8 @@ class GameAudioTranslator(
         if (finalArabic.isNotBlank() && !finalArabic.equals(normalizedEn, ignoreCase = true)) {
             DiagnosticLogger.log("ASR Subtitle: \"$finalArabic\"")
             onSubtitleReady(finalArabic)
-            // Log to Session Exporter for automatic user patch generation
-            com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, normalizedEn, finalArabic)
+            // Note: translationManager.translate already logs to Session Exporter.
+            // Duplicate write avoided for patch matches and repeated calls.
         }
     }
 

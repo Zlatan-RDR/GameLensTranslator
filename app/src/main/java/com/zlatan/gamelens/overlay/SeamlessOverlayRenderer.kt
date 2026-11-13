@@ -231,8 +231,10 @@ class SeamlessOverlayRenderer(private val context: Context) {
     }
 
     /**
-     * Renders speech translations in the zero-flicker centered bottom cinematic subtitle bar.
-     * Auto-hides after 2.2 seconds of silence so old lines never linger over game scenes.
+     * Renders speech translations in the zero-flicker bottom cinematic subtitle bar.
+     * Supports Opaque Cover Mode (100% solid dark 0xFF080A0F over calibrated bottom zone)
+     * and Offset Above Mode (translucent bar positioned cleanly above bottom zone).
+     * Auto-hides after 2.0 seconds of silence so old lines clear promptly between scenes.
      */
     fun renderSubtitle(arabicText: String) {
         mainHandler.post {
@@ -244,12 +246,67 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.visibility = View.GONE
                 return@post
             }
+
+            val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+            val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
+            val calRect = CalibrationOverlay.getCalibratedRect(prefs)
+
+            val metrics = context.resources.displayMetrics
+            val screenW = metrics.widthPixels
+            val screenH = metrics.heightPixels
+            val density = metrics.density
+
+            val zoneLeft = (calRect.left * screenW).toInt()
+            val zoneTop = (calRect.top * screenH).toInt()
+            val zoneRight = (calRect.right * screenW).toInt()
+            val zoneBottom = (calRect.bottom * screenH).toInt()
+            val zoneW = (zoneRight - zoneLeft).coerceAtLeast(100)
+            val zoneH = (zoneBottom - zoneTop).coerceAtLeast((28 * density).toInt())
+
+            if (isOpaqueCover) {
+                // 100% solid opaque dark (0xFF080A0F, alpha = 255) positioned directly over calibrated bottom subtitle zone
+                val bg = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    setColor(0xFF080A0F.toInt())
+                    cornerRadius = 6f * density
+                }
+                sub.background = bg
+                sub.setPadding((12 * density).toInt(), (6 * density).toInt(), (12 * density).toInt(), (6 * density).toInt())
+
+                val layoutParams = FrameLayout.LayoutParams(zoneW, zoneH).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    leftMargin = zoneLeft
+                    topMargin = zoneTop
+                }
+                sub.layoutParams = layoutParams
+            } else {
+                // Offset Above Mode: position the Arabic subtitle bar cleanly above the calibrated bottom subtitle zone with zero overlap
+                val bg = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    setColor(0xD90B0F17.toInt())
+                    cornerRadius = 10f * density
+                    setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+                }
+                sub.background = bg
+                sub.setPadding((16 * density).toInt(), (8 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
+
+                val targetTop = (zoneTop - zoneH - (8 * density).toInt()).coerceAtLeast(0)
+                val layoutParams = FrameLayout.LayoutParams(zoneW, zoneH).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    leftMargin = zoneLeft
+                    topMargin = targetTop
+                }
+                sub.layoutParams = layoutParams
+            }
+
             sub.text = arabicText
             sub.visibility = View.VISIBLE
             mainHandler.removeCallbacks(hideSubtitleRunnable)
-            mainHandler.postDelayed(hideSubtitleRunnable, 2200L)
+            mainHandler.postDelayed(hideSubtitleRunnable, 2000L)
         }
     }
+
+    fun showVoiceSubtitle(arabicText: String) = renderSubtitle(arabicText)
 
     /**
      * Clears all floating translation boxes from the screen.
