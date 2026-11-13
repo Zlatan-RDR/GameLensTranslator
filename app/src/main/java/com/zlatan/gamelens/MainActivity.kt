@@ -21,6 +21,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.zlatan.gamelens.audio.AsrDownloadState
+import com.zlatan.gamelens.audio.AsrModelDownloader
 import com.zlatan.gamelens.audio.GameAudioTranslator
 import com.zlatan.gamelens.databinding.ActivityMainBinding
 import com.zlatan.gamelens.db.TranslationCacheManager
@@ -204,7 +206,9 @@ class MainActivity : AppCompatActivity() {
             binding.tvAudioModelStatus.setTextColor(ContextCompat.getColor(this, R.color.status_active))
             binding.btnDownloadAsrPack.isEnabled = false
             binding.btnDownloadAsrPack.alpha = 0.5f
-            binding.btnDownloadAsrPack.text = "حزمة Sherpa-ONNX مثبتة"
+            binding.btnDownloadAsrPack.text = "النموذج الصوتي مثبت"
+            binding.pbAsrDownload.visibility = View.GONE
+            binding.tvAsrDownloadProgress.visibility = View.GONE
         } else {
             binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_pending)
             binding.tvAudioModelStatus.setTextColor(ContextCompat.getColor(this, R.color.accent))
@@ -324,14 +328,70 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnDownloadAsrPack.setOnClickListener {
-            val asrDir = GameAudioTranslator.getAsrModelDir(this)
-            Toast.makeText(
-                this,
-                "مجلد نماذج Sherpa-ONNX:\n${asrDir.absolutePath}",
-                Toast.LENGTH_LONG
-            ).show()
-            DiagnosticLogger.log("ASR Dir: ${asrDir.absolutePath}")
-            updateAudioModelStatus()
+            binding.btnDownloadAsrPack.isEnabled = false
+            binding.btnDownloadAsrPack.alpha = 0.5f
+            binding.pbAsrDownload.visibility = View.VISIBLE
+            binding.pbAsrDownload.isIndeterminate = false
+            binding.pbAsrDownload.progress = 0
+            binding.tvAsrDownloadProgress.visibility = View.VISIBLE
+            binding.tvAsrDownloadProgress.text = "جاري الاتصال بالسيرفر..."
+
+            lifecycleScope.launch {
+                val success = AsrModelDownloader.downloadAndExtract(this@MainActivity) { state ->
+                    runOnUiThread {
+                        when (state) {
+                            is AsrDownloadState.Downloading -> {
+                                binding.pbAsrDownload.visibility = View.VISIBLE
+                                binding.pbAsrDownload.isIndeterminate = false
+                                binding.pbAsrDownload.progress = state.progressPercent
+                                val downloadedMb = state.bytesDownloaded / (1024.0 * 1024.0)
+                                val totalMb = if (state.totalBytes > 0) state.totalBytes / (1024.0 * 1024.0) else 22.0
+                                binding.tvAsrDownloadProgress.visibility = View.VISIBLE
+                                binding.tvAsrDownloadProgress.text = String.format(
+                                    java.util.Locale.US,
+                                    "جاري التنزيل: %d%% (%.1f MB / %.1f MB)",
+                                    state.progressPercent,
+                                    downloadedMb,
+                                    totalMb
+                                )
+                                binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_downloading)
+                            }
+                            is AsrDownloadState.Extracting -> {
+                                binding.pbAsrDownload.visibility = View.VISIBLE
+                                binding.pbAsrDownload.isIndeterminate = true
+                                binding.tvAsrDownloadProgress.text = "جاري فك ضغط وتثبيت ملفات Zipformer ONNX..."
+                                binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_extracting)
+                            }
+                            is AsrDownloadState.Completed -> {
+                                binding.pbAsrDownload.visibility = View.GONE
+                                binding.tvAsrDownloadProgress.visibility = View.GONE
+                                updateAudioModelStatus()
+                                Toast.makeText(this@MainActivity, "تم تنزيل وتثبيت نموذج الصوت بنجاح!", Toast.LENGTH_SHORT).show()
+                                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
+                                    == PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
+                                    binding.switchGameAudio.isChecked = true
+                                    Toast.makeText(this@MainActivity, "تم تفعيل الترجمة الصوتية الداخلية تلقائياً", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                            is AsrDownloadState.Error -> {
+                                binding.pbAsrDownload.visibility = View.GONE
+                                binding.tvAsrDownloadProgress.visibility = View.VISIBLE
+                                binding.tvAsrDownloadProgress.text = "خطأ أثناء التنزيل: ${state.message}"
+                                binding.btnDownloadAsrPack.isEnabled = true
+                                binding.btnDownloadAsrPack.alpha = 1.0f
+                                binding.btnDownloadAsrPack.text = "إعادة محاولة التنزيل"
+                                updateAudioModelStatus()
+                                Toast.makeText(this@MainActivity, "فشل تنزيل نموذج الصوت: ${state.message}", Toast.LENGTH_LONG).show()
+                            }
+                            AsrDownloadState.Idle -> {}
+                        }
+                    }
+                }
+            }
         }
 
         binding.btnGrantOverlay.setOnClickListener {

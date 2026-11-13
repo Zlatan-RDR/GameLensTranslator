@@ -46,7 +46,9 @@
     <string name="game_audio_title">ترجمة صوت اللعبة الداخلي (Sherpa-ONNX)</string>
     <string name="game_audio_desc">التقاط أصوات اللعبة عبر AudioPlaybackCapture وتفريغ الكلام الإنجليزي فورياً وعرضه في شريط سينمائي أسفل الشاشة.</string>
     <string name="game_audio_switch">تفعيل تفريغ وترجمة صوت اللعبة</string>
-    <string name="game_audio_status_ready">نموذج تفريغ الصوت: جاهز</string>
-    <string name="game_audio_status_missing">نموذج تفريغ الصوت: غير مثبت (يلزم تثبيت الحزمة)</string>
-    <string name="btn_download_asr_pack">تثبيت حزمة الصوت (22MB)</string>
+    <string name="game_audio_status_ready">نموذج تفريغ الصوت: مثبت وجاهز أوفلاين</string>
+    <string name="game_audio_status_pending">نموذج تفريغ الصوت: غير مثبت (يلزم التنزيل)</string>
+    <string name="game_audio_status_downloading">جاري تنزيل نموذج الصوت...</string>
+    <string name="game_audio_status_extracting">جاري فك ضغط وتثبيت النموذج...</string>
+    <string name="btn_download_asr_pack">تنزيل نموذج الصوت (~22 MB)</string>
 </resources>

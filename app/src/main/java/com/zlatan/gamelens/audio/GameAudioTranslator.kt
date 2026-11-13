@@ -58,9 +58,12 @@ class GameAudioTranslator(
 
         fun isAsrModelInstalled(context: Context): Boolean {
             val dir = getAsrModelDir(context)
-            val hasEncoder = File(dir, "encoder.onnx").exists() || File(dir, "encoder.int8.onnx").exists()
-            val hasDecoder = File(dir, "decoder.onnx").exists() || File(dir, "decoder.int8.onnx").exists()
-            val hasJoiner = File(dir, "joiner.onnx").exists() || File(dir, "joiner.int8.onnx").exists()
+            val hasEncoder = File(dir, "encoder.onnx").exists() || File(dir, "encoder.int8.onnx").exists() ||
+                    File(dir, "encoder-epoch-99-avg-1.int8.onnx").exists() || File(dir, "encoder-epoch-99-avg-1.onnx").exists()
+            val hasDecoder = File(dir, "decoder.onnx").exists() || File(dir, "decoder.int8.onnx").exists() ||
+                    File(dir, "decoder-epoch-99-avg-1.int8.onnx").exists() || File(dir, "decoder-epoch-99-avg-1.onnx").exists()
+            val hasJoiner = File(dir, "joiner.onnx").exists() || File(dir, "joiner.int8.onnx").exists() ||
+                    File(dir, "joiner-epoch-99-avg-1.int8.onnx").exists() || File(dir, "joiner-epoch-99-avg-1.onnx").exists()
             val hasTokens = File(dir, "tokens.txt").exists()
             return hasEncoder && hasDecoder && hasJoiner && hasTokens
         }
@@ -102,12 +105,21 @@ class GameAudioTranslator(
 
     private fun initSherpaRecognizer() {
         val dir = getAsrModelDir(context)
-        val encoder = File(dir, "encoder.onnx").takeIf { it.exists() }
-            ?: File(dir, "encoder.int8.onnx").takeIf { it.exists() }
-        val decoder = File(dir, "decoder.onnx").takeIf { it.exists() }
-            ?: File(dir, "decoder.int8.onnx").takeIf { it.exists() }
-        val joiner = File(dir, "joiner.onnx").takeIf { it.exists() }
-            ?: File(dir, "joiner.int8.onnx").takeIf { it.exists() }
+        val encoder = File(dir, "encoder.int8.onnx").takeIf { it.exists() }
+            ?: File(dir, "encoder-epoch-99-avg-1.int8.onnx").takeIf { it.exists() }
+            ?: File(dir, "encoder.onnx").takeIf { it.exists() }
+            ?: File(dir, "encoder-epoch-99-avg-1.onnx").takeIf { it.exists() }
+
+        val decoder = File(dir, "decoder.int8.onnx").takeIf { it.exists() }
+            ?: File(dir, "decoder-epoch-99-avg-1.int8.onnx").takeIf { it.exists() }
+            ?: File(dir, "decoder.onnx").takeIf { it.exists() }
+            ?: File(dir, "decoder-epoch-99-avg-1.onnx").takeIf { it.exists() }
+
+        val joiner = File(dir, "joiner.int8.onnx").takeIf { it.exists() }
+            ?: File(dir, "joiner-epoch-99-avg-1.int8.onnx").takeIf { it.exists() }
+            ?: File(dir, "joiner.onnx").takeIf { it.exists() }
+            ?: File(dir, "joiner-epoch-99-avg-1.onnx").takeIf { it.exists() }
+
         val tokens = File(dir, "tokens.txt").takeIf { it.exists() }
 
         if (encoder != null && decoder != null && joiner != null && tokens != null) {

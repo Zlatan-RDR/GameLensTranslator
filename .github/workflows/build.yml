@@ -27,6 +27,15 @@ jobs:
       - name: Accept Android SDK Licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
+      - name: Download Sherpa-ONNX Prebuilt AAR
+        run: |
+          mkdir -p app/libs
+          if [ ! -s app/libs/sherpa-onnx-1.13.5.aar ]; then
+            echo "Fetching prebuilt sherpa-onnx-1.13.5.aar..."
+            curl -L -o app/libs/sherpa-onnx-1.13.5.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.5/sherpa-onnx-1.13.5.aar
+          fi
+          ls -lh app/libs/
+
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
 

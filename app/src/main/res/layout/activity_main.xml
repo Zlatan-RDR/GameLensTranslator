@@ -450,6 +450,25 @@
                     android:textColor="@color/accent"
                     android:textSize="12sp" />
 
+                <ProgressBar
+                    android:id="@+id/pbAsrDownload"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="6dp"
+                    android:layout_marginTop="8dp"
+                    android:max="100"
+                    android:progress="0"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/tvAsrDownloadProgress"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:textColor="@color/accent"
+                    android:textSize="11sp"
+                    android:visibility="gone" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnDownloadAsrPack"
                     android:layout_width="wrap_content"
@@ -459,7 +478,7 @@
                     android:textColor="@color/background_dark"
                     app:backgroundTint="@color/accent"
                     app:cornerRadius="8dp"
-                    android:visibility="gone" />
+                    android:visibility="visible" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
