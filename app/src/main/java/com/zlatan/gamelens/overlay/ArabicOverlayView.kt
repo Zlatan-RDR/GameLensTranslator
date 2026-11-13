@@ -11,6 +11,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import androidx.appcompat.widget.AppCompatTextView
+import com.zlatan.gamelens.MainActivity
 
 @SuppressLint("ViewConstructor")
 class ArabicOverlayView(
@@ -28,9 +29,8 @@ class ArabicOverlayView(
         isFocusable = false
         isClickable = false
 
-        val padHorizontal = (8 * resources.displayMetrics.density).toInt()
-        val padVertical = (3 * resources.displayMetrics.density).toInt()
-        setPadding(padHorizontal, padVertical, padHorizontal, padVertical)
+        val pad6dp = (6 * resources.displayMetrics.density).toInt()
+        setPadding(pad6dp, pad6dp, pad6dp, pad6dp)
 
         // Text shadow for crisp legibility over dynamic game graphics
         setShadowLayer(4f, 0f, 2f, Color.BLACK)
@@ -38,22 +38,24 @@ class ArabicOverlayView(
 
     /**
      * Updates the content and styling of the overlay view using the translated Arabic text.
-     * In Opaque Cover Mode (#FA0D1117), completely conceals original English text underneath for clean native look.
+     * In Opaque Cover Mode (0xFF080A0F, alpha=255), completely conceals original English text underneath for clean native look.
      */
     fun bindTranslation(translatedText: String, colorScheme: SampledColorScheme? = null) {
         text = translatedText
         setTextColor(Color.WHITE) // High contrast crisp white text
 
-        val prefs = context.getSharedPreferences("GameLensPrefs", Context.MODE_PRIVATE)
-        val isOpaqueCover = prefs.getString("overlay_render_mode", "opaque_cover") == "opaque_cover"
-        val bgColor = if (isOpaqueCover) 0xFA0D1117.toInt() else 0xF210141D.toInt()
+        val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+        val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
+        val bgColor = if (isOpaqueCover) 0xFF080A0F.toInt() else 0xD910141D.toInt()
 
-        val cornerRadiusPx = 6f * resources.displayMetrics.density
+        val cornerRadiusPx = 4f * resources.displayMetrics.density
         val backgroundDrawable = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             setColor(bgColor)
             cornerRadius = cornerRadiusPx
-            setStroke((1.2f * resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+            if (!isOpaqueCover) {
+                setStroke((1.2f * resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+            }
         }
         background = backgroundDrawable
 

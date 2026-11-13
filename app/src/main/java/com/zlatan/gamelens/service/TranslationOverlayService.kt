@@ -73,7 +73,7 @@ class TranslationOverlayService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CLICK_DRAG_TOLERANCE = 15f
         private const val LONG_PRESS_TIMEOUT_MS = 750L
-        private const val FRAME_INTERVAL_MS = 200L // 200ms for fast subtitle responsiveness
+        private const val FRAME_INTERVAL_MS = 120L // 120ms for fast subtitle responsiveness
         private const val ANTI_FEEDBACK_VSYNC_DELAY_MS = 20L
         private val ARABIC_REGEX = Regex("[\\u0600-\\u06FF]")
     }
@@ -437,14 +437,43 @@ class TranslationOverlayService : Service() {
 
         DiagnosticLogger.log("Frame captured: ${fullBitmap.width}x${fullBitmap.height}")
 
-        // 5. Full-Screen On-Device ML Kit OCR Recognition (excluding bubble & HUD noise)
-        val detectedBlocks = ocrEngine.recognizeText(fullBitmap, bubbleBounds)
+        // 5. Restrict OCR strictly to Calibrated Reading Box (defaults to Bottom Subtitles)
+        val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+        val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
 
-        // 6. Auto-cleanup: If no text is detected on screen, clear overlays
+        val cropX = (calRect.left * fullBitmap.width).toInt().coerceIn(0, fullBitmap.width - 1)
+        val cropY = (calRect.top * fullBitmap.height).toInt().coerceIn(0, fullBitmap.height - 1)
+        val cropW = (calRect.width() * fullBitmap.width).toInt().coerceIn(1, fullBitmap.width - cropX)
+        val cropH = (calRect.height() * fullBitmap.height).toInt().coerceIn(1, fullBitmap.height - cropY)
+
+        val isCropped = (cropW < fullBitmap.width || cropH < fullBitmap.height)
+        val ocrBitmap = if (isCropped) {
+            Bitmap.createBitmap(fullBitmap, cropX, cropY, cropW, cropH)
+        } else {
+            fullBitmap
+        }
+
+        // Fast On-Device ML Kit OCR Recognition on the active region
+        val detectedBlocks = try {
+            ocrEngine.recognizeText(ocrBitmap, bubbleBounds)
+        } finally {
+            if (isCropped && !ocrBitmap.isRecycled) {
+                ocrBitmap.recycle()
+            }
+        }
+
+        // 6. Instant Disappearance: If no valid text blocks are detected in the active region, immediately clear within 150ms
         if (detectedBlocks.isEmpty()) {
             latestDetectedBlocks = emptyList()
             seamlessOverlayRenderer?.clear()
             return
+        }
+
+        // Remap bounding boxes back to full screen space
+        if (isCropped) {
+            for (block in detectedBlocks) {
+                block.boundingBox.offset(cropX, cropY)
+            }
         }
 
         DiagnosticLogger.log("OCR blocks: ${detectedBlocks.size}")

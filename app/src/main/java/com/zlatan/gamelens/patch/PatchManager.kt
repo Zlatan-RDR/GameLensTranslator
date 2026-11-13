@@ -1,8 +1,11 @@
 package com.zlatan.gamelens.patch
 
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import kotlinx.coroutines.CoroutineScope
@@ -93,10 +96,28 @@ object PatchManager {
         when {
             lowerName.endsWith(".json") -> parseJson(content)
             lowerName.endsWith(".srt") -> parseSrt(content)
+            lowerName.endsWith(".csv") -> parseCsv(content)
             else -> parseDelimitedText(content)
         }
 
         return patchMap.size
+    }
+
+    private fun parseCsv(content: String) {
+        content.lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            if (trimmed.isNotBlank() && !trimmed.startsWith("#") && !trimmed.startsWith("//")) {
+                val delimiter = if (trimmed.contains(";")) ";" else ","
+                val parts = trimmed.split(delimiter, limit = 2)
+                if (parts.size == 2) {
+                    val en = parts[0].trim().removeSurrounding("\"").removeSurrounding("'")
+                    val ar = parts[1].trim().removeSurrounding("\"").removeSurrounding("'")
+                    if (en.isNotBlank() && ar.isNotBlank()) {
+                        addEntry(en, ar)
+                    }
+                }
+            }
+        }
     }
 
     private fun parseJson(content: String) {
@@ -160,6 +181,8 @@ object PatchManager {
                     trimmed.contains("\t") -> "\t"
                     trimmed.contains("=") -> "="
                     trimmed.contains("::") -> "::"
+                    trimmed.contains("->") -> "->"
+                    trimmed.contains(",") -> ","
                     else -> null
                 }
                 if (delimiter != null) {
@@ -320,30 +343,64 @@ object PatchManager {
     private fun flushSessionToDownloads(context: Context) {
         if (sessionPairs.isEmpty()) return
 
-        // Save into internal app storage sessions directory
-        val sessionsDir = File(context.filesDir, "GameLens_Sessions")
-        sessionsDir.mkdirs()
-        val sessionFile = File(sessionsDir, "session_${sessionDateStr}.json")
+        val fileName = "session_${sessionDateStr}.json"
 
         val json = JSONObject()
         for ((k, v) in sessionPairs) {
             json.put(k, v)
         }
+        val jsonBytes = json.toString(2).toByteArray(Charsets.UTF_8)
 
-        FileOutputStream(sessionFile).use { fos ->
-            fos.write(json.toString(2).toByteArray(Charsets.UTF_8))
+        // 1. Always save into internal app storage sessions directory
+        try {
+            val sessionsDir = File(context.filesDir, "GameLens_Sessions")
+            sessionsDir.mkdirs()
+            val sessionFile = File(sessionsDir, fileName)
+            FileOutputStream(sessionFile).use { fos ->
+                fos.write(jsonBytes)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed writing internal session file: ${e.message}")
         }
 
-        // Also copy to public Downloads/GameLens_Sessions if accessible
+        // 2. Export to public Downloads/GameLens_Sessions via MediaStore on Android 10+ (API 29+) / Android 16
         try {
-            val pubDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (pubDownloads != null && pubDownloads.exists()) {
-                val pubDir = File(pubDownloads, "GameLens_Sessions")
-                pubDir.mkdirs()
-                val pubFile = File(pubDir, "session_${sessionDateStr}.json")
-                sessionFile.copyTo(pubFile, overwrite = true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = context.contentResolver
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/GameLens_Sessions")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+
+                val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val itemUri = resolver.insert(collection, contentValues)
+                if (itemUri != null) {
+                    resolver.openOutputStream(itemUri, "wt")?.use { os ->
+                        os.write(jsonBytes)
+                    }
+                    contentValues.clear()
+                    contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(itemUri, contentValues, null, null)
+                    DiagnosticLogger.log("PatchManager: Saved session via MediaStore ($fileName)")
+                }
+            } else {
+                val pubDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (pubDownloads != null && pubDownloads.exists()) {
+                    val pubDir = File(pubDownloads, "GameLens_Sessions")
+                    pubDir.mkdirs()
+                    val pubFile = File(pubDir, fileName)
+                    FileOutputStream(pubFile).use { fos ->
+                        fos.write(jsonBytes)
+                    }
+                    DiagnosticLogger.log("PatchManager: Saved legacy session ($fileName)")
+                }
             }
-        } catch (_: Exception) {}
+        } catch (t: Throwable) {
+            Log.w(TAG, "MediaStore session export failed: ${t.message}")
+            DiagnosticLogger.log("Session export warning: ${t.message}")
+        }
     }
 
     fun clearPatch() {

@@ -39,15 +39,19 @@ class CalibrationOverlay(
         const val PREFS_KEY_CAL_RIGHT = "cal_right"
         const val PREFS_KEY_CAL_BOTTOM = "cal_bottom"
 
+        val PRESET_FULL_SCREEN = RectF(0f, 0f, 1f, 1f)
+        val PRESET_CENTER_DIALOGS = RectF(0.12f, 0.32f, 0.88f, 0.68f)
+        val PRESET_BOTTOM_SUBTITLES = RectF(0.08f, 0.72f, 0.92f, 0.96f)
+
         fun getCalibratedRect(prefs: SharedPreferences): RectF {
-            val isEnabled = prefs.getBoolean(PREFS_KEY_CALIBRATION_ENABLED, false)
+            val isEnabled = prefs.getBoolean(PREFS_KEY_CALIBRATION_ENABLED, true)
             if (!isEnabled) {
-                return RectF(0f, 0f, 1f, 1f)
+                return PRESET_BOTTOM_SUBTITLES
             }
-            val l = prefs.getFloat(PREFS_KEY_CAL_LEFT, 0f)
-            val t = prefs.getFloat(PREFS_KEY_CAL_TOP, 0f)
-            val r = prefs.getFloat(PREFS_KEY_CAL_RIGHT, 1f)
-            val b = prefs.getFloat(PREFS_KEY_CAL_BOTTOM, 1f)
+            val l = prefs.getFloat(PREFS_KEY_CAL_LEFT, PRESET_BOTTOM_SUBTITLES.left)
+            val t = prefs.getFloat(PREFS_KEY_CAL_TOP, PRESET_BOTTOM_SUBTITLES.top)
+            val r = prefs.getFloat(PREFS_KEY_CAL_RIGHT, PRESET_BOTTOM_SUBTITLES.right)
+            val b = prefs.getFloat(PREFS_KEY_CAL_BOTTOM, PRESET_BOTTOM_SUBTITLES.bottom)
             return RectF(l, t, r, b)
         }
 
@@ -233,7 +237,7 @@ class CalibrationOverlay(
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#37474F"))
             setOnClickListener {
-                boxRect.set(0.12f, 0.32f, 0.88f, 0.68f)
+                boxRect.set(PRESET_CENTER_DIALOGS)
                 canvasView.invalidate()
             }
         }
@@ -244,7 +248,7 @@ class CalibrationOverlay(
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#37474F"))
             setOnClickListener {
-                boxRect.set(0.08f, 0.70f, 0.92f, 0.95f)
+                boxRect.set(PRESET_BOTTOM_SUBTITLES)
                 canvasView.invalidate()
             }
         }
@@ -255,7 +259,7 @@ class CalibrationOverlay(
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#37474F"))
             setOnClickListener {
-                boxRect.set(0f, 0f, 1f, 1f)
+                boxRect.set(PRESET_FULL_SCREEN)
                 canvasView.invalidate()
             }
         }

@@ -305,11 +305,15 @@ class MainActivity : AppCompatActivity() {
                             binding.tvAsrDownloadProgress.visibility = View.GONE
                             updateAudioModelStatus()
                             Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح!", Toast.LENGTH_SHORT).show()
+                            prefs.edit()
+                                .putBoolean(KEY_GAME_AUDIO_ENABLED, true)
+                                .putBoolean("audio_translation_enabled", true)
+                                .apply()
+                            binding.switchGameAudio.isChecked = true
                             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
-                                == PackageManager.PERMISSION_GRANTED
+                                != PackageManager.PERMISSION_GRANTED
                             ) {
-                                prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
-                                binding.switchGameAudio.isChecked = true
+                                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         }
                         is AsrDownloadState.Error -> {
@@ -347,10 +351,15 @@ class MainActivity : AppCompatActivity() {
     private fun observePatchStatus() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                PatchManager.activePatchNameFlow.collect { name ->
-                    val count = PatchManager.patchCountFlow.value
+                kotlinx.coroutines.flow.combine(
+                    PatchManager.activePatchNameFlow,
+                    PatchManager.patchCountFlow
+                ) { name, count ->
+                    Pair(name, count)
+                }.collect { (name, count) ->
                     if (name != null && count > 0) {
-                        binding.tvActivePatchBadge.text = "باتش نشط: $name ($count نص)"
+                        val formattedCount = java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(count)
+                        binding.tvActivePatchBadge.text = "Patch Active: $name ($formattedCount lines)"
                         binding.tvActivePatchBadge.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_active))
                         binding.btnClearPatch.visibility = View.VISIBLE
                     } else {
@@ -509,17 +518,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnPresetFull.setOnClickListener {
-            CalibrationOverlay.saveCalibration(prefs, RectF(0f, 0f, 1f, 1f))
+            CalibrationOverlay.saveCalibration(prefs, CalibrationOverlay.PRESET_FULL_SCREEN)
             Toast.makeText(this, "تم ضبط المعايرة: كامل الشاشة", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnPresetCenter.setOnClickListener {
-            CalibrationOverlay.saveCalibration(prefs, RectF(0.12f, 0.32f, 0.88f, 0.68f))
+            CalibrationOverlay.saveCalibration(prefs, CalibrationOverlay.PRESET_CENTER_DIALOGS)
             Toast.makeText(this, "تم ضبط المعايرة: وسط الشاشة", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnPresetBottom.setOnClickListener {
-            CalibrationOverlay.saveCalibration(prefs, RectF(0.08f, 0.70f, 0.92f, 0.95f))
+            CalibrationOverlay.saveCalibration(prefs, CalibrationOverlay.PRESET_BOTTOM_SUBTITLES)
             Toast.makeText(this, "تم ضبط المعايرة: شريط الترجمة السفلي", Toast.LENGTH_SHORT).show()
         }
 

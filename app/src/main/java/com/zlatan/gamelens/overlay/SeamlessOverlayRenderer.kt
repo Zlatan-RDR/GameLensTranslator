@@ -183,7 +183,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 val scaledH = (box.height() * scaleY).toInt()
 
                 val padX = (6 * context.resources.displayMetrics.density).toInt()
-                val padY = (3 * context.resources.displayMetrics.density).toInt()
+                val padY = (6 * context.resources.displayMetrics.density).toInt()
                 val targetW = scaledW + padX * 2
                 val minBoxH = (24 * context.resources.displayMetrics.density).toInt()
                 val targetH = (scaledH + padY * 2).coerceAtLeast(minBoxH)

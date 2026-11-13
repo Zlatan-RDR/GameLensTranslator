@@ -11,7 +11,7 @@ android {
         applicationId = "com.zlatan.gamelens"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1) + 100
         versionName = "1.0.0"
 
         ndk {
@@ -21,8 +21,21 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("unified") {
+            storeFile = file("keystore/gamelens-unified.jks")
+            storePassword = "gamelens2026"
+            keyAlias = "gamelens"
+            keyPassword = "gamelens2026"
+        }
+    }
+
     buildTypes {
-        release {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("unified")
+        }
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("unified")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

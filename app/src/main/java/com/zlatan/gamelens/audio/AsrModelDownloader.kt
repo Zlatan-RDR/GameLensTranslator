@@ -2,6 +2,7 @@ package com.zlatan.gamelens.audio
 
 import android.content.Context
 import android.util.Log
+import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -116,6 +117,11 @@ object AsrModelDownloader {
                         val extracted = extractTarBz2(partFile, destDir)
                         if (extracted && GameAudioTranslator.isAsrModelInstalled(context)) {
                             partFile.delete()
+                            val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                            prefs.edit()
+                                .putBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, true)
+                                .putBoolean("audio_translation_enabled", true)
+                                .apply()
                             onStateChange(AsrDownloadState.Completed)
                             return@withContext true
                         }
@@ -176,6 +182,11 @@ object AsrModelDownloader {
             val isVerified = GameAudioTranslator.isAsrModelInstalled(context)
             if (isVerified) {
                 DiagnosticLogger.log("ASR Downloader: All 4 int8 files verified on disk (~22 MB)")
+                val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, true)
+                    .putBoolean("audio_translation_enabled", true)
+                    .apply()
                 onStateChange(AsrDownloadState.Completed)
                 return@withContext true
             } else {
