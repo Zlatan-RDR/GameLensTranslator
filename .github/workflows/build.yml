@@ -27,13 +27,63 @@ jobs:
       - name: Accept Android SDK Licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Download Sherpa-ONNX Prebuilt AAR
+      - name: Fetch Sherpa-ONNX Prebuilt AAR Dynamically
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p app/libs
-          if [ ! -s app/libs/sherpa-onnx-1.13.5.aar ]; then
-            echo "Fetching prebuilt sherpa-onnx-1.13.5.aar..."
-            curl -L -o app/libs/sherpa-onnx-1.13.5.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.5/sherpa-onnx-1.13.5.aar
-          fi
+          python3 -c "
+          import urllib.request, json, os, sys
+
+          dest = 'app/libs/sherpa-onnx.aar'
+          token = os.environ.get('GH_TOKEN', '')
+          headers = {'User-Agent': 'Mozilla/5.0'}
+          if token:
+              headers['Authorization'] = f'Bearer {token}'
+
+          download_url = None
+          endpoints = [
+              'https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/v1.13.5',
+              'https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/tags/v2.0.1',
+              'https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest',
+              'https://api.github.com/repos/k2-fsa/sherpa-onnx/releases?per_page=10'
+          ]
+
+          for ep in endpoints:
+              try:
+                  req = urllib.request.Request(ep, headers=headers)
+                  with urllib.request.urlopen(req, timeout=15) as resp:
+                      raw = json.loads(resp.read().decode())
+                      items = raw if isinstance(raw, list) else [raw]
+                      for release in items:
+                          for asset in release.get('assets', []):
+                              name = asset.get('name', '')
+                              if name.endswith('.aar') and 'rknn' not in name:
+                                  download_url = asset.get('browser_download_url')
+                                  print(f'Discovered release AAR: {name} in {release.get(\"tag_name\")}')
+                                  break
+                          if download_url:
+                              break
+              except Exception as e:
+                  print(f'Endpoint {ep} warning: {e}')
+              if download_url:
+                  break
+
+          if not download_url:
+              print('Falling back to direct release download URL...')
+              download_url = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.5/sherpa-onnx-1.13.5.aar'
+
+          print(f'Downloading AAR from {download_url}...')
+          req = urllib.request.Request(download_url, headers=headers)
+          with urllib.request.urlopen(req, timeout=60) as resp, open(dest, 'wb') as f:
+              f.write(resp.read())
+
+          size = os.path.getsize(dest)
+          print(f'Successfully downloaded {dest}: {size} bytes ({size / (1024*1024):.1f} MB)')
+          if size < 1000000:
+              print(f'ERROR: Downloaded file is too small ({size} bytes), likely a 404/rate-limit response')
+              sys.exit(1)
+          "
           ls -lh app/libs/
 
       - name: Build Debug APK

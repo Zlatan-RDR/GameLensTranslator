@@ -51,31 +51,9 @@ android {
     }
 }
 
-val downloadSherpaOnnxAar = tasks.register("downloadSherpaOnnxAar") {
-    val aarFile = file("libs/sherpa-onnx-1.13.5.aar")
-    outputs.file(aarFile)
-    doLast {
-        if (!aarFile.exists()) {
-            aarFile.parentFile.mkdirs()
-            println("Downloading prebuilt sherpa-onnx-1.13.5.aar from GitHub releases...")
-            val url = java.net.URI("https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.5/sherpa-onnx-1.13.5.aar").toURL()
-            url.openStream().use { input ->
-                aarFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-            println("Downloaded sherpa-onnx-1.13.5.aar successfully (${aarFile.length()} bytes).")
-        }
-    }
-}
-
-tasks.matching { it.name.startsWith("preBuild") || it.name.startsWith("compile") }.configureEach {
-    dependsOn(downloadSherpaOnnxAar)
-}
-
 dependencies {
     // Offline Speech Recognition (Sherpa-ONNX prebuilt AAR)
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar"))))
 
     // Archive Extraction (tar.bz2 for offline ASR model unpack)
     implementation("org.apache.commons:commons-compress:1.26.1")
