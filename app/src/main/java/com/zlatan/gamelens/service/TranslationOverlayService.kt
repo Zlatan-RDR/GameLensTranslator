@@ -11,8 +11,10 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
@@ -82,6 +84,9 @@ class TranslationOverlayService : Service() {
     // Single touchable control state
     @Volatile
     private var isAutoTranslationActive = true
+
+    @Volatile
+    private var forceInstantPass = true
 
     private var displayManager: DisplayManager? = null
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -165,8 +170,8 @@ class TranslationOverlayService : Service() {
         val view = bubbleView ?: return
         val bubbleSize = (56 * resources.displayMetrics.density).toInt()
 
-        params.x = params.x.coerceIn(0, screenW - bubbleSize)
-        params.y = params.y.coerceIn(0, screenH - bubbleSize)
+        params.x = params.x.coerceIn(0, (screenW - bubbleSize).coerceAtLeast(0))
+        params.y = params.y.coerceIn(0, (screenH - bubbleSize).coerceAtLeast(0))
 
         mainHandler.post {
             try {
@@ -368,7 +373,9 @@ class TranslationOverlayService : Service() {
         val bubbleBounds = getBubbleBounds()
 
         // 4. Fast Full-Screen Frame Diffing: skip unchanged frames, ignoring floating bubble area
-        val hasChanged = frameDiffEngine.hasFrameChanged(fullBitmap, bubbleBounds)
+        val shouldForce = forceInstantPass
+        forceInstantPass = false
+        val hasChanged = if (shouldForce) true else frameDiffEngine.hasFrameChanged(fullBitmap, bubbleBounds)
         if (!hasChanged) {
             fullBitmap.recycle()
             return
@@ -415,16 +422,18 @@ class TranslationOverlayService : Service() {
                 WindowManager.LayoutParams.TYPE_PHONE
             }
 
+            val bubbleSizePx = (56 * resources.displayMetrics.density).toInt()
+
             bubbleParams = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
+                bubbleSizePx,
+                bubbleSizePx,
                 layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
-                x = 40
-                y = 200
+                x = 24
+                y = 320
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
                 }
@@ -489,10 +498,10 @@ class TranslationOverlayService : Service() {
 
             windowManager.addView(bubbleView, bubbleParams)
             updateBubbleVisualState()
-            Log.d(TAG, "Floating control bubble added to WindowManager.")
+            Log.d(TAG, "Floating control bubble added to WindowManager successfully.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add floating bubble to WindowManager: ${e.message}", e)
-            showToast("تنبيه: تعذر إظهار الفقاعة العائمة. يرجى تفعيل إذن 'عرض النوافذ بالخلفية' في HyperOS")
+            showToast("فشل إظهار الفقاعة العائمة: ${e.message}")
         }
     }
 
@@ -501,6 +510,7 @@ class TranslationOverlayService : Service() {
         updateBubbleVisualState()
 
         if (isAutoTranslationActive) {
+            forceInstantPass = true
             frameDiffEngine.reset()
             showToast("تم تفعيل الترجمة التلقائية للشاشة")
         } else {
@@ -511,22 +521,29 @@ class TranslationOverlayService : Service() {
 
     private fun updateBubbleVisualState() {
         mainHandler.post {
-            if (isAutoTranslationActive) {
-                bubbleView?.alpha = 1.0f
-                ivBubbleIcon?.alpha = 1.0f
-            } else {
-                bubbleView?.alpha = 0.50f
-                ivBubbleIcon?.alpha = 0.50f
+            val density = resources.displayMetrics.density
+            val backgroundDrawable = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                if (isAutoTranslationActive) {
+                    // Bright emerald green when active
+                    setColor(Color.parseColor("#00C853"))
+                    setStroke((2 * density).toInt(), Color.parseColor("#FFFFFF"))
+                } else {
+                    // Dark slate with bright cyan border when paused
+                    setColor(Color.parseColor("#263238"))
+                    setStroke((2.5f * density).toInt(), Color.parseColor("#00E5FF"))
+                }
             }
+            bubbleView?.background = backgroundDrawable
+            bubbleView?.alpha = if (isAutoTranslationActive) 1.0f else 0.90f
+            ivBubbleIcon?.setColorFilter(Color.WHITE)
         }
     }
 
     fun getBubbleBounds(): Rect? {
         val params = bubbleParams ?: return null
-        val view = bubbleView ?: return null
-        val w = if (view.width > 0) view.width else (56 * resources.displayMetrics.density).toInt()
-        val h = if (view.height > 0) view.height else (56 * resources.displayMetrics.density).toInt()
-        return Rect(params.x, params.y, params.x + w, params.y + h)
+        val bubbleSize = (56 * resources.displayMetrics.density).toInt()
+        return Rect(params.x, params.y, params.x + bubbleSize, params.y + bubbleSize)
     }
 
     fun getLatestDetectedBlocks(): List<OcrBlock> = latestDetectedBlocks

@@ -208,6 +208,7 @@ class MainActivity : AppCompatActivity() {
             isServiceRunning = true
             updateUiForRunningService()
             Toast.makeText(this, "تم تشغيل خدمة الترجمة الفورية بنجاح", Toast.LENGTH_SHORT).show()
+            moveTaskToBack(true)
         } catch (e: Exception) {
             Toast.makeText(this, "فشل بدء الخدمة: ${e.message}", Toast.LENGTH_LONG).show()
         }
