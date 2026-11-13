@@ -17,6 +17,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
+import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.ocr.OcrBlock
 
 class SeamlessOverlayRenderer(private val context: Context) {
