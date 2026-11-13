@@ -43,9 +43,18 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    packaging {
+        jniLibs {
+            pickFirsts += listOf("**/libonnxruntime.so", "**/libsherpa-onnx-jni.so", "**/*.so")
+        }
+    }
 }
 
 dependencies {
+    // Offline Speech Recognition (Sherpa-ONNX)
+    implementation("com.github.k2-fsa:sherpa-onnx:v1.13.5")
+
     // AndroidX & UI
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")

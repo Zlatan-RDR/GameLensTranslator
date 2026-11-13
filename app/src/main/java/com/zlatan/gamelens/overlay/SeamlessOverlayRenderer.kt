@@ -5,14 +5,18 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.TextView
 import com.zlatan.gamelens.ocr.OcrBlock
 
 class SeamlessOverlayRenderer(private val context: Context) {
@@ -28,6 +32,11 @@ class SeamlessOverlayRenderer(private val context: Context) {
     private var overlayContainer: FrameLayout? = null
     private var isContainerAttached = false
     private var isVisible = true
+
+    private var subtitleView: TextView? = null
+    private val hideSubtitleRunnable = Runnable {
+        subtitleView?.visibility = View.GONE
+    }
 
     init {
         initOverlayContainer()
@@ -74,6 +83,43 @@ class SeamlessOverlayRenderer(private val context: Context) {
             }
         }
 
+        // Centered bottom cinematic subtitle bar for live game audio transcription
+        val subView = TextView(context).apply {
+            textDirection = View.TEXT_DIRECTION_RTL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            typeface = Typeface.DEFAULT_BOLD
+            includeFontPadding = false
+            setShadowLayer(5f, 0f, 2f, Color.BLACK)
+            val padH = (16 * context.resources.displayMetrics.density).toInt()
+            val padV = (8 * context.resources.displayMetrics.density).toInt()
+            setPadding(padH, padV, padH, padV)
+
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(0xE6121212.toInt()) // High opacity dark
+                cornerRadius = 10f * context.resources.displayMetrics.density
+                setStroke(1, Color.parseColor("#44FFFFFF"))
+            }
+            background = bg
+            visibility = View.GONE
+        }
+
+        val subParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            bottomMargin = (42 * context.resources.displayMetrics.density).toInt()
+            leftMargin = (24 * context.resources.displayMetrics.density).toInt()
+            rightMargin = (24 * context.resources.displayMetrics.density).toInt()
+        }
+
+        container.addView(subView, subParams)
+        subtitleView = subView
+
         try {
             windowManager.addView(container, params)
             overlayContainer = container
@@ -81,6 +127,16 @@ class SeamlessOverlayRenderer(private val context: Context) {
             Log.d(TAG, "SeamlessOverlayRenderer container attached to WindowManager successfully.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to attach overlay container to WindowManager: ${e.message}", e)
+        }
+    }
+
+    private fun clearOcrViews() {
+        val container = overlayContainer ?: return
+        for (i in container.childCount - 1 downTo 0) {
+            val child = container.getChildAt(i)
+            if (child !== subtitleView) {
+                container.removeViewAt(i)
+            }
         }
     }
 
@@ -104,7 +160,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val container = overlayContainer ?: return@post
             if (!isContainerAttached) return@post
 
-            container.removeAllViews()
+            clearOcrViews()
 
             if (!isVisible || blocks.isEmpty()) {
                 return@post
@@ -153,11 +209,33 @@ class SeamlessOverlayRenderer(private val context: Context) {
     }
 
     /**
+     * Renders speech translations in the zero-flicker centered bottom cinematic subtitle bar.
+     * Auto-hides after 4.5 seconds of silence.
+     */
+    fun renderSubtitle(arabicText: String) {
+        mainHandler.post {
+            if (!isContainerAttached || overlayContainer == null) {
+                initOverlayContainer()
+            }
+            val sub = subtitleView ?: return@post
+            if (arabicText.isBlank()) {
+                sub.visibility = View.GONE
+                return@post
+            }
+            sub.text = arabicText
+            sub.visibility = View.VISIBLE
+            mainHandler.removeCallbacks(hideSubtitleRunnable)
+            mainHandler.postDelayed(hideSubtitleRunnable, 4500L)
+        }
+    }
+
+    /**
      * Clears all floating translation boxes from the screen.
      */
     fun clear() {
         mainHandler.post {
-            overlayContainer?.removeAllViews()
+            clearOcrViews()
+            subtitleView?.visibility = View.GONE
         }
     }
 
@@ -186,6 +264,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 }
             }
             overlayContainer = null
+            subtitleView = null
         }
     }
 }

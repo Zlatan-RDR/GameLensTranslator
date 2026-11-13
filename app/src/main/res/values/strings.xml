@@ -31,4 +31,22 @@
     <string name="btn_copy_log">نسخ</string>
     <string name="btn_clear_log">مسح</string>
     <string name="diagnostic_log_waiting">جاري انتظار أحداث التشغيل...</string>
+
+    <!-- Offline Model Gate -->
+    <string name="model_gate_title">نموذج الترجمة الأوفلاين (English -> Arabic)</string>
+    <string name="model_gate_desc">مطلوب للترجمة المحلية بدون إنترنت. لن تعمل الخدمة إلا بعد اكتمال التحميل.</string>
+    <string name="model_status_ready">جاهز للعمل أوفلاين</string>
+    <string name="model_status_not_downloaded">غير محمل (يلزم التحميل للتشغيل)</string>
+    <string name="model_status_downloading">جاري التحميل في الخلفية...</string>
+    <string name="model_btn_download">تحميل نموذج الترجمة أوفلاين</string>
+    <string name="model_download_hint">ملاحظة: إذا تأخر التحميل، يرجى التحقق من مدير التنزيلات لنظام أندرويد (Download Manager).</string>
+    <string name="toast_model_required">يرجى تحميل نموذج الترجمة العربية أولاً من واجهة التطبيق</string>
+
+    <!-- Internal Game Audio Translation (Sherpa-ONNX) -->
+    <string name="game_audio_title">ترجمة صوت اللعبة الداخلي (Sherpa-ONNX)</string>
+    <string name="game_audio_desc">التقاط أصوات اللعبة عبر AudioPlaybackCapture وتفريغ الكلام الإنجليزي فورياً وعرضه في شريط سينمائي أسفل الشاشة.</string>
+    <string name="game_audio_switch">تفعيل تفريغ وترجمة صوت اللعبة</string>
+    <string name="game_audio_status_ready">نموذج تفريغ الصوت: جاهز</string>
+    <string name="game_audio_status_missing">نموذج تفريغ الصوت: غير مثبت (يلزم تثبيت الحزمة)</string>
+    <string name="btn_download_asr_pack">تثبيت حزمة الصوت (22MB)</string>
 </resources>

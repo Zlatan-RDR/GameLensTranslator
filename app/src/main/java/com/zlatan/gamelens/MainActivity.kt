@@ -12,8 +12,6 @@ import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.widget.Toast
@@ -23,10 +21,17 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import kotlinx.coroutines.launch
+import com.zlatan.gamelens.audio.GameAudioTranslator
 import com.zlatan.gamelens.databinding.ActivityMainBinding
+import com.zlatan.gamelens.db.TranslationCacheManager
 import com.zlatan.gamelens.diag.DiagnosticLogger
+import com.zlatan.gamelens.glossary.GlossaryManager
 import com.zlatan.gamelens.service.TranslationOverlayService
+import com.zlatan.gamelens.translation.ModelStatus
+import com.zlatan.gamelens.translation.TranslationConfig
+import com.zlatan.gamelens.translation.TranslationManager
+import com.zlatan.gamelens.translation.TranslationMode
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -35,6 +40,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_TRANSLATION_MODE = "key_translation_mode"
         const val KEY_API_KEY = "key_api_key"
         const val KEY_API_ENDPOINT = "key_api_endpoint"
+        const val KEY_GAME_AUDIO_ENABLED = "key_game_audio_enabled"
 
         const val MODE_OFFLINE = "mode_offline"
         const val MODE_CLOUD = "mode_cloud"
@@ -42,6 +48,10 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: SharedPreferences
+    private lateinit var cacheManager: TranslationCacheManager
+    private lateinit var glossaryManager: GlossaryManager
+    private lateinit var translationManager: TranslationManager
+
     private var isServiceRunning = false
 
     private val overlayPermissionLauncher = registerForActivityResult(
@@ -56,6 +66,21 @@ class MainActivity : AppCompatActivity() {
         if (!isGranted) {
             Toast.makeText(this, "إشعار الخدمة مطلوب لضمان استمرار التشغيل في الخلفية", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
+            binding.switchGameAudio.isChecked = true
+            Toast.makeText(this, "تم تفعيل الترجمة الصوتية الداخلية للألعاب", Toast.LENGTH_SHORT).show()
+        } else {
+            binding.switchGameAudio.isChecked = false
+            prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).apply()
+            Toast.makeText(this, "إذن تسجيل الصوت مطلوب لترجمة صوت الألعاب", Toast.LENGTH_SHORT).show()
+        }
+        updateAudioModelStatus()
     }
 
     private val mediaProjectionLauncher = registerForActivityResult(
@@ -75,16 +100,118 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+        cacheManager = TranslationCacheManager(this)
+        glossaryManager = GlossaryManager(this)
+        val initialConfig = TranslationConfig(
+            mode = if (prefs.getString(KEY_TRANSLATION_MODE, MODE_OFFLINE) == MODE_CLOUD) TranslationMode.CLOUD_OPENAI else TranslationMode.OFFLINE_MLKIT,
+            apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
+            apiEndpoint = prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions") ?: ""
+        )
+        translationManager = TranslationManager(this, cacheManager, glossaryManager, initialConfig)
+
         loadSettings()
         setupListeners()
         requestNotificationPermissionIfNeeded()
         observeDiagnosticLogs()
+        observeModelStatus()
     }
 
     override fun onResume() {
         super.onResume()
         updatePermissionStates()
         refreshDiagnosticLogs()
+        translationManager.checkModelState()
+        updateAudioModelStatus()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        translationManager.close()
+    }
+
+    private fun observeModelStatus() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                translationManager.modelStatusFlow.collect { status ->
+                    updateModelGateUi(status)
+                }
+            }
+        }
+    }
+
+    private fun updateModelGateUi(status: ModelStatus) {
+        val isOffline = binding.rbOfflineMlKit.isChecked
+        when (status) {
+            ModelStatus.READY -> {
+                binding.tvModelStatusBadge.text = getString(R.string.model_status_ready)
+                binding.tvModelStatusBadge.setTextColor(ContextCompat.getColor(this, R.color.status_active))
+                binding.pbModelDownload.visibility = View.GONE
+                binding.tvModelHint.visibility = View.GONE
+                binding.btnDownloadModel.isEnabled = false
+                binding.btnDownloadModel.alpha = 0.5f
+                binding.btnDownloadModel.text = "النموذج جاهز"
+                if (!isServiceRunning) {
+                    binding.btnToggleService.isEnabled = true
+                    binding.btnToggleService.alpha = 1.0f
+                }
+            }
+            ModelStatus.DOWNLOADING -> {
+                binding.tvModelStatusBadge.text = getString(R.string.model_status_downloading)
+                binding.tvModelStatusBadge.setTextColor(ContextCompat.getColor(this, R.color.accent))
+                binding.pbModelDownload.visibility = View.VISIBLE
+                binding.tvModelHint.visibility = View.VISIBLE
+                binding.btnDownloadModel.isEnabled = false
+                binding.btnDownloadModel.alpha = 0.5f
+                binding.btnDownloadModel.text = "جاري التنزيل..."
+                if (isOffline && !isServiceRunning) {
+                    binding.btnToggleService.isEnabled = false
+                    binding.btnToggleService.alpha = 0.5f
+                }
+            }
+            ModelStatus.NOT_DOWNLOADED -> {
+                binding.tvModelStatusBadge.text = getString(R.string.model_status_not_downloaded)
+                binding.tvModelStatusBadge.setTextColor(ContextCompat.getColor(this, R.color.status_inactive))
+                binding.pbModelDownload.visibility = View.GONE
+                binding.tvModelHint.visibility = View.GONE
+                binding.btnDownloadModel.isEnabled = true
+                binding.btnDownloadModel.alpha = 1.0f
+                binding.btnDownloadModel.text = getString(R.string.model_btn_download)
+                if (isOffline && !isServiceRunning) {
+                    binding.btnToggleService.isEnabled = false
+                    binding.btnToggleService.alpha = 0.5f
+                }
+            }
+            ModelStatus.ERROR -> {
+                binding.tvModelStatusBadge.text = getString(R.string.model_status_error)
+                binding.tvModelStatusBadge.setTextColor(ContextCompat.getColor(this, R.color.status_inactive))
+                binding.pbModelDownload.visibility = View.GONE
+                binding.tvModelHint.visibility = View.VISIBLE
+                binding.btnDownloadModel.isEnabled = true
+                binding.btnDownloadModel.alpha = 1.0f
+                binding.btnDownloadModel.text = "إعادة المحاولة"
+                if (isOffline && !isServiceRunning) {
+                    binding.btnToggleService.isEnabled = false
+                    binding.btnToggleService.alpha = 0.5f
+                }
+            }
+        }
+    }
+
+    private fun updateAudioModelStatus() {
+        val isInstalled = GameAudioTranslator.isAsrModelInstalled(this)
+        if (isInstalled) {
+            binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_ready)
+            binding.tvAudioModelStatus.setTextColor(ContextCompat.getColor(this, R.color.status_active))
+            binding.btnDownloadAsrPack.isEnabled = false
+            binding.btnDownloadAsrPack.alpha = 0.5f
+            binding.btnDownloadAsrPack.text = "حزمة Sherpa-ONNX مثبتة"
+        } else {
+            binding.tvAudioModelStatus.text = getString(R.string.game_audio_status_pending)
+            binding.tvAudioModelStatus.setTextColor(ContextCompat.getColor(this, R.color.accent))
+            binding.btnDownloadAsrPack.isEnabled = true
+            binding.btnDownloadAsrPack.alpha = 1.0f
+            binding.btnDownloadAsrPack.text = getString(R.string.btn_download_asr_pack)
+        }
     }
 
     private fun observeDiagnosticLogs() {
@@ -117,14 +244,24 @@ class MainActivity : AppCompatActivity() {
 
         binding.etApiKey.setText(prefs.getString(KEY_API_KEY, ""))
         binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions"))
+
+        binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
     }
 
     private fun setupListeners() {
         binding.rgTranslationMode.setOnCheckedChangeListener { _, checkedId ->
-            if (checkedId == R.id.rbCloudOpenAi) {
-                binding.layoutCloudSettings.visibility = View.VISIBLE
-            } else {
-                binding.layoutCloudSettings.visibility = View.GONE
+            val isCloud = (checkedId == R.id.rbCloudOpenAi)
+            binding.layoutCloudSettings.visibility = if (isCloud) View.VISIBLE else View.GONE
+
+            if (!isServiceRunning) {
+                if (!isCloud) {
+                    val isReady = (translationManager.modelStatusFlow.value == ModelStatus.READY)
+                    binding.btnToggleService.isEnabled = isReady
+                    binding.btnToggleService.alpha = if (isReady) 1.0f else 0.5f
+                } else {
+                    binding.btnToggleService.isEnabled = true
+                    binding.btnToggleService.alpha = 1.0f
+                }
             }
         }
 
@@ -139,7 +276,62 @@ class MainActivity : AppCompatActivity() {
                 .putString(KEY_API_ENDPOINT, if (apiEndpoint.isBlank()) "https://api.openai.com/v1/chat/completions" else apiEndpoint)
                 .apply()
 
+            translationManager.updateConfig(
+                TranslationConfig(
+                    mode = if (selectedMode == MODE_CLOUD) TranslationMode.CLOUD_OPENAI else TranslationMode.OFFLINE_MLKIT,
+                    apiKey = apiKey,
+                    apiEndpoint = if (apiEndpoint.isBlank()) "https://api.openai.com/v1/chat/completions" else apiEndpoint
+                )
+            )
+
             Toast.makeText(this, getString(R.string.settings_saved), Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnDownloadModel.setOnClickListener {
+            Toast.makeText(this, "جاري بدء تحميل نموذج الترجمة الإنجليزية -> العربية...", Toast.LENGTH_SHORT).show()
+            DiagnosticLogger.log("User triggered offline model download")
+            translationManager.downloadOfflineModel(
+                onSuccess = {
+                    Toast.makeText(this, "اكتمل تنزيل نموذج الترجمة بنجاح!", Toast.LENGTH_SHORT).show()
+                    DiagnosticLogger.log("Offline translation model ready")
+                },
+                onFailure = { e ->
+                    Toast.makeText(this, "فشل تنزيل النموذج: ${e.message}", Toast.LENGTH_LONG).show()
+                    DiagnosticLogger.log("Model download failed: ${e.message}")
+                }
+            )
+        }
+
+        binding.switchGameAudio.setOnCheckedChangeListener { _, isChecked ->
+            if (isChecked) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    Toast.makeText(this, "التقاط الصوت الداخلي يتطلب أندرويد 10 فأحدث", Toast.LENGTH_SHORT).show()
+                    binding.switchGameAudio.isChecked = false
+                    return@setOnCheckedChangeListener
+                }
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED
+                ) {
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else {
+                    prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
+                    Toast.makeText(this, "تم تفعيل الترجمة الصوتية الداخلية للألعاب", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).apply()
+                Toast.makeText(this, "تم إيقاف الترجمة الصوتية", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        binding.btnDownloadAsrPack.setOnClickListener {
+            val asrDir = GameAudioTranslator.getAsrModelDir(this)
+            Toast.makeText(
+                this,
+                "مجلد نماذج Sherpa-ONNX:\n${asrDir.absolutePath}",
+                Toast.LENGTH_LONG
+            ).show()
+            DiagnosticLogger.log("ASR Dir: ${asrDir.absolutePath}")
+            updateAudioModelStatus()
         }
 
         binding.btnGrantOverlay.setOnClickListener {
@@ -179,7 +371,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun openHyperOsPermissionSettings() {
         try {
-            // Xiaomi / HyperOS specific permission editor
             val intent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
                 setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity")
                 putExtra("extra_pkgname", packageName)
@@ -187,12 +378,11 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
         } catch (_: Exception) {
             try {
-                // Fallback to standard App Details Settings
                 val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                     data = Uri.parse("package:$packageName")
                 }
                 startActivity(intent)
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 Toast.makeText(this, "يرجى فتح إعدادات التطبيق وتفعيل إذن عرض النوافذ المنبثقة بالخلفية", Toast.LENGTH_LONG).show()
             }
         }
@@ -231,6 +421,12 @@ class MainActivity : AppCompatActivity() {
                 Uri.parse("package:$packageName")
             )
             overlayPermissionLauncher.launch(intent)
+            return
+        }
+
+        // Strict Offline Model Gate check
+        if (binding.rbOfflineMlKit.isChecked && translationManager.modelStatusFlow.value != ModelStatus.READY) {
+            Toast.makeText(this, "يرجى تنزيل نموذج الترجمة بدون إنترنت أولاً والانتظار حتى يكتمل", Toast.LENGTH_LONG).show()
             return
         }
 

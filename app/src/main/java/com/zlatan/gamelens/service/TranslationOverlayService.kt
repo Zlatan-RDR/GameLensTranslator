@@ -35,6 +35,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.R
+import com.zlatan.gamelens.audio.GameAudioTranslator
 import com.zlatan.gamelens.capture.FrameDiffEngine
 import com.zlatan.gamelens.capture.ScreenCaptureManager
 import com.zlatan.gamelens.db.TranslationCacheManager
@@ -104,6 +105,7 @@ class TranslationOverlayService : Service() {
     private var mediaProjectionManager: MediaProjectionManager? = null
 
     private var screenCaptureManager: ScreenCaptureManager? = null
+    private var gameAudioTranslator: GameAudioTranslator? = null
     private val frameDiffEngine = FrameDiffEngine()
     private val ocrEngine = OcrEngine()
 
@@ -226,7 +228,19 @@ class TranslationOverlayService : Service() {
 
                 try {
                     // Refresh config on start
-                    translationManager.updateConfig(loadTranslationConfigFromPreferences())
+                    val config = loadTranslationConfigFromPreferences()
+                    translationManager.updateConfig(config)
+
+                    // Strict Offline Model Gate Check: reject start if model not ready in offline mode
+                    if (config.mode == TranslationMode.OFFLINE_MLKIT) {
+                        TranslationManager.verifyArabicModelDownloaded { isDownloaded ->
+                            if (!isDownloaded) {
+                                DiagnosticLogger.log("Startup blocked: Offline Arabic model is not downloaded")
+                                showToast("تنبيه: يجب تنزيل نموذج الترجمة بدون إنترنت أولاً من شاشة التطبيق")
+                                stopSelf()
+                            }
+                        }
+                    }
 
                     // Setup Single Floating Bubble Control
                     setupFloatingBubble()
@@ -322,6 +336,25 @@ class TranslationOverlayService : Service() {
 
             startCaptureLoop()
             Log.d(TAG, "MediaProjection & ScreenCaptureManager initialized successfully: ${realW}x${realH} @ ${realDpi}dpi")
+
+            // Initialize Internal Game Audio Translation (Sherpa-ONNX + AudioPlaybackCapture)
+            val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+            val isAudioEnabled = prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, false)
+            if (isAudioEnabled) {
+                gameAudioTranslator?.stop()
+                gameAudioTranslator = GameAudioTranslator(
+                    context = this,
+                    mediaProjection = proj,
+                    translationManager = translationManager,
+                    onSubtitleReady = { subtitle ->
+                        mainHandler.post {
+                            seamlessOverlayRenderer?.renderSubtitle(subtitle)
+                        }
+                    }
+                ).also {
+                    it.start()
+                }
+            }
         } catch (e: SecurityException) {
             Log.e(TAG, "SecurityException acquiring MediaProjection: ${e.message}", e)
             showToast("خطأ أمني في إذن التقاط الشاشة: ${e.message}")
@@ -600,6 +633,9 @@ class TranslationOverlayService : Service() {
 
         seamlessOverlayRenderer?.release()
         seamlessOverlayRenderer = null
+
+        gameAudioTranslator?.stop()
+        gameAudioTranslator = null
 
         screenCaptureManager?.release()
         screenCaptureManager = null
