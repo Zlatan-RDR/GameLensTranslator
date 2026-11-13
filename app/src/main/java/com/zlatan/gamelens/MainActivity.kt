@@ -20,6 +20,10 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import com.zlatan.gamelens.databinding.ActivityMainBinding
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.service.TranslationOverlayService
@@ -74,12 +78,27 @@ class MainActivity : AppCompatActivity() {
         loadSettings()
         setupListeners()
         requestNotificationPermissionIfNeeded()
+        observeDiagnosticLogs()
     }
 
     override fun onResume() {
         super.onResume()
         updatePermissionStates()
         refreshDiagnosticLogs()
+    }
+
+    private fun observeDiagnosticLogs() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                DiagnosticLogger.logsStateFlow.collect { list ->
+                    binding.tvDiagnosticLogs.text = if (list.isEmpty()) {
+                        "لا توجد سجلات بعد (No logs recorded yet)"
+                    } else {
+                        list.joinToString("\n")
+                    }
+                }
+            }
+        }
     }
 
     private fun refreshDiagnosticLogs() {

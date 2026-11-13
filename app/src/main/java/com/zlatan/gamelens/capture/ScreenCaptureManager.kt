@@ -195,7 +195,8 @@ class ScreenCaptureManager(
             DiagnosticLogger.log("Image->Bitmap error: ${t.javaClass.simpleName} - ${t.message}")
             null
         } finally {
-            tempBitmap?.recycle()
+            // Let ART garbage collector reclaim bitmaps safely without risking native libhwui SIGABRT
+            tempBitmap = null
             try {
                 image.close()
             } catch (_: Throwable) {}

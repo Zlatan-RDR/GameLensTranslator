@@ -2,7 +2,7 @@ package com.zlatan.gamelens.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
@@ -19,6 +19,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
     companion object {
         private const val TAG = "SeamlessRenderer"
+        private val FALLBACK_SCHEME = SampledColorScheme(0xD9121212.toInt(), Color.WHITE)
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -83,9 +84,10 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
     /**
      * Renders Arabic translations over the game screen at exact BoundingBox coordinates.
+     * Uses pre-computed colorScheme to avoid touching any Bitmap on the main UI thread.
      * Always posted to MainLooper for thread-safe UI updates.
      */
-    fun renderTranslations(blocks: List<OcrBlock>, screenBitmap: Bitmap?) {
+    fun renderTranslations(blocks: List<OcrBlock>) {
         mainHandler.post {
             if (!isContainerAttached || overlayContainer == null) {
                 initOverlayContainer()
@@ -115,7 +117,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 val targetTop = (box.top - padY).coerceAtLeast(0)
                 val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
 
-                val colorScheme = EdgeColorSampler.sampleEdgeColors(screenBitmap, box)
+                val colorScheme = block.colorScheme ?: FALLBACK_SCHEME
 
                 val overlayView = ArabicOverlayView(context, renderBox).apply {
                     bindTranslation(arabicText, colorScheme)

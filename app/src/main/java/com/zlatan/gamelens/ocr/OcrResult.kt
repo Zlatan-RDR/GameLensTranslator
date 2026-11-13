@@ -1,6 +1,7 @@
 package com.zlatan.gamelens.ocr
 
 import android.graphics.Rect
+import com.zlatan.gamelens.overlay.SampledColorScheme
 
 data class OcrLine(
     val text: String,
@@ -13,5 +14,6 @@ data class OcrBlock(
     val boundingBox: Rect,
     val confidence: Float? = null,
     val lines: List<OcrLine> = emptyList(),
-    var translatedText: String? = null
+    var translatedText: String? = null,
+    var colorScheme: SampledColorScheme? = null
 )

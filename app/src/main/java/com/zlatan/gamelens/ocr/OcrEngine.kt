@@ -86,28 +86,18 @@ class OcrEngine {
                         )
                     }
 
-                    if (argbBitmap != bitmap) {
-                        argbBitmap.recycle()
-                    }
-
                     if (continuation.isActive) {
                         continuation.resume(resultBlocks)
                     }
                 }
                 .addOnFailureListener { e ->
                     Log.e(TAG, "ML Kit text recognition failed: ${e.message}", e)
-                    if (argbBitmap != bitmap) {
-                        argbBitmap.recycle()
-                    }
                     if (continuation.isActive) {
                         continuation.resume(emptyList())
                     }
                 }
         } catch (t: Throwable) {
             Log.e(TAG, "ML Kit InputImage error: ${t.message}", t)
-            if (argbBitmap != bitmap) {
-                argbBitmap.recycle()
-            }
             if (continuation.isActive) {
                 continuation.resume(emptyList())
             }

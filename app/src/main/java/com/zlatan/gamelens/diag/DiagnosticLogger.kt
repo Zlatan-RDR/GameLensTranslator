@@ -1,5 +1,8 @@
 package com.zlatan.gamelens.diag
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -10,6 +13,9 @@ object DiagnosticLogger {
     private val logs = ConcurrentLinkedDeque<String>()
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
 
+    private val _logsStateFlow = MutableStateFlow<List<String>>(emptyList())
+    val logsStateFlow: StateFlow<List<String>> = _logsStateFlow.asStateFlow()
+
     @Synchronized
     fun log(message: String) {
         val time = timeFormat.format(Date())
@@ -18,6 +24,7 @@ object DiagnosticLogger {
         while (logs.size > MAX_LOGS) {
             logs.pollFirst()
         }
+        _logsStateFlow.value = logs.toList()
     }
 
     fun getLogs(): List<String> = logs.toList()
@@ -31,5 +38,6 @@ object DiagnosticLogger {
     @Synchronized
     fun clear() {
         logs.clear()
+        _logsStateFlow.value = emptyList()
     }
 }

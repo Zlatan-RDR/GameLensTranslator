@@ -42,6 +42,7 @@ import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.glossary.GlossaryManager
 import com.zlatan.gamelens.ocr.OcrBlock
 import com.zlatan.gamelens.ocr.OcrEngine
+import com.zlatan.gamelens.overlay.EdgeColorSampler
 import com.zlatan.gamelens.overlay.SeamlessOverlayRenderer
 import com.zlatan.gamelens.translation.TranslationConfig
 import com.zlatan.gamelens.translation.TranslationManager
@@ -198,7 +199,7 @@ class TranslationOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) return START_NOT_STICKY
-        DiagnosticLogger.log("Service: onStartCommand action=${intent.action}")
+        DiagnosticLogger.log("Service started (action=${intent.action})")
 
         when (intent.action) {
             ACTION_START -> {
@@ -382,11 +383,10 @@ class TranslationOverlayService : Service() {
         forceInstantPass = false
         val hasChanged = if (shouldForce) true else frameDiffEngine.hasFrameChanged(fullBitmap, bubbleBounds)
         if (!hasChanged) {
-            fullBitmap.recycle()
             return
         }
 
-        DiagnosticLogger.log("Frame: ${fullBitmap.width}x${fullBitmap.height}")
+        DiagnosticLogger.log("Frame captured: ${fullBitmap.width}x${fullBitmap.height}")
 
         // 5. Full-Screen On-Device ML Kit OCR Recognition (excluding bubble & HUD noise)
         val detectedBlocks = ocrEngine.recognizeText(fullBitmap, bubbleBounds)
@@ -395,11 +395,15 @@ class TranslationOverlayService : Service() {
         if (detectedBlocks.isEmpty()) {
             latestDetectedBlocks = emptyList()
             seamlessOverlayRenderer?.clear()
-            fullBitmap.recycle()
             return
         }
 
-        DiagnosticLogger.log("OCR detected: ${detectedBlocks.size} blocks")
+        DiagnosticLogger.log("OCR blocks: ${detectedBlocks.size}")
+
+        // Synchronously sample background edge colors while fullBitmap is 100% valid and guaranteed alive
+        for (block in detectedBlocks) {
+            block.colorScheme = EdgeColorSampler.sampleEdgeColors(fullBitmap, block.boundingBox)
+        }
 
         // 7. Non-blocking Asynchronous Translation through Glossary, Cache & Translation Engine
         withContext(Dispatchers.IO) {
@@ -409,12 +413,14 @@ class TranslationOverlayService : Service() {
             }
         }
 
+        DiagnosticLogger.log("Translated: ${detectedBlocks.size}")
+
         latestDetectedBlocks = detectedBlocks
 
         // 8. 100% Touch-Passthrough Seamless Overlay Rendering directly over original text bounding boxes
-        seamlessOverlayRenderer?.renderTranslations(detectedBlocks, fullBitmap)
-        fullBitmap.recycle()
-        DiagnosticLogger.log("Rendered ${detectedBlocks.size} translations")
+        // Uses pre-computed colorScheme; does not touch fullBitmap asynchronously
+        seamlessOverlayRenderer?.renderTranslations(detectedBlocks)
+        DiagnosticLogger.log("Rendered: ${detectedBlocks.size} overlays")
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
@@ -508,7 +514,7 @@ class TranslationOverlayService : Service() {
 
             windowManager.addView(bubbleView, bubbleParams)
             updateBubbleVisualState()
-            DiagnosticLogger.log("Bubble attached (56dp emerald)")
+            DiagnosticLogger.log("Bubble attached at (${bubbleParams?.x}, ${bubbleParams?.y})")
             Log.d(TAG, "Floating control bubble added to WindowManager successfully.")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to add floating bubble to WindowManager: ${t.message}", t)
