@@ -164,7 +164,7 @@ class TranslationManager(
      * 5. Post-translation glossary replacements & neural loop de-duplication
      * 6. Session auto-exporter for community patch generation
      */
-    suspend fun translate(text: String): String = withContext(Dispatchers.IO) {
+    suspend fun translate(text: String, isFinal: Boolean = true): String = withContext(Dispatchers.IO) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return@withContext ""
 
@@ -212,8 +212,10 @@ class TranslationManager(
         // 7. Save to Cache for subsequent 0ms hits
         cacheManager.put(trimmed, finalResult)
 
-        // 8. Log unique pair to Session Exporter
-        com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, trimmed, finalResult)
+        // 8. Log unique pair to Session Exporter (only for completed final sentences, skipping partial chunks)
+        if (isFinal) {
+            com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, trimmed, finalResult, isFinal = true)
+        }
 
         finalResult
     }
@@ -261,6 +263,15 @@ class TranslationManager(
         }
         val singleWordRepeatRegex = Regex("(\\b\\S+)(?:\\s*[/،,]\\s*\\1)+", RegexOption.IGNORE_CASE)
         sanitized = sanitized.replace(singleWordRepeatRegex, "$1")
+
+        // Collapse immediate 1-to-3 word consecutive duplicates without separators (e.g. "كلمة كلمة" -> "كلمة")
+        val consecutiveRepeatRegex = Regex("(\\S+(?:\\s+\\S+){0,2})\\s+\\1")
+        var prevSanitized = ""
+        while (prevSanitized != sanitized && consecutiveRepeatRegex.containsMatchIn(sanitized)) {
+            prevSanitized = sanitized
+            sanitized = sanitized.replace(consecutiveRepeatRegex, "$1")
+        }
+
         return sanitized.trim()
     }
 

@@ -92,6 +92,45 @@ class MainActivity : AppCompatActivity() {
         updateAudioModelStatus()
     }
 
+    private var pendingEnglishUri: Uri? = null
+    private var pendingEnglishFileName: String? = null
+
+    private val pairArabicFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { arUri ->
+        val enUri = pendingEnglishUri
+        val enName = pendingEnglishFileName
+        pendingEnglishUri = null
+        pendingEnglishFileName = null
+        if (arUri != null && enUri != null && enName != null) {
+            val arName = getFileNameFromUri(arUri)
+            lifecycleScope.launch {
+                Toast.makeText(this@MainActivity, "جاري دمج ملفات الباتش ($enName + $arName)...", Toast.LENGTH_SHORT).show()
+                val count = PatchManager.pairAndLoadDualFiles(this@MainActivity, enUri, arUri, enName, arName)
+                if (count > 0) {
+                    Toast.makeText(this@MainActivity, "تم دمج وتفعيل باتش اللعبة بنجاح ($count زوج مترجم)", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "تعذر دمج الملفين أو لا توجد نصوص متطابقة", Toast.LENGTH_LONG).show()
+                }
+            }
+        } else {
+            Toast.makeText(this, "تم إلغاء اختيار الملف العربي", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val pairEnglishFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { enUri ->
+        if (enUri != null) {
+            pendingEnglishUri = enUri
+            pendingEnglishFileName = getFileNameFromUri(enUri)
+            Toast.makeText(this, getString(R.string.patch_pick_arabic_prompt), Toast.LENGTH_LONG).show()
+            pairArabicFilePickerLauncher.launch(arrayOf("*/*"))
+        } else {
+            Toast.makeText(this, "تم إلغاء اختيار الملف الإنجليزي", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private val patchFilePickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -154,6 +193,7 @@ class MainActivity : AppCompatActivity() {
         observeModelStatus()
         observeModelDownloadState()
         observePatchStatus()
+        PatchManager.loadPersistedActivePatch(this)
     }
 
     override fun onResume() {
@@ -491,8 +531,13 @@ class MainActivity : AppCompatActivity() {
             patchFilePickerLauncher.launch(arrayOf("*/*"))
         }
 
+        binding.btnPairDualPatch.setOnClickListener {
+            Toast.makeText(this, getString(R.string.patch_pick_english_prompt), Toast.LENGTH_SHORT).show()
+            pairEnglishFilePickerLauncher.launch(arrayOf("*/*"))
+        }
+
         binding.btnClearPatch.setOnClickListener {
-            PatchManager.clearPatch()
+            PatchManager.clearPatch(this)
             Toast.makeText(this, "تم إلغاء الباتش والعودة للترجمة التلقائية", Toast.LENGTH_SHORT).show()
         }
 

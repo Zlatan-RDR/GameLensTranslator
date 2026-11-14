@@ -49,10 +49,15 @@ class GameAudioTranslator(
         private const val SAMPLE_RATE = 16000
         private const val READ_BUFFER_SIZE = 2048
         private const val MIN_ACTIVE_SPEECH_MS = 350L // 350ms speech duration before finalization
-        private const val SILENCE_PAUSE_FLUSH_MS = 250L // 250ms pause triggers finalization
+        private const val SILENCE_PAUSE_FLUSH_MS = 420L // 420ms pause triggers finalization
+        private const val EXTRA_DANGLING_PAUSE_MS = 350L // +350ms wait window if utterance ends with dangling word
         private const val MAX_MONOLOGUE_HARD_CAP_MS = 5500L // 5.5s hard cap for continuous monologues
         private const val PARTIAL_POLL_INTERVAL_MS = 250L // 250ms live streaming partial poll
         private const val PARTIAL_MIN_WORDS_DIFF = 3 // Translate partial text when >= 3 new words added
+
+        private val DANGLING_FUNCTION_WORDS = setOf(
+            "to", "the", "a", "an", "is", "are", "was", "were", "in", "on", "of", "and", "but", "that", "with", "for", "at", "by", "from"
+        )
 
         fun getAsrModelDir(context: Context): File {
             val dir = File(context.filesDir, "asr-model")
@@ -309,9 +314,11 @@ class GameAudioTranslator(
                                 }
 
                                 val isEndpoint = rec.isEndpoint(st)
+                                val extraDanglingWait = if (endsWithDanglingWord(lastRecognizedPhrase)) EXTRA_DANGLING_PAUSE_MS else 0L
+                                val requiredSilence = SILENCE_PAUSE_FLUSH_MS + extraDanglingWait
 
-                                // Trigger finalization when silenceDuration >= 250ms (after >= 350ms speech) OR isEndpoint
-                                if ((silenceDuration >= SILENCE_PAUSE_FLUSH_MS && speechDuration >= MIN_ACTIVE_SPEECH_MS) || isEndpoint) {
+                                // Trigger finalization when silenceDuration >= 420ms (+350ms if dangling word) OR isEndpoint
+                                if ((silenceDuration >= requiredSilence && speechDuration >= MIN_ACTIVE_SPEECH_MS) || isEndpoint) {
                                     if (speechDuration >= MIN_ACTIVE_SPEECH_MS && lastRecognizedPhrase.isNotBlank()) {
                                         flushAndTranslate(lastRecognizedPhrase, speechDuration)
                                     }
@@ -343,7 +350,7 @@ class GameAudioTranslator(
         val arabicText = if (patchMatch != null) {
             patchMatch.second
         } else {
-            val trans = translationManager.translate(normalizedEn)
+            val trans = translationManager.translate(normalizedEn, isFinal = false)
             translationManager.deduplicateRepetitions(trans)
         }
 
@@ -367,7 +374,7 @@ class GameAudioTranslator(
             DiagnosticLogger.log("ASR Patch Snap: \"$normalizedEn\" -> \"$correctedEn\" = \"$patchArabic\"")
             patchArabic
         } else {
-            val arabicTranslation = translationManager.translate(normalizedEn)
+            val arabicTranslation = translationManager.translate(normalizedEn, isFinal = true)
             translationManager.deduplicateRepetitions(arabicTranslation)
         }
 
@@ -377,6 +384,11 @@ class GameAudioTranslator(
             // Note: translationManager.translate already logs to Session Exporter.
             // Duplicate write avoided for patch matches and repeated calls.
         }
+    }
+
+    private fun endsWithDanglingWord(text: String): Boolean {
+        val lastWord = text.trim().lowercase().split(Regex("[^a-zA-Z]+")).lastOrNull { it.isNotBlank() } ?: return false
+        return DANGLING_FUNCTION_WORDS.contains(lastWord)
     }
 
     private fun normalizeAsrText(rawText: String): String {

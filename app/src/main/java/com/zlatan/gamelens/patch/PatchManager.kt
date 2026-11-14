@@ -1,5 +1,6 @@
 package com.zlatan.gamelens.patch
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
@@ -48,10 +49,19 @@ object PatchManager {
     private val _patchCountFlow = MutableStateFlow(0)
     val patchCountFlow: StateFlow<Int> = _patchCountFlow.asStateFlow()
 
-    // Session Logger: logs unique (English -> Arabic) pairs
+    private const val PERSISTED_PATCH_FILENAME = "active_patch.json"
+    private const val FLUSH_THROTTLE_MS = 2000L
+
+    // Session Logger: logs unique completed (English -> Arabic) pairs
     private val sessionPairs = ConcurrentHashMap<String, String>()
     private val sessionScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var sessionDateStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+
+    @Volatile
+    private var cachedSessionUri: Uri? = null
+    @Volatile
+    private var lastFlushTimeMs: Long = 0L
+    private var pendingFlushJob: kotlinx.coroutines.Job? = null
 
     fun normalizeText(text: String): String {
         return text.trim()
@@ -75,6 +85,7 @@ object PatchManager {
             if (count > 0) {
                 _activePatchNameFlow.value = fileName
                 _patchCountFlow.value = count
+                persistActivePatch(context, fileName)
                 DiagnosticLogger.log("PatchManager: Loaded '$fileName' ($count entries)")
                 Log.i(TAG, "Successfully loaded $count translation patch entries from $fileName")
             }
@@ -323,8 +334,11 @@ object PatchManager {
     /**
      * Automatically logs captured gameplay translations to export as a reusable patch.
      * Deduplicates in memory: skips disk and MediaStore writes if the exact (en -> ar) pair was already saved.
+     * Skips partial streaming chunks (only logs when isFinal == true).
      */
-    fun logSessionEntry(context: Context, english: String, arabic: String) {
+    fun logSessionEntry(context: Context, english: String, arabic: String, isFinal: Boolean = true) {
+        if (!isFinal) return // Skip partial streaming chunks completely
+
         val enTrimmed = english.trim()
         val arTrimmed = arabic.trim()
         if (enTrimmed.isBlank() || arTrimmed.isBlank()) return
@@ -336,7 +350,13 @@ object PatchManager {
         }
         sessionPairs[enTrimmed] = arTrimmed
 
-        // Debounced flush to storage
+        val now = System.currentTimeMillis()
+        if (now - lastFlushTimeMs < FLUSH_THROTTLE_MS) {
+            scheduleThrottledFlush(context)
+            return
+        }
+        lastFlushTimeMs = now
+
         sessionScope.launch {
             try {
                 flushSessionToDownloads(context)
@@ -346,8 +366,31 @@ object PatchManager {
         }
     }
 
-    fun logSessionPair(context: Context, english: String, arabic: String) {
-        logSessionEntry(context, english, arabic)
+    fun logSessionPair(context: Context, english: String, arabic: String, isFinal: Boolean = true) {
+        logSessionEntry(context, english, arabic, isFinal)
+    }
+
+    private fun scheduleThrottledFlush(context: Context) {
+        if (pendingFlushJob?.isActive == true) return
+        pendingFlushJob = sessionScope.launch {
+            kotlinx.coroutines.delay(FLUSH_THROTTLE_MS)
+            try {
+                flushSessionToDownloads(context)
+                lastFlushTimeMs = System.currentTimeMillis()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Session throttled export error: ${t.message}")
+            }
+        }
+    }
+
+    fun flushPendingSession(context: Context) {
+        sessionScope.launch {
+            try {
+                flushSessionToDownloads(context)
+            } catch (t: Throwable) {
+                Log.w(TAG, "Final flush error: ${t.message}")
+            }
+        }
     }
 
     private fun flushSessionToDownloads(context: Context) {
@@ -374,26 +417,42 @@ object PatchManager {
         }
 
         // 2. Export to public Downloads/GameLens_Sessions via MediaStore on Android 10+ (API 29+) / Android 16
+        // Caches a single sessionUri per service session to avoid hitting Android's 32-duplicate limit ("Failed to build unique file")
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val resolver = context.contentResolver
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/GameLens_Sessions")
-                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                var targetUri = cachedSessionUri
+
+                if (targetUri == null) {
+                    val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    val projection = arrayOf(MediaStore.MediaColumns._ID)
+                    val selection = "${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?"
+                    val selectionArgs = arrayOf(fileName, "%GameLens_Sessions%")
+
+                    resolver.query(collection, projection, selection, selectionArgs, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+                            targetUri = ContentUris.withAppendedId(collection, id)
+                            cachedSessionUri = targetUri
+                        }
+                    }
+
+                    if (targetUri == null) {
+                        val contentValues = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/GameLens_Sessions")
+                        }
+                        targetUri = resolver.insert(collection, contentValues)
+                        cachedSessionUri = targetUri
+                    }
                 }
 
-                val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                val itemUri = resolver.insert(collection, contentValues)
-                if (itemUri != null) {
-                    resolver.openOutputStream(itemUri, "wt")?.use { os ->
+                if (targetUri != null) {
+                    resolver.openOutputStream(targetUri!!, "wt")?.use { os ->
                         os.write(jsonBytes)
                     }
-                    contentValues.clear()
-                    contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                    resolver.update(itemUri, contentValues, null, null)
-                    DiagnosticLogger.log("PatchManager: Saved session via MediaStore ($fileName)")
+                    DiagnosticLogger.log("PatchManager: Overwrote session via MediaStore ($fileName)")
                 }
             } else {
                 val pubDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -413,12 +472,283 @@ object PatchManager {
         }
     }
 
-    fun clearPatch() {
+    /**
+     * Dual-File Patch Pairing for PC game localization dumps (English File + Arabic File).
+     * Supports .txt, .xml, .csv, .po, .ini, .json, .srt.
+     * Pairs lines by matching XML/INI/CSV/JSON keys when present, or 1-to-1 line/subtitle index when plain text/SRT.
+     * Persists the combined bilingual patch locally in filesDir/active_patch.json so it persists across restarts.
+     */
+    suspend fun pairAndLoadDualFiles(
+        context: Context,
+        enUri: Uri,
+        arUri: Uri,
+        enFileName: String,
+        arFileName: String
+    ): Int = withContext(Dispatchers.IO) {
+        try {
+            val enContent = context.contentResolver.openInputStream(enUri)?.use { stream ->
+                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).readText()
+            } ?: return@withContext 0
+
+            val arContent = context.contentResolver.openInputStream(arUri)?.use { stream ->
+                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).readText()
+            } ?: return@withContext 0
+
+            patchMap.clear()
+            synchronized(rawEntries) {
+                rawEntries.clear()
+            }
+
+            val enExt = enFileName.substringAfterLast('.', "").lowercase(Locale.US)
+            val arExt = arFileName.substringAfterLast('.', "").lowercase(Locale.US)
+
+            when {
+                enExt == "json" && arExt == "json" -> pairJsonFiles(enContent, arContent)
+                enExt == "srt" && arExt == "srt" -> pairSrtFiles(enContent, arContent)
+                enExt == "xml" && arExt == "xml" -> pairXmlFiles(enContent, arContent)
+                enExt == "ini" && arExt == "ini" -> pairIniFiles(enContent, arContent)
+                enExt == "po" || arExt == "po" -> pairPoFiles(enContent, arContent)
+                enExt == "csv" && arExt == "csv" -> pairCsvFiles(enContent, arContent)
+                else -> pairTextLines(enContent, arContent)
+            }
+
+            val count = patchMap.size
+            if (count > 0) {
+                val combinedName = "$enFileName + $arFileName"
+                _activePatchNameFlow.value = combinedName
+                _patchCountFlow.value = count
+                persistActivePatch(context, combinedName)
+                DiagnosticLogger.log("PatchManager: Dual-File Paired '$combinedName' ($count entries)")
+                Log.i(TAG, "Successfully paired $count entries from $combinedName")
+            }
+            count
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed pairing dual files ($enFileName + $arFileName): ${e.message}", e)
+            DiagnosticLogger.log("PatchManager Dual Pair Error: ${e.message}")
+            0
+        }
+    }
+
+    private fun pairJsonFiles(enContent: String, arContent: String) {
+        try {
+            val enTrimmed = enContent.trim()
+            val arTrimmed = arContent.trim()
+            if (enTrimmed.startsWith("{") && arTrimmed.startsWith("{")) {
+                val enObj = JSONObject(enTrimmed)
+                val arObj = JSONObject(arTrimmed)
+                val keys = enObj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val enVal = enObj.optString(k, "")
+                    val arVal = arObj.optString(k, "")
+                    if (enVal.isNotBlank() && arVal.isNotBlank()) {
+                        addEntry(enVal, arVal)
+                    }
+                }
+            } else {
+                pairTextLines(enContent, arContent)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "JSON dual pair fallback to lines: ${e.message}")
+            pairTextLines(enContent, arContent)
+        }
+    }
+
+    private fun pairXmlFiles(enContent: String, arContent: String) {
+        val regexTag = Regex("<(?:string|entry|item|text)[^>]+(?:name|key|id)=[\"']([^\"']+)[\"'][^>]*>(.*?)</(?:string|entry|item|text)>", RegexOption.DOT_MATCHES_ALL)
+        val enMap = mutableMapOf<String, String>()
+        val enList = mutableListOf<String>()
+        for (m in regexTag.findAll(enContent)) {
+            val k = m.groupValues[1].trim()
+            val v = m.groupValues[2].trim().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+            if (k.isNotBlank() && v.isNotBlank()) {
+                enMap[k] = v
+                enList.add(v)
+            }
+        }
+
+        val arMap = mutableMapOf<String, String>()
+        val arList = mutableListOf<String>()
+        for (m in regexTag.findAll(arContent)) {
+            val k = m.groupValues[1].trim()
+            val v = m.groupValues[2].trim().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+            if (k.isNotBlank() && v.isNotBlank()) {
+                arMap[k] = v
+                arList.add(v)
+            }
+        }
+
+        if (enMap.isNotEmpty() && arMap.isNotEmpty()) {
+            for ((k, enVal) in enMap) {
+                val arVal = arMap[k]
+                if (!arVal.isNullOrBlank()) {
+                    addEntry(enVal, arVal)
+                }
+            }
+        } else {
+            val minLen = minOf(enList.size, arList.size)
+            for (i in 0 until minLen) {
+                addEntry(enList[i], arList[i])
+            }
+        }
+    }
+
+    private fun pairIniFiles(enContent: String, arContent: String) {
+        val enMap = mutableMapOf<String, String>()
+        enContent.lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            if (trimmed.isNotBlank() && !trimmed.startsWith(";") && !trimmed.startsWith("#") && !trimmed.startsWith("[")) {
+                val parts = trimmed.split("=", limit = 2)
+                if (parts.size == 2) {
+                    enMap[parts[0].trim()] = parts[1].trim()
+                }
+            }
+        }
+
+        arContent.lineSequence().forEach { line ->
+            val trimmed = line.trim()
+            if (trimmed.isNotBlank() && !trimmed.startsWith(";") && !trimmed.startsWith("#") && !trimmed.startsWith("[")) {
+                val parts = trimmed.split("=", limit = 2)
+                if (parts.size == 2) {
+                    val k = parts[0].trim()
+                    val arVal = parts[1].trim()
+                    val enVal = enMap[k]
+                    if (!enVal.isNullOrBlank() && arVal.isNotBlank()) {
+                        addEntry(enVal, arVal)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun pairPoFiles(enContent: String, arContent: String) {
+        val regexMsg = Regex("msgid\\s+\"([^\"]+)\"\\s*\\n\\s*msgstr\\s+\"([^\"]+)\"")
+        val matches = regexMsg.findAll(arContent).toList()
+        if (matches.isNotEmpty()) {
+            for (m in matches) {
+                val en = m.groupValues[1].trim()
+                val ar = m.groupValues[2].trim()
+                if (en.isNotBlank() && ar.isNotBlank()) {
+                    addEntry(en, ar)
+                }
+            }
+        } else {
+            pairTextLines(enContent, arContent)
+        }
+    }
+
+    private fun pairCsvFiles(enContent: String, arContent: String) {
+        val enRows = enContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
+        val arRows = arContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
+        val minLen = minOf(enRows.size, arRows.size)
+        for (i in 0 until minLen) {
+            val enParts = enRows[i].split(Regex("[,;\\t]"), limit = 2)
+            val arParts = arRows[i].split(Regex("[,;\\t]"), limit = 2)
+            val en = (if (enParts.size >= 2) enParts[1] else enParts[0]).trim().removeSurrounding("\"")
+            val ar = (if (arParts.size >= 2) arParts[1] else arParts[0]).trim().removeSurrounding("\"")
+            if (en.isNotBlank() && ar.isNotBlank()) {
+                addEntry(en, ar)
+            }
+        }
+    }
+
+    private fun pairSrtFiles(enContent: String, arContent: String) {
+        val enBlocks = enContent.split(Regex("(\\r?\\n){2,}")).mapNotNull { extractSrtText(it) }
+        val arBlocks = arContent.split(Regex("(\\r?\\n){2,}")).mapNotNull { extractSrtText(it) }
+        val minLen = minOf(enBlocks.size, arBlocks.size)
+        for (i in 0 until minLen) {
+            val en = enBlocks[i]
+            val ar = arBlocks[i]
+            if (en.isNotBlank() && ar.isNotBlank()) {
+                addEntry(en, ar)
+            }
+        }
+    }
+
+    private fun extractSrtText(block: String): String? {
+        val textLines = block.lines().map { it.trim() }
+            .filterNot { it.isBlank() || it.matches(Regex("^\\d+$")) || it.contains("-->") }
+        return if (textLines.isNotEmpty()) textLines.joinToString(" ") else null
+    }
+
+    private fun pairTextLines(enContent: String, arContent: String) {
+        val enLines = enContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") }
+        val arLines = arContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") }
+        val minLen = minOf(enLines.size, arLines.size)
+        for (i in 0 until minLen) {
+            val en = enLines[i]
+            val ar = arLines[i]
+            if (en.isNotBlank() && ar.isNotBlank()) {
+                addEntry(en, ar)
+            }
+        }
+    }
+
+    private fun persistActivePatch(context: Context, patchName: String) {
+        try {
+            val file = File(context.filesDir, PERSISTED_PATCH_FILENAME)
+            val json = JSONObject()
+            json.put("__meta_patch_name__", patchName)
+            val entriesObj = JSONObject()
+            for ((k, v) in patchMap) {
+                entriesObj.put(k, v)
+            }
+            json.put("entries", entriesObj)
+            FileOutputStream(file).use { fos ->
+                fos.write(json.toString().toByteArray(Charsets.UTF_8))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed persisting active patch: ${e.message}")
+        }
+    }
+
+    fun loadPersistedActivePatch(context: Context): Int {
+        try {
+            val file = File(context.filesDir, PERSISTED_PATCH_FILENAME)
+            if (!file.exists()) return 0
+            val content = file.readText(Charsets.UTF_8)
+            val json = JSONObject(content)
+            val patchName = json.optString("__meta_patch_name__", "active_patch.json")
+            val entriesObj = json.optJSONObject("entries") ?: return 0
+
+            patchMap.clear()
+            synchronized(rawEntries) {
+                rawEntries.clear()
+            }
+
+            val keys = entriesObj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val v = entriesObj.optString(k, "")
+                if (k.isNotBlank() && v.isNotBlank()) {
+                    addEntry(k, v)
+                }
+            }
+
+            val count = patchMap.size
+            if (count > 0) {
+                _activePatchNameFlow.value = patchName
+                _patchCountFlow.value = count
+                DiagnosticLogger.log("PatchManager: Loaded persisted active patch '$patchName' ($count entries)")
+            }
+            return count
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed loading persisted active patch: ${e.message}")
+            return 0
+        }
+    }
+
+    fun clearPatch(context: Context? = null) {
         patchMap.clear()
         synchronized(rawEntries) {
             rawEntries.clear()
         }
         _activePatchNameFlow.value = null
         _patchCountFlow.value = 0
+        if (context != null) {
+            try {
+                File(context.filesDir, PERSISTED_PATCH_FILENAME).delete()
+            } catch (_: Exception) {}
+        }
     }
 }

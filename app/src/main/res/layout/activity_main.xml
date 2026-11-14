@@ -535,19 +535,34 @@
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnLoadGamePatch"
-                        android:layout_width="wrap_content"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
+                        android:layout_weight="1"
                         android:text="@string/btn_load_game_patch"
+                        android:textSize="11sp"
                         android:textColor="@color/background_dark"
                         app:backgroundTint="@color/accent"
+                        app:cornerRadius="8dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnPairDualPatch"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:layout_marginStart="6dp"
+                        android:text="@string/btn_pair_dual_patch"
+                        android:textSize="11sp"
+                        android:textColor="@color/background_dark"
+                        app:backgroundTint="#00E5FF"
                         app:cornerRadius="8dp" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnClearPatch"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginStart="6dp"
                         android:text="@string/btn_clear_patch"
+                        android:textSize="11sp"
                         android:textColor="@color/text_primary"
                         app:backgroundTint="#37474F"
                         app:cornerRadius="8dp"
