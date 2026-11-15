@@ -34,6 +34,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.zlatan.gamelens.MainActivity
+import com.zlatan.gamelens.ProjectionReacquireActivity
 import com.zlatan.gamelens.R
 import com.zlatan.gamelens.audio.GameAudioTranslator
 import com.zlatan.gamelens.capture.FrameDiffEngine
