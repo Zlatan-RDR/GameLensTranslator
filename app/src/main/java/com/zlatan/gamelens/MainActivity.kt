@@ -37,7 +37,9 @@ import com.zlatan.gamelens.translation.ModelStatus
 import com.zlatan.gamelens.translation.TranslationConfig
 import com.zlatan.gamelens.translation.TranslationManager
 import com.zlatan.gamelens.translation.TranslationMode
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
 
