@@ -92,28 +92,25 @@ class MainActivity : AppCompatActivity() {
         updateAudioModelStatus()
     }
 
-    private var pendingEnglishUri: Uri? = null
-    private var pendingEnglishFileName: String? = null
-
     private val pairArabicFilePickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { arUri ->
-        val enUri = pendingEnglishUri
-        val enName = pendingEnglishFileName
-        pendingEnglishUri = null
-        pendingEnglishFileName = null
-        if (arUri != null && enUri != null && enName != null) {
+        if (arUri != null && PatchManager.hasPendingEnglishFile()) {
+            val enName = PatchManager.cachedPendingEnglishFileName ?: "english_source"
             val arName = getFileNameFromUri(arUri)
             lifecycleScope.launch {
                 Toast.makeText(this@MainActivity, "جاري دمج ملفات الباتش ($enName + $arName)...", Toast.LENGTH_SHORT).show()
-                val count = PatchManager.pairAndLoadDualFiles(this@MainActivity, enUri, arUri, enName, arName)
+                val count = PatchManager.pairAndLoadWithCachedEnglish(this@MainActivity, arUri, arName)
                 if (count > 0) {
                     Toast.makeText(this@MainActivity, "تم دمج وتفعيل باتش اللعبة بنجاح ($count زوج مترجم)", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(this@MainActivity, "تعذر دمج الملفين أو لا توجد نصوص متطابقة", Toast.LENGTH_LONG).show()
+                    val err = PatchManager.lastPairingError
+                    val msg = if (!err.isNullOrBlank()) "فشل الدمج: $err" else "تعذر دمج الملفين أو لا توجد نصوص متطابقة"
+                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
                 }
             }
         } else {
+            PatchManager.clearPendingEnglishFile()
             Toast.makeText(this, "تم إلغاء اختيار الملف العربي", Toast.LENGTH_SHORT).show()
         }
     }
@@ -122,11 +119,26 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocument()
     ) { enUri ->
         if (enUri != null) {
-            pendingEnglishUri = enUri
-            pendingEnglishFileName = getFileNameFromUri(enUri)
-            Toast.makeText(this, getString(R.string.patch_pick_arabic_prompt), Toast.LENGTH_LONG).show()
-            pairArabicFilePickerLauncher.launch(arrayOf("*/*"))
+            val enName = getFileNameFromUri(enUri)
+            lifecycleScope.launch(Dispatchers.IO) {
+                val bytes = try {
+                    contentResolver.openInputStream(enUri)?.use { it.readBytes() }
+                } catch (_: Exception) { null }
+
+                if (bytes != null && bytes.isNotEmpty()) {
+                    PatchManager.setPendingEnglishFile(enName, bytes)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, getString(R.string.patch_pick_arabic_prompt), Toast.LENGTH_LONG).show()
+                        pairArabicFilePickerLauncher.launch(arrayOf("*/*"))
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "تعذر قراءة الملف الإنجليزي", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
         } else {
+            PatchManager.clearPendingEnglishFile()
             Toast.makeText(this, "تم إلغاء اختيار الملف الإنجليزي", Toast.LENGTH_SHORT).show()
         }
     }
@@ -393,13 +405,15 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 kotlinx.coroutines.flow.combine(
                     PatchManager.activePatchNameFlow,
-                    PatchManager.patchCountFlow
-                ) { name, count ->
-                    Pair(name, count)
-                }.collect { (name, count) ->
+                    PatchManager.patchCountFlow,
+                    PatchManager.patchDetailsFlow
+                ) { name, count, details ->
+                    Triple(name, count, details)
+                }.collect { (name, count, details) ->
                     if (name != null && count > 0) {
                         val formattedCount = java.text.NumberFormat.getNumberInstance(java.util.Locale.US).format(count)
-                        binding.tvActivePatchBadge.text = "Patch Active: $name ($formattedCount lines)"
+                        val detailSuffix = if (!details.isNullOrBlank()) " | $details" else ""
+                        binding.tvActivePatchBadge.text = "Patch Active: $name ($formattedCount lines$detailSuffix)"
                         binding.tvActivePatchBadge.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_active))
                         binding.btnClearPatch.visibility = View.VISIBLE
                     } else {

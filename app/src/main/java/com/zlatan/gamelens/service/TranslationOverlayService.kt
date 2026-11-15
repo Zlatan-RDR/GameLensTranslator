@@ -124,6 +124,7 @@ class TranslationOverlayService : Service() {
 
     private var seamlessOverlayRenderer: SeamlessOverlayRenderer? = null
     private var latestDetectedBlocks: List<OcrBlock> = emptyList()
+    private var consecutiveEmptyOcrPasses: Int = 0
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -462,10 +463,13 @@ class TranslationOverlayService : Service() {
             }
         }
 
-        // 6. Instant Disappearance: If no valid text blocks are detected in the active region, immediately clear within 150ms
+        // 6. Two Consecutive Empty Passes Guard: Require 2 empty passes (~240ms) before clearing overlay
         if (detectedBlocks.isEmpty()) {
-            latestDetectedBlocks = emptyList()
-            seamlessOverlayRenderer?.clear()
+            consecutiveEmptyOcrPasses++
+            if (consecutiveEmptyOcrPasses >= 2) {
+                latestDetectedBlocks = emptyList()
+                seamlessOverlayRenderer?.clear()
+            }
             return
         }
 
@@ -504,10 +508,16 @@ class TranslationOverlayService : Service() {
         latestDetectedBlocks = arabicBlocks
 
         if (arabicBlocks.isEmpty()) {
-            seamlessOverlayRenderer?.clear()
-            DiagnosticLogger.log("Rendered: 0 overlays (no valid Arabic text)")
+            consecutiveEmptyOcrPasses++
+            if (consecutiveEmptyOcrPasses >= 2) {
+                seamlessOverlayRenderer?.clear()
+                DiagnosticLogger.log("Rendered: 0 overlays (cleared after 2 empty passes)")
+            }
             return
         }
+
+        // Active valid Arabic blocks rendered -> reset empty passes counter
+        consecutiveEmptyOcrPasses = 0
 
         // 8. 100% Touch-Passthrough Seamless Overlay Rendering directly over original text bounding boxes
         // Passes valid Arabic blocks and dimensions for accurate coordinate scaling

@@ -23,6 +23,10 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,6 +53,32 @@ object PatchManager {
     private val _patchCountFlow = MutableStateFlow(0)
     val patchCountFlow: StateFlow<Int> = _patchCountFlow.asStateFlow()
 
+    private val _patchDetailsFlow = MutableStateFlow<String?>(null)
+    val patchDetailsFlow: StateFlow<String?> = _patchDetailsFlow.asStateFlow()
+
+    @Volatile
+    var cachedPendingEnglishBytes: ByteArray? = null
+    @Volatile
+    var cachedPendingEnglishFileName: String? = null
+    @Volatile
+    var lastPairingError: String? = null
+
+    fun setPendingEnglishFile(fileName: String, bytes: ByteArray) {
+        cachedPendingEnglishFileName = fileName
+        cachedPendingEnglishBytes = bytes
+        lastPairingError = null
+    }
+
+    fun clearPendingEnglishFile() {
+        cachedPendingEnglishFileName = null
+        cachedPendingEnglishBytes = null
+        lastPairingError = null
+    }
+
+    fun hasPendingEnglishFile(): Boolean {
+        return cachedPendingEnglishBytes != null && !cachedPendingEnglishFileName.isNullOrBlank()
+    }
+
     private const val PERSISTED_PATCH_FILENAME = "active_patch.json"
     private const val FLUSH_THROTTLE_MS = 2000L
 
@@ -63,11 +93,130 @@ object PatchManager {
     private var lastFlushTimeMs: Long = 0L
     private var pendingFlushJob: kotlinx.coroutines.Job? = null
 
+    fun stripGameMarkup(text: String): String {
+        return text
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("\\\\n", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("\\{[0-9]+\\}"), " ")
+            .replace(Regex("%[0-9]*[sdif]"), " ")
+            .replace(Regex("\\[COLOR=[^\\]]*\\]", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\[/COLOR\\]", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\^[0-9]"), "")
+            .replace(Regex("&[a-zA-Z]+;"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
+    fun cleanDisplayString(text: String): String {
+        return text
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("\\\\n", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("\\[COLOR=[^\\]]*\\]", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\[/COLOR\\]", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\^[0-9]"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
     fun normalizeText(text: String): String {
-        return text.trim()
+        val stripped = stripGameMarkup(text)
+        return stripped.trim()
             .lowercase(Locale.US)
             .replace(Regex("[^a-z0-9\\s]"), "")
             .replace(Regex("\\s+"), " ")
+    }
+
+    /**
+     * Automatic Charset Detection & Transparent UTF-8 Conversion pipeline:
+     * 1. BOM Detection: UTF-8-BOM (EF BB BF), UTF-16LE (FF FE), UTF-16BE (FE FF)
+     * 2. BOM-less UTF-16 Heuristic: Odd/Even zero-byte distribution in the first 4 KB
+     * 3. Strict UTF-8 Validation: Report malformed / unmappable inputs
+     * 4. Automatic Windows-1256 Fallback: Decode legacy Arabic PC localization dumps
+     * Normalizes all line endings (\r\n and \r -> \n) and strips stray control characters.
+     */
+    fun decodeBytesSmart(bytes: ByteArray, fileName: String = ""): Pair<String, String> {
+        if (bytes.isEmpty()) return Pair("", "UTF-8")
+
+        var rawDecoded: String
+        var charsetName: String
+
+        // 1. BOM Detection
+        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
+            charsetName = "UTF-8-BOM"
+            rawDecoded = String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        } else if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) {
+            charsetName = "UTF-16LE"
+            rawDecoded = String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+        } else if (bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()) {
+            charsetName = "UTF-16BE"
+            rawDecoded = String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+        } else {
+            // 2. BOM-less UTF-16 Heuristic
+            val checkLen = minOf(bytes.size, 4096)
+            var oddZeros = 0
+            var evenZeros = 0
+            val oddTotal = checkLen / 2
+            val evenTotal = (checkLen + 1) / 2
+
+            for (i in 0 until checkLen) {
+                if (bytes[i] == 0.toByte()) {
+                    if (i % 2 == 1) oddZeros++ else evenZeros++
+                }
+            }
+
+            val oddRatio = if (oddTotal > 0) oddZeros.toDouble() / oddTotal else 0.0
+            val evenRatio = if (evenTotal > 0) evenZeros.toDouble() / evenTotal else 0.0
+
+            if (oddRatio > 0.25 && evenRatio < 0.02) {
+                charsetName = "UTF-16LE"
+                rawDecoded = String(bytes, Charsets.UTF_16LE)
+            } else if (evenRatio > 0.25 && oddRatio < 0.02) {
+                charsetName = "UTF-16BE"
+                rawDecoded = String(bytes, Charsets.UTF_16BE)
+            } else {
+                // 3. Strict UTF-8 Validation
+                try {
+                    val decoder = Charsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    val charBuffer = decoder.decode(ByteBuffer.wrap(bytes))
+                    rawDecoded = charBuffer.toString()
+                    charsetName = "UTF-8"
+                } catch (_: CharacterCodingException) {
+                    // 4. Automatic Windows-1256 Fallback
+                    try {
+                        val win1256 = Charset.forName("Windows-1256")
+                        rawDecoded = String(bytes, win1256)
+                        charsetName = "Windows-1256"
+                    } catch (_: Throwable) {
+                        rawDecoded = String(bytes, Charsets.ISO_8859_1)
+                        charsetName = "ISO-8859-1"
+                    }
+                }
+            }
+        }
+
+        // Normalize all line endings (\r\n and \r -> \n)
+        var cleaned = rawDecoded.replace("\r\n", "\n").replace("\r", "\n")
+        // Strip stray control characters (keep \n and \t)
+        cleaned = cleaned.replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]"), "")
+
+        val logName = if (fileName.isNotBlank()) fileName else "file"
+        DiagnosticLogger.log("PatchManager: Decoded $logName as $charsetName -> UTF-8")
+
+        return Pair(cleaned, charsetName)
+    }
+
+    fun getSamplePreview(): String {
+        synchronized(rawEntries) {
+            val sample = rawEntries.firstOrNull { it.first.isNotBlank() && it.second.isNotBlank() }
+            if (sample != null) {
+                val en = if (sample.first.length > 18) sample.first.take(16) + ".." else sample.first
+                val ar = if (sample.second.length > 18) sample.second.take(16) + ".." else sample.second
+                return "\"$en\" -> \"$ar\""
+            }
+        }
+        return ""
     }
 
     /**
@@ -75,19 +224,22 @@ object PatchManager {
      */
     suspend fun loadPatchFromUri(context: Context, uri: Uri, fileName: String): Int = withContext(Dispatchers.IO) {
         try {
-            val stream = context.contentResolver.openInputStream(uri) ?: return@withContext 0
-            val reader = BufferedReader(InputStreamReader(stream, Charsets.UTF_8))
-            val content = reader.readText()
-            reader.close()
-            stream.close()
+            val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
+                stream.readBytes()
+            } ?: return@withContext 0
+
+            val (content, charsetName) = decodeBytesSmart(bytes, fileName)
 
             val count = parsePatchContent(content, fileName)
             if (count > 0) {
+                val sample = getSamplePreview()
+                val details = "$charsetName -> UTF-8" + if (sample.isNotBlank()) " | $sample" else ""
                 _activePatchNameFlow.value = fileName
                 _patchCountFlow.value = count
-                persistActivePatch(context, fileName)
-                DiagnosticLogger.log("PatchManager: Loaded '$fileName' ($count entries)")
-                Log.i(TAG, "Successfully loaded $count translation patch entries from $fileName")
+                _patchDetailsFlow.value = details
+                persistActivePatch(context, fileName, details)
+                DiagnosticLogger.log("PatchManager: Loaded '$fileName' ($count entries | $charsetName)")
+                Log.i(TAG, "Successfully loaded $count translation patch entries from $fileName ($charsetName)")
             }
             count
         } catch (e: Exception) {
@@ -212,10 +364,11 @@ object PatchManager {
 
     private fun addEntry(english: String, arabic: String) {
         val normalized = normalizeText(english)
-        if (normalized.isNotBlank()) {
-            patchMap[normalized] = arabic
+        val cleanedAr = cleanDisplayString(arabic)
+        if (normalized.isNotBlank() && cleanedAr.isNotBlank()) {
+            patchMap[normalized] = cleanedAr
             synchronized(rawEntries) {
-                rawEntries.add(Pair(english, arabic))
+                rawEntries.add(Pair(stripGameMarkup(english), cleanedAr))
             }
         }
     }
@@ -486,50 +639,106 @@ object PatchManager {
         arFileName: String
     ): Int = withContext(Dispatchers.IO) {
         try {
-            val enContent = context.contentResolver.openInputStream(enUri)?.use { stream ->
-                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).readText()
-            } ?: return@withContext 0
+            val enBytes = context.contentResolver.openInputStream(enUri)?.use { it.readBytes() }
+                ?: return@withContext 0
+            val arBytes = context.contentResolver.openInputStream(arUri)?.use { it.readBytes() }
+                ?: return@withContext 0
 
-            val arContent = context.contentResolver.openInputStream(arUri)?.use { stream ->
-                BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).readText()
-            } ?: return@withContext 0
-
-            patchMap.clear()
-            synchronized(rawEntries) {
-                rawEntries.clear()
-            }
-
-            val enExt = enFileName.substringAfterLast('.', "").lowercase(Locale.US)
-            val arExt = arFileName.substringAfterLast('.', "").lowercase(Locale.US)
-
-            when {
-                enExt == "json" && arExt == "json" -> pairJsonFiles(enContent, arContent)
-                enExt == "srt" && arExt == "srt" -> pairSrtFiles(enContent, arContent)
-                enExt == "xml" && arExt == "xml" -> pairXmlFiles(enContent, arContent)
-                enExt == "ini" && arExt == "ini" -> pairIniFiles(enContent, arContent)
-                enExt == "po" || arExt == "po" -> pairPoFiles(enContent, arContent)
-                enExt == "csv" && arExt == "csv" -> pairCsvFiles(enContent, arContent)
-                else -> pairTextLines(enContent, arContent)
-            }
-
-            val count = patchMap.size
-            if (count > 0) {
-                val combinedName = "$enFileName + $arFileName"
-                _activePatchNameFlow.value = combinedName
-                _patchCountFlow.value = count
-                persistActivePatch(context, combinedName)
-                DiagnosticLogger.log("PatchManager: Dual-File Paired '$combinedName' ($count entries)")
-                Log.i(TAG, "Successfully paired $count entries from $combinedName")
-            }
-            count
+            executeDualPairing(context, enBytes, arBytes, enFileName, arFileName)
         } catch (e: Exception) {
             Log.e(TAG, "Failed pairing dual files ($enFileName + $arFileName): ${e.message}", e)
+            lastPairingError = e.message
             DiagnosticLogger.log("PatchManager Dual Pair Error: ${e.message}")
             0
         }
     }
 
-    private fun pairJsonFiles(enContent: String, arContent: String) {
+    suspend fun pairAndLoadWithCachedEnglish(
+        context: Context,
+        arUri: Uri,
+        arFileName: String
+    ): Int = withContext(Dispatchers.IO) {
+        val enBytes = cachedPendingEnglishBytes
+        val enFileName = cachedPendingEnglishFileName ?: "english_source"
+        if (enBytes == null || enBytes.isEmpty()) {
+            lastPairingError = "الملف الإنجليزي غير متوفر في الذاكرة"
+            return@withContext 0
+        }
+
+        try {
+            val arBytes = context.contentResolver.openInputStream(arUri)?.use { it.readBytes() }
+            if (arBytes == null || arBytes.isEmpty()) {
+                lastPairingError = "تعذر قراءة الملف العربي"
+                return@withContext 0
+            }
+
+            val count = executeDualPairing(context, enBytes, arBytes, enFileName, arFileName)
+            clearPendingEnglishFile()
+            count
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed pairing with cached English: ${e.message}", e)
+            lastPairingError = e.message ?: "خطأ أثناء دمج الملفات"
+            clearPendingEnglishFile()
+            0
+        }
+    }
+
+    suspend fun executeDualPairing(
+        context: Context,
+        enBytes: ByteArray,
+        arBytes: ByteArray,
+        enFileName: String,
+        arFileName: String
+    ): Int = withContext(Dispatchers.IO) {
+        lastPairingError = null
+        val (enContent, enCharset) = decodeBytesSmart(enBytes, enFileName)
+        val (arContent, arCharset) = decodeBytesSmart(arBytes, arFileName)
+
+        patchMap.clear()
+        synchronized(rawEntries) {
+            rawEntries.clear()
+        }
+
+        val enExt = enFileName.substringAfterLast('.', "").lowercase(Locale.US)
+        val arExt = arFileName.substringAfterLast('.', "").lowercase(Locale.US)
+
+        val pairResult = when {
+            enExt == "json" && arExt == "json" -> pairJsonFiles(enContent, arContent)
+            enExt == "srt" && arExt == "srt" -> pairSrtFiles(enContent, arContent)
+            enExt == "xml" && arExt == "xml" -> pairXmlFiles(enContent, arContent)
+            enExt == "ini" && arExt == "ini" -> pairIniFiles(enContent, arContent)
+            enExt == "po" || arExt == "po" -> pairPoFiles(enContent, arContent)
+            enExt == "csv" && arExt == "csv" -> pairCsvFiles(enContent, arContent)
+            else -> pairTextLines(enContent, arContent)
+        }
+
+        if (pairResult < 0) {
+            // Abort pairing on parity guard failure
+            patchMap.clear()
+            synchronized(rawEntries) { rawEntries.clear() }
+            return@withContext 0
+        }
+
+        val count = patchMap.size
+        if (count > 0) {
+            val combinedName = "$enFileName + $arFileName"
+            val sample = getSamplePreview()
+            val charsetInfo = "$arCharset -> UTF-8"
+            val details = charsetInfo + if (sample.isNotBlank()) " | $sample" else ""
+
+            _activePatchNameFlow.value = combinedName
+            _patchCountFlow.value = count
+            _patchDetailsFlow.value = details
+            persistActivePatch(context, combinedName, details)
+            DiagnosticLogger.log("PatchManager: Dual-File Paired '$combinedName' ($count entries | $charsetInfo)")
+            Log.i(TAG, "Successfully paired $count entries from $combinedName ($charsetInfo)")
+        } else if (lastPairingError == null) {
+            lastPairingError = "لم يتم العثور على أسطر متطابقة بين الملفين"
+        }
+        count
+    }
+
+    private fun pairJsonFiles(enContent: String, arContent: String): Int {
         try {
             val enTrimmed = enContent.trim()
             val arTrimmed = arContent.trim()
@@ -537,24 +746,27 @@ object PatchManager {
                 val enObj = JSONObject(enTrimmed)
                 val arObj = JSONObject(arTrimmed)
                 val keys = enObj.keys()
+                var matched = 0
                 while (keys.hasNext()) {
                     val k = keys.next()
                     val enVal = enObj.optString(k, "")
                     val arVal = arObj.optString(k, "")
                     if (enVal.isNotBlank() && arVal.isNotBlank()) {
                         addEntry(enVal, arVal)
+                        matched++
                     }
                 }
+                return matched
             } else {
-                pairTextLines(enContent, arContent)
+                return pairTextLines(enContent, arContent)
             }
         } catch (e: Exception) {
             Log.w(TAG, "JSON dual pair fallback to lines: ${e.message}")
-            pairTextLines(enContent, arContent)
+            return pairTextLines(enContent, arContent)
         }
     }
 
-    private fun pairXmlFiles(enContent: String, arContent: String) {
+    private fun pairXmlFiles(enContent: String, arContent: String): Int {
         val regexTag = Regex("<(?:string|entry|item|text)[^>]+(?:name|key|id)=[\"']([^\"']+)[\"'][^>]*>(.*?)</(?:string|entry|item|text)>", RegexOption.DOT_MATCHES_ALL)
         val enMap = mutableMapOf<String, String>()
         val enList = mutableListOf<String>()
@@ -579,90 +791,189 @@ object PatchManager {
         }
 
         if (enMap.isNotEmpty() && arMap.isNotEmpty()) {
+            var matchedByKey = 0
             for ((k, enVal) in enMap) {
                 val arVal = arMap[k]
                 if (!arVal.isNullOrBlank()) {
                     addEntry(enVal, arVal)
+                    matchedByKey++
                 }
             }
-        } else {
-            val minLen = minOf(enList.size, arList.size)
-            for (i in 0 until minLen) {
-                addEntry(enList[i], arList[i])
-            }
+            if (matchedByKey > 0) return matchedByKey
         }
+
+        return pairLineLists(enList, arList)
     }
 
-    private fun pairIniFiles(enContent: String, arContent: String) {
+    private fun pairIniFiles(enContent: String, arContent: String): Int {
         val enMap = mutableMapOf<String, String>()
+        val enList = mutableListOf<String>()
         enContent.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (trimmed.isNotBlank() && !trimmed.startsWith(";") && !trimmed.startsWith("#") && !trimmed.startsWith("[")) {
                 val parts = trimmed.split("=", limit = 2)
                 if (parts.size == 2) {
-                    enMap[parts[0].trim()] = parts[1].trim()
+                    val k = parts[0].trim()
+                    val v = parts[1].trim()
+                    enMap[k] = v
+                    enList.add(v)
                 }
             }
         }
 
+        val arMap = mutableMapOf<String, String>()
+        val arList = mutableListOf<String>()
         arContent.lineSequence().forEach { line ->
             val trimmed = line.trim()
             if (trimmed.isNotBlank() && !trimmed.startsWith(";") && !trimmed.startsWith("#") && !trimmed.startsWith("[")) {
                 val parts = trimmed.split("=", limit = 2)
                 if (parts.size == 2) {
                     val k = parts[0].trim()
-                    val arVal = parts[1].trim()
-                    val enVal = enMap[k]
-                    if (!enVal.isNullOrBlank() && arVal.isNotBlank()) {
-                        addEntry(enVal, arVal)
-                    }
+                    val v = parts[1].trim()
+                    arMap[k] = v
+                    arList.add(v)
                 }
             }
         }
+
+        if (enMap.isNotEmpty() && arMap.isNotEmpty()) {
+            var matchedByKey = 0
+            for ((k, enVal) in enMap) {
+                val arVal = arMap[k]
+                if (!arVal.isNullOrBlank()) {
+                    addEntry(enVal, arVal)
+                    matchedByKey++
+                }
+            }
+            if (matchedByKey > 0) return matchedByKey
+        }
+
+        return pairLineLists(enList, arList)
     }
 
-    private fun pairPoFiles(enContent: String, arContent: String) {
+    private fun pairPoFiles(enContent: String, arContent: String): Int {
         val regexMsg = Regex("msgid\\s+\"([^\"]+)\"\\s*\\n\\s*msgstr\\s+\"([^\"]+)\"")
-        val matches = regexMsg.findAll(arContent).toList()
-        if (matches.isNotEmpty()) {
-            for (m in matches) {
-                val en = m.groupValues[1].trim()
-                val ar = m.groupValues[2].trim()
-                if (en.isNotBlank() && ar.isNotBlank()) {
-                    addEntry(en, ar)
-                }
-            }
-        } else {
-            pairTextLines(enContent, arContent)
-        }
-    }
-
-    private fun pairCsvFiles(enContent: String, arContent: String) {
-        val enRows = enContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
-        val arRows = arContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
-        val minLen = minOf(enRows.size, arRows.size)
-        for (i in 0 until minLen) {
-            val enParts = enRows[i].split(Regex("[,;\\t]"), limit = 2)
-            val arParts = arRows[i].split(Regex("[,;\\t]"), limit = 2)
-            val en = (if (enParts.size >= 2) enParts[1] else enParts[0]).trim().removeSurrounding("\"")
-            val ar = (if (arParts.size >= 2) arParts[1] else arParts[0]).trim().removeSurrounding("\"")
+        val arMatches = regexMsg.findAll(arContent).toList()
+        var directPairs = 0
+        for (m in arMatches) {
+            val en = m.groupValues[1].trim()
+            val ar = m.groupValues[2].trim()
             if (en.isNotBlank() && ar.isNotBlank()) {
                 addEntry(en, ar)
+                directPairs++
             }
         }
+        if (directPairs > 0) return directPairs
+
+        val enMatches = regexMsg.findAll(enContent).toList()
+        if (enMatches.isNotEmpty() && arMatches.isNotEmpty()) {
+            val arMap = mutableMapOf<String, String>()
+            for (m in arMatches) {
+                arMap[m.groupValues[1].trim()] = m.groupValues[2].trim()
+            }
+            var count = 0
+            for (m in enMatches) {
+                val enKey = m.groupValues[1].trim()
+                val arVal = arMap[enKey]
+                if (!arVal.isNullOrBlank()) {
+                    addEntry(enKey, arVal)
+                    count++
+                }
+            }
+            if (count > 0) return count
+        }
+
+        return pairTextLines(enContent, arContent)
     }
 
-    private fun pairSrtFiles(enContent: String, arContent: String) {
+    private fun pairCsvFiles(enContent: String, arContent: String): Int {
+        val enRows = enContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") }
+        val arRows = arContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") }
+
+        val enMap = mutableMapOf<String, String>()
+        val arMap = mutableMapOf<String, String>()
+        val enList = mutableListOf<String>()
+        val arList = mutableListOf<String>()
+
+        for (row in enRows) {
+            val parts = row.split(Regex("[,;\\t]"), limit = 2)
+            if (parts.size == 2) {
+                val key = parts[0].trim().removeSurrounding("\"").removeSurrounding("'")
+                val text = parts[1].trim().removeSurrounding("\"").removeSurrounding("'")
+                if (key.isNotBlank() && text.isNotBlank()) {
+                    enMap[key] = text
+                    enList.add(text)
+                }
+            } else if (parts.size == 1 && parts[0].isNotBlank()) {
+                enList.add(parts[0].trim().removeSurrounding("\"").removeSurrounding("'"))
+            }
+        }
+
+        for (row in arRows) {
+            val parts = row.split(Regex("[,;\\t]"), limit = 2)
+            if (parts.size == 2) {
+                val key = parts[0].trim().removeSurrounding("\"").removeSurrounding("'")
+                val text = parts[1].trim().removeSurrounding("\"").removeSurrounding("'")
+                if (key.isNotBlank() && text.isNotBlank()) {
+                    arMap[key] = text
+                    arList.add(text)
+                }
+            } else if (parts.size == 1 && parts[0].isNotBlank()) {
+                arList.add(parts[0].trim().removeSurrounding("\"").removeSurrounding("'"))
+            }
+        }
+
+        if (enMap.isNotEmpty() && arMap.isNotEmpty()) {
+            var matchedKeys = 0
+            for ((k, enVal) in enMap) {
+                val arVal = arMap[k]
+                if (!arVal.isNullOrBlank()) {
+                    addEntry(enVal, arVal)
+                    matchedKeys++
+                }
+            }
+            if (matchedKeys > 0) return matchedKeys
+        }
+
+        return pairLineLists(enList, arList)
+    }
+
+    private fun pairSrtFiles(enContent: String, arContent: String): Int {
+        val enCues = parseSrtCues(enContent)
+        val arCues = parseSrtCues(arContent)
+
+        if (enCues.isNotEmpty() && arCues.isNotEmpty()) {
+            var matchedByIndex = 0
+            for ((idx, enText) in enCues) {
+                val arText = arCues[idx]
+                if (!arText.isNullOrBlank()) {
+                    addEntry(enText, arText)
+                    matchedByIndex++
+                }
+            }
+            if (matchedByIndex > 0) return matchedByIndex
+        }
+
         val enBlocks = enContent.split(Regex("(\\r?\\n){2,}")).mapNotNull { extractSrtText(it) }
         val arBlocks = arContent.split(Regex("(\\r?\\n){2,}")).mapNotNull { extractSrtText(it) }
-        val minLen = minOf(enBlocks.size, arBlocks.size)
-        for (i in 0 until minLen) {
-            val en = enBlocks[i]
-            val ar = arBlocks[i]
-            if (en.isNotBlank() && ar.isNotBlank()) {
-                addEntry(en, ar)
+        return pairLineLists(enBlocks, arBlocks)
+    }
+
+    private fun parseSrtCues(content: String): Map<Int, String> {
+        val cues = mutableMapOf<Int, String>()
+        val blocks = content.split(Regex("(\\r?\\n){2,}"))
+        for (block in blocks) {
+            val lines = block.lines().map { it.trim() }.filter { it.isNotBlank() }
+            if (lines.size >= 2) {
+                val idx = lines[0].toIntOrNull()
+                val textLines = lines.drop(if (idx != null) 1 else 0)
+                    .filterNot { it.contains("-->") }
+                if (idx != null && textLines.isNotEmpty()) {
+                    cues[idx] = textLines.joinToString(" ")
+                }
             }
         }
+        return cues
     }
 
     private fun extractSrtText(block: String): String? {
@@ -671,9 +982,18 @@ object PatchManager {
         return if (textLines.isNotEmpty()) textLines.joinToString(" ") else null
     }
 
-    private fun pairTextLines(enContent: String, arContent: String) {
-        val enLines = enContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") }
-        val arLines = arContent.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") }
+    private fun pairLineLists(enLines: List<String>, arLines: List<String>): Int {
+        val diff = kotlin.math.abs(enLines.size - arLines.size)
+        if (diff > 2) {
+            val msg = "Line count mismatch: EN=${enLines.size} vs AR=${arLines.size}"
+            lastPairingError = msg
+            DiagnosticLogger.log("PatchManager Error: $msg")
+            Log.e(TAG, msg)
+            return -1
+        } else if (diff in 1..2) {
+            DiagnosticLogger.log("PatchManager Warning: Small line count diff ($diff): EN=${enLines.size} vs AR=${arLines.size}")
+        }
+
         val minLen = minOf(enLines.size, arLines.size)
         for (i in 0 until minLen) {
             val en = enLines[i]
@@ -682,13 +1002,27 @@ object PatchManager {
                 addEntry(en, ar)
             }
         }
+        return patchMap.size
     }
 
-    private fun persistActivePatch(context: Context, patchName: String) {
+    private fun pairTextLines(enContent: String, arContent: String): Int {
+        val enLines = enContent.lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") && !it.startsWith(";") }
+        val arLines = arContent.lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.startsWith("#") && !it.startsWith("//") && !it.startsWith(";") }
+        return pairLineLists(enLines, arLines)
+    }
+
+    private fun persistActivePatch(context: Context, patchName: String, details: String = "") {
         try {
             val file = File(context.filesDir, PERSISTED_PATCH_FILENAME)
             val json = JSONObject()
             json.put("__meta_patch_name__", patchName)
+            if (details.isNotBlank()) {
+                json.put("__meta_patch_details__", details)
+            }
             val entriesObj = JSONObject()
             for ((k, v) in patchMap) {
                 entriesObj.put(k, v)
@@ -709,6 +1043,7 @@ object PatchManager {
             val content = file.readText(Charsets.UTF_8)
             val json = JSONObject(content)
             val patchName = json.optString("__meta_patch_name__", "active_patch.json")
+            val details = json.optString("__meta_patch_details__", "")
             val entriesObj = json.optJSONObject("entries") ?: return 0
 
             patchMap.clear()
@@ -729,6 +1064,9 @@ object PatchManager {
             if (count > 0) {
                 _activePatchNameFlow.value = patchName
                 _patchCountFlow.value = count
+                val sample = getSamplePreview()
+                val finalDetails = if (details.isNotBlank()) details else if (sample.isNotBlank()) sample else ""
+                _patchDetailsFlow.value = finalDetails
                 DiagnosticLogger.log("PatchManager: Loaded persisted active patch '$patchName' ($count entries)")
             }
             return count
@@ -745,6 +1083,8 @@ object PatchManager {
         }
         _activePatchNameFlow.value = null
         _patchCountFlow.value = 0
+        _patchDetailsFlow.value = null
+        clearPendingEnglishFile()
         if (context != null) {
             try {
                 File(context.filesDir, PERSISTED_PATCH_FILENAME).delete()
