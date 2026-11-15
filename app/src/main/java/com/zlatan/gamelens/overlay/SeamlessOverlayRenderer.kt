@@ -14,6 +14,7 @@ import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
@@ -170,49 +171,101 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val scaleX = if (bitmapW > 0 && screenW > 0) screenW.toFloat() / bitmapW.toFloat() else 1.0f
             val scaleY = if (bitmapH > 0 && screenH > 0) screenH.toFloat() / bitmapH.toFloat() else 1.0f
 
-            for (block in blocks) {
-                val arabicText = block.translatedText ?: continue
-                if (arabicText.isBlank()) continue
+            val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+            val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
 
-                val box = block.boundingBox
-                if (box.width() <= 5 || box.height() <= 5) continue
-
-                val scaledLeft = (box.left * scaleX).toInt()
-                val scaledTop = (box.top * scaleY).toInt()
-                val scaledW = (box.width() * scaleX).toInt()
-                val scaledH = (box.height() * scaleY).toInt()
-
-                val padX = (6 * context.resources.displayMetrics.density).toInt()
-                val padY = (6 * context.resources.displayMetrics.density).toInt()
-                val targetW = scaledW + padX * 2
-                val minBoxH = (24 * context.resources.displayMetrics.density).toInt()
-                val targetH = (scaledH + padY * 2).coerceAtLeast(minBoxH)
-                val targetLeft = (scaledLeft - padX).coerceAtLeast(0)
-                val targetTop = (scaledTop - padY).coerceAtLeast(0)
-                val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
-
-                val colorScheme = block.colorScheme ?: FALLBACK_SCHEME
-
-                val overlayView = ArabicOverlayView(context, renderBox).apply {
-                    bindTranslation(arabicText, colorScheme)
+            if (isOpaqueCover) {
+                // Dynamic Multi-Line Union Bounding Box for Opaque Cover Mode:
+                // Encompass all detected subtitle lines in active region (Line 1 + Line 2 + Line 3)
+                val validBlocks = blocks.filter {
+                    val txt = it.translatedText
+                    !txt.isNullOrBlank() && it.boundingBox.width() > 5 && it.boundingBox.height() > 5
                 }
 
-                val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-                val isOffsetAbove = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OFFSET_ABOVE
-                val finalTop = if (isOffsetAbove) {
-                    (targetTop - targetH - (4 * context.resources.displayMetrics.density).toInt()).coerceAtLeast(0)
-                } else {
-                    targetTop
-                }
+                if (validBlocks.isNotEmpty()) {
+                    val unionRect = Rect()
+                    var initialized = false
+                    val combinedLines = mutableListOf<String>()
 
-                // Explicit Gravity.TOP or Gravity.LEFT guarantees exact absolute X/Y positioning in RTL
-                val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
-                    gravity = Gravity.TOP or Gravity.LEFT
-                    leftMargin = targetLeft
-                    topMargin = finalTop
-                }
+                    for (block in validBlocks) {
+                        val box = block.boundingBox
+                        val scaledLeft = (box.left * scaleX).toInt()
+                        val scaledTop = (box.top * scaleY).toInt()
+                        val scaledRight = (box.right * scaleX).toInt()
+                        val scaledBottom = (box.bottom * scaleY).toInt()
 
-                container.addView(overlayView, layoutParams)
+                        if (!initialized) {
+                            unionRect.set(scaledLeft, scaledTop, scaledRight, scaledBottom)
+                            initialized = true
+                        } else {
+                            unionRect.union(scaledLeft, scaledTop, scaledRight, scaledBottom)
+                        }
+                        combinedLines.add(block.translatedText!!)
+                    }
+
+                    // Expand union Rect with 10dp horizontal and vertical padding
+                    val pad10dp = (10 * context.resources.displayMetrics.density).toInt()
+                    val targetLeft = (unionRect.left - pad10dp).coerceAtLeast(0)
+                    val targetTop = (unionRect.top - pad10dp).coerceAtLeast(0)
+                    val targetRight = (unionRect.right + pad10dp).coerceAtMost(if (screenW > 0) screenW else Int.MAX_VALUE)
+                    val targetBottom = (unionRect.bottom + pad10dp).coerceAtMost(if (screenH > 0) screenH else Int.MAX_VALUE)
+                    val targetW = targetRight - targetLeft
+                    val minBoxH = (28 * context.resources.displayMetrics.density).toInt()
+                    val targetH = (targetBottom - targetTop).coerceAtLeast(minBoxH)
+                    val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
+
+                    val combinedArabicText = combinedLines.joinToString("\n")
+                    val overlayView = ArabicOverlayView(context, renderBox).apply {
+                        bindTranslation(combinedArabicText, null)
+                    }
+
+                    val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
+                        gravity = Gravity.TOP or Gravity.LEFT
+                        leftMargin = targetLeft
+                        topMargin = targetTop
+                    }
+
+                    container.addView(overlayView, layoutParams)
+                }
+            } else {
+                for (block in blocks) {
+                    val arabicText = block.translatedText ?: continue
+                    if (arabicText.isBlank()) continue
+
+                    val box = block.boundingBox
+                    if (box.width() <= 5 || box.height() <= 5) continue
+
+                    val scaledLeft = (box.left * scaleX).toInt()
+                    val scaledTop = (box.top * scaleY).toInt()
+                    val scaledW = (box.width() * scaleX).toInt()
+                    val scaledH = (box.height() * scaleY).toInt()
+
+                    val padX = (6 * context.resources.displayMetrics.density).toInt()
+                    val padY = (6 * context.resources.displayMetrics.density).toInt()
+                    val targetW = scaledW + padX * 2
+                    val minBoxH = (24 * context.resources.displayMetrics.density).toInt()
+                    val targetH = (scaledH + padY * 2).coerceAtLeast(minBoxH)
+                    val targetLeft = (scaledLeft - padX).coerceAtLeast(0)
+                    val targetTop = (scaledTop - padY).coerceAtLeast(0)
+                    val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
+
+                    val colorScheme = block.colorScheme ?: FALLBACK_SCHEME
+
+                    val overlayView = ArabicOverlayView(context, renderBox).apply {
+                        bindTranslation(arabicText, colorScheme)
+                    }
+
+                    val finalTop = (targetTop - targetH - (4 * context.resources.displayMetrics.density).toInt()).coerceAtLeast(0)
+
+                    // Explicit Gravity.TOP or Gravity.LEFT guarantees exact absolute X/Y positioning in RTL
+                    val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
+                        gravity = Gravity.TOP or Gravity.LEFT
+                        leftMargin = targetLeft
+                        topMargin = finalTop
+                    }
+
+                    container.addView(overlayView, layoutParams)
+                }
             }
             _hasPinnedCards = blocks.isNotEmpty()
         }
@@ -271,13 +324,14 @@ class SeamlessOverlayRenderer(private val context: Context) {
                     cornerRadius = 6f * density
                 }
                 sub.background = bg
-                sub.setPadding((12 * density).toInt(), (6 * density).toInt(), (12 * density).toInt(), (6 * density).toInt())
+                sub.setPadding((12 * density).toInt(), (10 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
 
-                val layoutParams = FrameLayout.LayoutParams(zoneW, zoneH).apply {
+                val layoutParams = FrameLayout.LayoutParams(zoneW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     gravity = Gravity.TOP or Gravity.START
                     leftMargin = zoneLeft
                     topMargin = zoneTop
                 }
+                sub.minimumHeight = zoneH
                 sub.layoutParams = layoutParams
             } else {
                 // Offset Above Mode: position the Arabic subtitle bar cleanly above the calibrated bottom subtitle zone with zero overlap
@@ -323,10 +377,20 @@ class SeamlessOverlayRenderer(private val context: Context) {
      * Controls visibility of the overlay layer.
      * Used right before frame capture to enforce the Anti-Feedback Loop.
      */
+    fun setInvisibleForCapture() {
+        this.isVisible = false
+        overlayContainer?.visibility = View.INVISIBLE
+    }
+
+    fun restoreVisibilityAfterCapture() {
+        this.isVisible = true
+        overlayContainer?.visibility = View.VISIBLE
+    }
+
     fun setVisibility(visible: Boolean) {
         this.isVisible = visible
         mainHandler.post {
-            overlayContainer?.visibility = if (visible) View.VISIBLE else View.GONE
+            overlayContainer?.visibility = if (visible) View.VISIBLE else View.INVISIBLE
         }
     }
 

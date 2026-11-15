@@ -41,8 +41,12 @@ class GameAudioTranslator(
     private val context: Context,
     private val mediaProjection: MediaProjection,
     private val translationManager: TranslationManager,
-    private val onSubtitleReady: (String) -> Unit
+    private val onSubtitleReady: (String) -> Unit,
+    private val onStateChanged: (() -> Unit)? = null
 ) {
+
+    val isCapturing: Boolean
+        get() = isRunning && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING
 
     companion object {
         private const val TAG = "GameAudioTranslator"
@@ -205,6 +209,7 @@ class GameAudioTranslator(
                 }
 
                 record.startRecording()
+                onStateChanged?.invoke()
                 DiagnosticLogger.log("GameAudio: Playback capture active (16kHz PCM)")
                 Log.i(TAG, "AudioRecord started recording game playback audio")
 
@@ -339,6 +344,9 @@ class GameAudioTranslator(
             } catch (t: Throwable) {
                 Log.e(TAG, "Error in GameAudio capture loop: ${t.message}", t)
                 DiagnosticLogger.log("GameAudio Error: ${t.message}")
+            } finally {
+                isRunning = false
+                onStateChanged?.invoke()
             }
         }
     }
@@ -430,5 +438,6 @@ class GameAudioTranslator(
 
         audioScope.cancel()
         DiagnosticLogger.log("GameAudio: Stopped and released")
+        onStateChanged?.invoke()
     }
 }

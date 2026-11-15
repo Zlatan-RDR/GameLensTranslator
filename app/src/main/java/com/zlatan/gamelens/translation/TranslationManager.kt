@@ -168,8 +168,8 @@ class TranslationManager(
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return@withContext ""
 
-        // 0. Unified 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86)
-        val patchMatch = com.zlatan.gamelens.patch.PatchManager.findOcrMatch(trimmed)
+        // 0. Mandatory 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86)
+        val patchMatch = com.zlatan.gamelens.patch.PatchManager.lookup(trimmed)
         if (patchMatch != null) {
             return@withContext patchMatch
         }

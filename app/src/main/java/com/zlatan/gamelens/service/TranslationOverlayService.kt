@@ -77,7 +77,7 @@ class TranslationOverlayService : Service() {
         private const val CLICK_DRAG_TOLERANCE = 15f
         private const val LONG_PRESS_TIMEOUT_MS = 750L
         private const val FRAME_INTERVAL_MS = 120L // 120ms for fast subtitle responsiveness
-        private const val ANTI_FEEDBACK_VSYNC_DELAY_MS = 20L
+        private const val ANTI_FEEDBACK_VSYNC_DELAY_MS = 35L
         private val ARABIC_REGEX = Regex("[\\u0600-\\u06FF]")
     }
 
@@ -438,6 +438,19 @@ class TranslationOverlayService : Service() {
         }
     }
 
+    private suspend fun captureFrameForOcr(): Bitmap? {
+        val captureMgr = screenCaptureManager ?: return null
+        withContext(Dispatchers.Main) {
+            seamlessOverlayRenderer?.setInvisibleForCapture()
+        }
+        delay(ANTI_FEEDBACK_VSYNC_DELAY_MS)
+        val bitmap = captureMgr.acquireLatestBitmap()
+        withContext(Dispatchers.Main) {
+            seamlessOverlayRenderer?.restoreVisibilityAfterCapture()
+        }
+        return bitmap
+    }
+
     private suspend fun processFramePipeline() {
         // When Audio Mode is active, NEVER run continuous background OCR to prevent texture clutter
         if (isAudioModeActive || !isAutoTranslationActive) {
@@ -454,15 +467,8 @@ class TranslationOverlayService : Service() {
             clampBubbleWithinScreen(screenW, screenH)
         }
 
-        // 1. Anti-Feedback Loop: hide translation overlay container right before frame capture
-        seamlessOverlayRenderer?.setVisibility(false)
-        delay(ANTI_FEEDBACK_VSYNC_DELAY_MS)
-
-        // 2. Acquire raw full-screen game frame
-        val fullBitmap: Bitmap? = captureMgr.acquireLatestBitmap()
-
-        // 3. Restore translation overlay visibility immediately after frame acquisition
-        seamlessOverlayRenderer?.setVisibility(true)
+        // 1-3. Anti-Feedback Loop: hide overlays synchronously, wait 35ms for SurfaceFlinger, capture clean frame, restore visibility
+        val fullBitmap: Bitmap? = captureFrameForOcr()
 
         if (fullBitmap == null) return
 
@@ -735,6 +741,11 @@ class TranslationOverlayService : Service() {
                 mainHandler.post {
                     seamlessOverlayRenderer?.renderSubtitle(subtitle)
                 }
+            },
+            onStateChanged = {
+                mainHandler.post {
+                    updateBubbleVisualState()
+                }
             }
         ).also {
             it.start()
@@ -780,16 +791,8 @@ class TranslationOverlayService : Service() {
                     return@launch
                 }
 
-                // 1. Temporarily hide active overlays to eliminate self-reading bug
-                seamlessOverlayRenderer?.setVisibility(false)
-                // 2. Wait 40ms for the display compositor / SurfaceFlinger to refresh clean game frame
-                delay(40L)
-
-                // 3. Acquire clean raw bitmap
-                val fullBitmap = captureMgr.acquireLatestBitmap()
-
-                // 4. Restore visibility
-                seamlessOverlayRenderer?.setVisibility(true)
+                // Clean frame capture: hide overlay synchronously, wait 35ms, acquire clean frame, restore visibility
+                val fullBitmap = captureFrameForOcr()
 
                 if (fullBitmap == null) {
                     showToast("تعذر التقاط إطار الشاشة، يرجى المحاولة ثانية")
@@ -890,6 +893,7 @@ class TranslationOverlayService : Service() {
         mainHandler.post {
             val density = resources.displayMetrics.density
             val hasPinned = seamlessOverlayRenderer?.hasPinnedMenuCards() == true
+            val isAudioCapturing = isAudioModeActive && (gameAudioTranslator?.isCapturing == true)
 
             val backgroundDrawable = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -899,25 +903,25 @@ class TranslationOverlayService : Service() {
                         setColor(Color.parseColor("#FFB300"))
                         setStroke((2.5f * density).toInt(), Color.WHITE)
                     }
-                    isAudioModeActive -> {
-                        // Cyan when Audio Mode is active
-                        setColor(Color.parseColor("#00838F"))
-                        setStroke((2.5f * density).toInt(), Color.parseColor("#00E5FF"))
+                    isAudioCapturing -> {
+                        // Cyan (#00BCD4) ONLY when GameAudioTranslator is actively capturing and streaming PCM audio
+                        setColor(Color.parseColor("#00BCD4"))
+                        setStroke((2.5f * density).toInt(), Color.parseColor("#E0F7FA"))
                     }
-                    hasPinned -> {
-                        // Green when Menu Overlays are pinned
-                        setColor(Color.parseColor("#00C853"))
-                        setStroke((2 * density).toInt(), Color.parseColor("#FFFFFF"))
+                    isAutoTranslationActive || hasPinned -> {
+                        // Green (#10B981) when periodic or pinned Visual OCR mode is active
+                        setColor(Color.parseColor("#10B981"))
+                        setStroke((2 * density).toInt(), Color.WHITE)
                     }
                     else -> {
-                        // Slate when standby
-                        setColor(Color.parseColor("#263238"))
-                        setStroke((2 * density).toInt(), Color.parseColor("#90A4AE"))
+                        // Slate (#475569) when both Audio and Visual OCR are paused/standby
+                        setColor(Color.parseColor("#475569"))
+                        setStroke((1.5f * density).toInt(), Color.parseColor("#94A3B8"))
                     }
                 }
             }
             bubbleView?.background = backgroundDrawable
-            bubbleView?.alpha = if (isAudioModeActive || hasPinned) 1.0f else 0.85f
+            bubbleView?.alpha = if (isAudioCapturing || hasPinned || isAutoTranslationActive) 1.0f else 0.85f
             ivBubbleIcon?.setColorFilter(Color.WHITE)
         }
     }

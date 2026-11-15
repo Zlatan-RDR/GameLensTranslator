@@ -388,6 +388,15 @@ object PatchManager {
     }
 
     /**
+     * Mandatory 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86).
+     * Routes all OCR and Voice ASR text lookups through the loaded game localization patch.
+     */
+    fun lookup(englishText: String): String? {
+        if (patchMap.isEmpty()) return null
+        return findOcrMatch(englishText)
+    }
+
+    /**
      * Instant 0ms exact or fuzzy OCR match (>= 0.86 similarity).
      * Returns matching human-grade Arabic translation if found.
      */
@@ -1056,6 +1065,10 @@ object PatchManager {
         }
     }
 
+    fun init(context: Context): Int {
+        return loadPersistedActivePatch(context)
+    }
+
     fun loadPersistedActivePatch(context: Context): Int {
         try {
             val file = File(context.filesDir, PERSISTED_PATCH_FILENAME)
@@ -1065,6 +1078,26 @@ object PatchManager {
             val patchName = json.optString("__meta_patch_name__", "active_patch.json")
             val details = json.optString("__meta_patch_details__", "")
             val entriesObj = json.optJSONObject("entries") ?: return 0
+
+            // Validate entries: if any key contains unparsed JSON artifacts (": or \"), automatically purge corrupt cached file
+            val checkKeys = entriesObj.keys()
+            var isCorrupt = false
+            while (checkKeys.hasNext()) {
+                val k = checkKeys.next()
+                if (k.contains("\":") || k.contains("\\\"") || k.contains("\"")) {
+                    isCorrupt = true
+                    break
+                }
+            }
+
+            if (isCorrupt) {
+                val warnMsg = "PatchManager.init: Found unparsed JSON quote artifacts in active_patch.json. Purging corrupt cache."
+                Log.w(TAG, warnMsg)
+                DiagnosticLogger.log(warnMsg)
+                file.delete()
+                clearPatch(context)
+                return 0
+            }
 
             patchMap.clear()
             synchronized(rawEntries) {

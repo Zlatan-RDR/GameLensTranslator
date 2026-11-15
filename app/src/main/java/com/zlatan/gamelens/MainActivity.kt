@@ -207,7 +207,7 @@ class MainActivity : AppCompatActivity() {
         observeModelStatus()
         observeModelDownloadState()
         observePatchStatus()
-        PatchManager.loadPersistedActivePatch(this)
+        PatchManager.init(this)
     }
 
     override fun onResume() {
