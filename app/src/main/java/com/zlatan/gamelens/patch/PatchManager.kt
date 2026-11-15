@@ -198,6 +198,10 @@ object PatchManager {
 
         // Normalize all line endings (\r\n and \r -> \n)
         var cleaned = rawDecoded.replace("\r\n", "\n").replace("\r", "\n")
+        // Replace non-breaking spaces (\u00A0) with standard space
+        cleaned = cleaned.replace('\u00A0', ' ')
+        // Strip zero-width characters (\u200B, \u200C, \u200D, \uFEFF)
+        cleaned = cleaned.replace(Regex("[\\u200B\\u200C\\u200D\\uFEFF]"), "")
         // Strip stray control characters (keep \n and \t)
         cleaned = cleaned.replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]"), "")
 
@@ -244,6 +248,7 @@ object PatchManager {
             count
         } catch (e: Exception) {
             Log.e(TAG, "Failed loading patch from $fileName: ${e.message}", e)
+            lastPairingError = "تعذر قراءة ملف الباتش: ${e.message}"
             DiagnosticLogger.log("PatchManager Error: ${e.message}")
             0
         }
@@ -255,9 +260,10 @@ object PatchManager {
             rawEntries.clear()
         }
 
+        val trimmed = content.trim()
         val lowerName = fileName.lowercase(Locale.US)
         when {
-            lowerName.endsWith(".json") -> parseJson(content)
+            lowerName.endsWith(".json") || trimmed.startsWith("{") || trimmed.startsWith("[") -> parseJson(content)
             lowerName.endsWith(".srt") -> parseSrt(content)
             lowerName.endsWith(".csv") -> parseCsv(content)
             else -> parseDelimitedText(content)
@@ -284,8 +290,8 @@ object PatchManager {
     }
 
     private fun parseJson(content: String) {
+        val trimmed = content.trim()
         try {
-            val trimmed = content.trim()
             if (trimmed.startsWith("{")) {
                 val jsonObject = JSONObject(trimmed)
                 val keys = jsonObject.keys()
@@ -310,10 +316,18 @@ object PatchManager {
                         addEntry(en, ar)
                     }
                 }
+            } else {
+                val err = "محتوى JSON غير صالح: يجب أن يبدأ بـ { أو ["
+                lastPairingError = err
+                DiagnosticLogger.log("PatchManager JSON Error: $err")
+                Log.e(TAG, err)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "JSON parse fallback to text: ${e.message}")
-            parseDelimitedText(content)
+            val err = "خطأ في صيغة JSON: ${e.message}"
+            lastPairingError = err
+            Log.e(TAG, "JSON parse failed: ${e.message}", e)
+            DiagnosticLogger.log("PatchManager JSON Error: ${e.message}")
+            // Strictly DO NOT fall back to CSV/delimited text!
         }
     }
 
@@ -758,11 +772,17 @@ object PatchManager {
                 }
                 return matched
             } else {
-                return pairTextLines(enContent, arContent)
+                val err = "ملفات JSON يجب أن تبدأ بـ {"
+                lastPairingError = err
+                Log.w(TAG, err)
+                return -1
             }
         } catch (e: Exception) {
-            Log.w(TAG, "JSON dual pair fallback to lines: ${e.message}")
-            return pairTextLines(enContent, arContent)
+            val err = "خطأ في قراءة ملفات JSON: ${e.message}"
+            lastPairingError = err
+            Log.e(TAG, err, e)
+            DiagnosticLogger.log("PatchManager JSON Error: ${e.message}")
+            return -1
         }
     }
 

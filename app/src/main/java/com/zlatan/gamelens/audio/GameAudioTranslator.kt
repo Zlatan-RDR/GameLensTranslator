@@ -279,11 +279,12 @@ class GameAudioTranslator(
 
                             val phraseDuration = now - speechStartTimeMs
                             val isEndpoint = rec.isEndpoint(st)
-                            val isMonologueHardCap = phraseDuration >= MAX_MONOLOGUE_HARD_CAP_MS && lastRecognizedPhrase.isNotBlank()
+                            val isMonologueHardCap = phraseDuration >= MAX_MONOLOGUE_HARD_CAP_MS && (lastRecognizedPhrase.isNotBlank() || rec.getResult(st).text.isNotBlank())
 
                             if (isEndpoint || isMonologueHardCap) {
-                                if (phraseDuration >= MIN_ACTIVE_SPEECH_MS && lastRecognizedPhrase.isNotBlank()) {
-                                    flushAndTranslate(lastRecognizedPhrase, phraseDuration)
+                                val latestText = rec.getResult(st).text.trim().ifBlank { lastRecognizedPhrase }
+                                if (phraseDuration >= MIN_ACTIVE_SPEECH_MS && latestText.isNotBlank()) {
+                                    flushAndTranslate(latestText, phraseDuration)
                                 }
                                 rec.reset(st)
                                 lastRecognizedPhrase = ""
@@ -319,8 +320,9 @@ class GameAudioTranslator(
 
                                 // Trigger finalization when silenceDuration >= 420ms (+350ms if dangling word) OR isEndpoint
                                 if ((silenceDuration >= requiredSilence && speechDuration >= MIN_ACTIVE_SPEECH_MS) || isEndpoint) {
-                                    if (speechDuration >= MIN_ACTIVE_SPEECH_MS && lastRecognizedPhrase.isNotBlank()) {
-                                        flushAndTranslate(lastRecognizedPhrase, speechDuration)
+                                    val latestText = rec.getResult(st).text.trim().ifBlank { lastRecognizedPhrase }
+                                    if (speechDuration >= MIN_ACTIVE_SPEECH_MS && latestText.isNotBlank()) {
+                                        flushAndTranslate(latestText, speechDuration)
                                     }
                                     rec.reset(st)
                                     lastRecognizedPhrase = ""

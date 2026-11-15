@@ -66,8 +66,10 @@ class TranslationOverlayService : Service() {
         const val ACTION_START = "com.zlatan.gamelens.ACTION_START"
         const val ACTION_STOP = "com.zlatan.gamelens.ACTION_STOP"
         const val ACTION_CALIBRATE = "com.zlatan.gamelens.ACTION_CALIBRATE"
+        const val ACTION_UPDATE_PROJECTION = "com.zlatan.gamelens.ACTION_UPDATE_PROJECTION"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
+        const val EXTRA_AUTO_START_AUDIO = "extra_auto_start_audio"
 
         private const val NOTIFICATION_CHANNEL_ID = "gamelens_translation_channel"
         private const val NOTIFICATION_ID = 1001
@@ -112,6 +114,24 @@ class TranslationOverlayService : Service() {
 
     private var mediaProjection: MediaProjection? = null
     private var mediaProjectionManager: MediaProjectionManager? = null
+    @Volatile
+    private var isProjectionValid = false
+
+    private val projectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            Log.w(TAG, "MediaProjection stopped by system callback")
+            DiagnosticLogger.log("MediaProjection stopped by system callback")
+            isProjectionValid = false
+            mediaProjection = null
+            gameAudioTranslator?.stop()
+            gameAudioTranslator = null
+            screenCaptureManager?.release()
+            screenCaptureManager = null
+            mainHandler.post {
+                updateBubbleVisualState()
+            }
+        }
+    }
 
     private var screenCaptureManager: ScreenCaptureManager? = null
     private var gameAudioTranslator: GameAudioTranslator? = null
@@ -273,6 +293,24 @@ class TranslationOverlayService : Service() {
             ACTION_CALIBRATE -> {
                 startVisualCalibration()
             }
+            ACTION_UPDATE_PROJECTION -> {
+                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+                val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(EXTRA_RESULT_DATA)
+                }
+                val autoStartAudio = intent.getBooleanExtra(EXTRA_AUTO_START_AUDIO, false)
+                if (resultCode != 0 && resultData != null) {
+                    initMediaProjectionAndCapture(resultCode, resultData)
+                    if (autoStartAudio) {
+                        startAudioTranslation()
+                    }
+                } else {
+                    DiagnosticLogger.log("ACTION_UPDATE_PROJECTION: invalid result code or data")
+                }
+            }
         }
         return START_NOT_STICKY
     }
@@ -330,13 +368,25 @@ class TranslationOverlayService : Service() {
 
     private fun initMediaProjectionAndCapture(resultCode: Int, resultData: Intent) {
         try {
+            // Clean up stale projection if any
+            try {
+                mediaProjection?.unregisterCallback(projectionCallback)
+            } catch (_: Exception) {}
+            mediaProjection?.stop()
+            mediaProjection = null
+            screenCaptureManager?.release()
+            screenCaptureManager = null
+
             val proj = mediaProjectionManager?.getMediaProjection(resultCode, resultData)
             if (proj == null) {
                 Log.e(TAG, "Unable to obtain MediaProjection from token")
                 showToast("فشل استخراج MediaProjection من النظام")
+                isProjectionValid = false
                 return
             }
             mediaProjection = proj
+            isProjectionValid = true
+            proj.registerCallback(projectionCallback, mainHandler)
 
             val (realW, realH, realDpi) = getRealScreenDimensions()
             screenCaptureManager = ScreenCaptureManager(
@@ -354,28 +404,17 @@ class TranslationOverlayService : Service() {
             val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             val isAudioEnabled = prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, false)
             if (isAudioEnabled && GameAudioTranslator.isAsrModelInstalled(this)) {
-                isAudioModeActive = true
-                gameAudioTranslator?.stop()
-                gameAudioTranslator = GameAudioTranslator(
-                    context = this,
-                    mediaProjection = proj,
-                    translationManager = translationManager,
-                    onSubtitleReady = { subtitle ->
-                        mainHandler.post {
-                            seamlessOverlayRenderer?.renderSubtitle(subtitle)
-                        }
-                    }
-                ).also {
-                    it.start()
-                }
+                startAudioTranslation()
             } else {
                 isAudioModeActive = false
             }
             updateBubbleVisualState()
         } catch (e: SecurityException) {
+            isProjectionValid = false
             Log.e(TAG, "SecurityException acquiring MediaProjection: ${e.message}", e)
             showToast("خطأ أمني في إذن التقاط الشاشة: ${e.message}")
         } catch (e: Exception) {
+            isProjectionValid = false
             Log.e(TAG, "Exception acquiring MediaProjection: ${e.message}", e)
             showToast("تعذر بدء التقاط الشاشة: ${e.message}")
         }
@@ -656,50 +695,82 @@ class TranslationOverlayService : Service() {
         toggleAudioMode()
     }
 
+    private fun requestProjectionReacquisition(autoStartAudio: Boolean) {
+        try {
+            DiagnosticLogger.log("Requesting MediaProjection reacquisition (autoStartAudio=$autoStartAudio)")
+            val intent = Intent(this, ProjectionReacquireActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(EXTRA_AUTO_START_AUDIO, autoStartAudio)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch ProjectionReacquireActivity: ${e.message}", e)
+            showToast("تعذر فتح نافذة تجديد إذن التقاط الشاشة")
+        }
+    }
+
+    private fun startAudioTranslation() {
+        if (!GameAudioTranslator.isAsrModelInstalled(this)) {
+            showToast("يلزم تنزيل وتثبيت نموذج الصوت أولاً من التطبيق (~122 MB)")
+            return
+        }
+
+        val proj = mediaProjection
+        if (proj == null || !isProjectionValid) {
+            requestProjectionReacquisition(autoStartAudio = true)
+            return
+        }
+
+        isAudioModeActive = true
+        // Clear any pinned menu cards when activating audio subtitle mode
+        seamlessOverlayRenderer?.clearMenuCards()
+
+        gameAudioTranslator?.stop()
+        gameAudioTranslator = GameAudioTranslator(
+            context = this,
+            mediaProjection = proj,
+            translationManager = translationManager,
+            onSubtitleReady = { subtitle ->
+                mainHandler.post {
+                    seamlessOverlayRenderer?.renderSubtitle(subtitle)
+                }
+            }
+        ).also {
+            it.start()
+        }
+
+        showToast("تم تفعيل ترجمة صوت اللعبة المباشرة (الشريط السينمائي)")
+        updateBubbleVisualState()
+    }
+
+    private fun stopAudioTranslation() {
+        isAudioModeActive = false
+        gameAudioTranslator?.stop()
+        gameAudioTranslator = null
+        seamlessOverlayRenderer?.renderSubtitle("")
+        showToast("تم إيقاف ترجمة صوت اللعبة (وضع الاستعداد)")
+        updateBubbleVisualState()
+    }
+
     private fun toggleAudioMode() {
         if (isAudioModeActive) {
-            isAudioModeActive = false
-            gameAudioTranslator?.stop()
-            gameAudioTranslator = null
-            seamlessOverlayRenderer?.renderSubtitle("")
-            showToast("تم إيقاف ترجمة صوت اللعبة (وضع الاستعداد)")
-            updateBubbleVisualState()
+            stopAudioTranslation()
         } else {
-            if (!GameAudioTranslator.isAsrModelInstalled(this)) {
-                showToast("يلزم تنزيل وتثبيت نموذج الصوت أولاً من التطبيق (~122 MB)")
+            if (mediaProjection == null || !isProjectionValid) {
+                DiagnosticLogger.log("toggleAudioMode: Projection invalid, requesting re-acquisition")
+                requestProjectionReacquisition(autoStartAudio = true)
                 return
             }
-
-            val proj = mediaProjection
-            if (proj == null) {
-                showToast("إذن التقاط الشاشة/الصوت غير متاح")
-                return
-            }
-
-            isAudioModeActive = true
-            // Clear any pinned menu cards when activating audio subtitle mode
-            seamlessOverlayRenderer?.clearMenuCards()
-
-            gameAudioTranslator?.stop()
-            gameAudioTranslator = GameAudioTranslator(
-                context = this,
-                mediaProjection = proj,
-                translationManager = translationManager,
-                onSubtitleReady = { subtitle ->
-                    mainHandler.post {
-                        seamlessOverlayRenderer?.renderSubtitle(subtitle)
-                    }
-                }
-            ).also {
-                it.start()
-            }
-
-            showToast("تم تفعيل ترجمة صوت اللعبة المباشرة (الشريط السينمائي)")
-            updateBubbleVisualState()
+            startAudioTranslation()
         }
     }
 
     private fun triggerZeroSelfReadMenuScan() {
+        if (mediaProjection == null || !isProjectionValid) {
+            showToast("إذن التقاط الشاشة غير نشط، جاري التجديد...")
+            requestProjectionReacquisition(autoStartAudio = false)
+            return
+        }
         showToast("جاري مسح وترجمة القوائم (Zero Self-Read)...")
         serviceScope.launch {
             try {
@@ -898,7 +969,11 @@ class TranslationOverlayService : Service() {
             bubbleView = null
         }
 
+        try {
+            mediaProjection?.unregisterCallback(projectionCallback)
+        } catch (_: Exception) {}
         mediaProjection?.stop()
         mediaProjection = null
+        isProjectionValid = false
     }
 }

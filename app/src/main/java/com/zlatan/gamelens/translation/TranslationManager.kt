@@ -206,8 +206,9 @@ class TranslationManager(
         // 5. Post-process with glossary term replacements
         val glossaryReplaced = glossaryManager.applyTermReplacements(translated)
 
-        // 6. Strip ML Kit neural repetition loops
-        val finalResult = deduplicateRepetitions(glossaryReplaced)
+        // 6. Strip ML Kit neural repetition loops & repair glued words
+        val deduplicated = deduplicateRepetitions(glossaryReplaced)
+        val finalResult = repairGluedArabicWords(deduplicated)
 
         // 7. Save to Cache for subsequent 0ms hits
         cacheManager.put(trimmed, finalResult)
@@ -271,6 +272,28 @@ class TranslationManager(
             prevSanitized = sanitized
             sanitized = sanitized.replace(consecutiveRepeatRegex, "$1")
         }
+
+        return sanitized.trim()
+    }
+
+    /**
+     * Unicode-safe spacing sanitizer that repairs glued Arabic words produced by ML Kit neural boundaries.
+     * Inserts spaces between non-connecting terminal letters and demonstrative/article prefixes,
+     * and handles known frequent ML Kit contraction bugs (e.g. هذهي -> هذه هي, التيجب -> التي يجب).
+     */
+    fun repairGluedArabicWords(arabicText: String): String {
+        if (arabicText.isBlank()) return ""
+        var sanitized = arabicText
+
+        // 1. High-frequency specific ML Kit glued words
+        sanitized = sanitized.replace(Regex("\\bهذهي\\b"), "هذه هي")
+        sanitized = sanitized.replace(Regex("\\bالتيجب\\b"), "التي يجب")
+        sanitized = sanitized.replace(Regex("\\bهذال(\\S+)"), "هذا ال$1")
+        sanitized = sanitized.replace(Regex("\\bديانال(\\S+)"), "ديانا ال$1")
+
+        // 2. Insert space between non-connecting terminal letters and demonstrative/article prefixes
+        val gluedPattern = Regex("([\\u0627\\u0649\\u0629\\u0647\\u062F\\u0630\\u0631\\u0632\\u0648])(?=\\u0627\\u0644[\\u0600-\\u06FF]|\\u0647\\u0630|\\u0627\\u0644\\u062A\\u064A|\\u0627\\u0644\\u0630\\u064A|\\u0623\\u0646)")
+        sanitized = sanitized.replace(gluedPattern, "$1 ")
 
         return sanitized.trim()
     }
