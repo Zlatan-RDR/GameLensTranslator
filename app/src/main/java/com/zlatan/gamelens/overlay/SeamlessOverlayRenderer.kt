@@ -203,13 +203,13 @@ class SeamlessOverlayRenderer(private val context: Context) {
                         combinedLines.add(block.translatedText!!)
                     }
 
-                    // Expand union Rect with 10dp horizontal and vertical padding
+                    // Dynamic Multi-Line Union Bounding Box for Opaque Cover Mode:
+                    // Spanning the union rect padded to width = 88% of screen width, centered horizontally
                     val pad10dp = (10 * context.resources.displayMetrics.density).toInt()
-                    val targetLeft = (unionRect.left - pad10dp).coerceAtLeast(0)
+                    val targetW = if (screenW > 0) (0.88f * screenW).toInt() else (unionRect.width() + pad10dp * 2)
+                    val targetLeft = if (screenW > 0) ((screenW - targetW) / 2).coerceAtLeast(0) else (unionRect.left - pad10dp).coerceAtLeast(0)
                     val targetTop = (unionRect.top - pad10dp).coerceAtLeast(0)
-                    val targetRight = (unionRect.right + pad10dp).coerceAtMost(if (screenW > 0) screenW else Int.MAX_VALUE)
                     val targetBottom = (unionRect.bottom + pad10dp).coerceAtMost(if (screenH > 0) screenH else Int.MAX_VALUE)
-                    val targetW = targetRight - targetLeft
                     val minBoxH = (28 * context.resources.displayMetrics.density).toInt()
                     val targetH = (targetBottom - targetTop).coerceAtLeast(minBoxH)
                     val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)

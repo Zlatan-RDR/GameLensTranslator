@@ -466,6 +466,12 @@ class TranslationOverlayService : Service() {
     }
 
     private suspend fun processFramePipeline(isOpaqueCover: Boolean) {
+        // When MainActivity is in foreground, auto-pause OCR and clear overlays to prevent self-reading
+        if (com.zlatan.gamelens.MainActivity.isAppInForeground) {
+            seamlessOverlayRenderer?.clearAllOverlays()
+            return
+        }
+
         // When Audio Mode is active, NEVER run continuous background OCR to prevent texture clutter
         if (isAudioModeActive || !isAutoTranslationActive) {
             return
@@ -544,9 +550,9 @@ class TranslationOverlayService : Service() {
             }
         }
 
-        // 6. Extract all valid lines, filter out HUD prompts, sort top-to-bottom
+        // 6. Extract all valid lines, filter out HUD prompts and all-caps textures, sort top-to-bottom
         val allLines = detectedBlocks.flatMap { it.lines }
-            .filter { !ocrEngine.isNoiseOrSymbol(it.text) && !ocrEngine.isHudPrompt(it.text) }
+            .filter { !ocrEngine.isNoiseOrSymbol(it.text) && !ocrEngine.isHudPrompt(it.text) && !ocrEngine.isAllCapsNonDialogue(it.text) }
             .sortedBy { it.boundingBox.top }
 
         if (allLines.isEmpty()) {
@@ -823,7 +829,7 @@ class TranslationOverlayService : Service() {
         isAudioModeActive = false
         gameAudioTranslator?.stop()
         gameAudioTranslator = null
-        seamlessOverlayRenderer?.renderSubtitle("")
+        seamlessOverlayRenderer?.clearAllOverlays()
         showToast("تم إيقاف ترجمة صوت اللعبة (وضع الاستعداد)")
         updateBubbleVisualState()
     }

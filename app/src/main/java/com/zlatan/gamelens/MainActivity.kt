@@ -55,6 +55,9 @@ class MainActivity : AppCompatActivity() {
 
         const val MODE_OFFLINE = "mode_offline"
         const val MODE_CLOUD = "mode_cloud"
+
+        @Volatile
+        var isAppInForeground: Boolean = false
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -212,10 +215,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isAppInForeground = true
         updatePermissionStates()
         refreshDiagnosticLogs()
         translationManager.checkModelState()
         updateAudioModelStatus()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isAppInForeground = false
     }
 
     override fun onDestroy() {

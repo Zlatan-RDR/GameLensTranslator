@@ -11,6 +11,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.zlatan.gamelens.patch.PatchManager
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
@@ -80,6 +81,14 @@ class OcrEngine {
         return STANDALONE_NUMBER_OR_SYMBOL_REGEX.matches(text)
     }
 
+    fun isAllCapsNonDialogue(text: String): Boolean {
+        val trimmed = text.trim()
+        val isAllCaps = trimmed.length >= 4 && trimmed == trimmed.uppercase(java.util.Locale.US) && trimmed.any { it.isLetter() }
+        if (!isAllCaps) return false
+        // Allow intentional uppercase game terms defined in loaded patches (e.g., game menu items or special terms)
+        return PatchManager.lookup(trimmed) == null
+    }
+
     /**
      * Processes full-screen game bitmap, detects English text blocks,
      * filters out noise, HUD numbers, and text intersecting the floating bubble.
@@ -113,8 +122,8 @@ class OcrEngine {
                         val rawBox = block.boundingBox ?: continue
                         val textTrimmed = block.text.trim()
 
-                        // 1. Filter out empty, standalone numbers, pure symbols or HUD prompts (HUD ammo, skip prompts)
-                        if (isNoiseOrSymbol(textTrimmed) || isHudPrompt(textTrimmed)) {
+                        // 1. Filter out empty, standalone numbers, pure symbols, HUD prompts, or all-caps non-dialogue background textures
+                        if (isNoiseOrSymbol(textTrimmed) || isHudPrompt(textTrimmed) || isAllCapsNonDialogue(textTrimmed)) {
                             continue
                         }
 
@@ -140,7 +149,7 @@ class OcrEngine {
                         val lines = block.lines.mapNotNull { line ->
                             val lineBox = line.boundingBox ?: return@mapNotNull null
                             val lineText = line.text.trim()
-                            if (isNoiseOrSymbol(lineText) || isHudPrompt(lineText)) return@mapNotNull null
+                            if (isNoiseOrSymbol(lineText) || isHudPrompt(lineText) || isAllCapsNonDialogue(lineText)) return@mapNotNull null
 
                             // ML Kit Line confidence check
                             line.confidence?.let { conf ->
@@ -152,6 +161,10 @@ class OcrEngine {
                                 text = lineText,
                                 boundingBox = lineBox
                             )
+                        }
+
+                        if (lines.isEmpty()) {
+                            continue
                         }
 
                         val blockConfidence = if (confCount > 0) totalConf / confCount else null
