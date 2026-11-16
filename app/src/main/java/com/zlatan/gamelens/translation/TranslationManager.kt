@@ -2,6 +2,7 @@ package com.zlatan.gamelens.translation
 
 import android.content.Context
 import android.util.Log
+import android.util.LruCache
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.common.model.RemoteModelManager
 import com.google.mlkit.nl.translate.TranslateLanguage
@@ -57,10 +58,12 @@ class TranslationManager(
     }
 
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
-        .writeTimeout(6, TimeUnit.SECONDS)
+        .connectTimeout(1200L, TimeUnit.MILLISECONDS)
+        .readTimeout(1200L, TimeUnit.MILLISECONDS)
+        .writeTimeout(1200L, TimeUnit.MILLISECONDS)
         .build()
+
+    private val fastMemoryCache = LruCache<String, String>(500)
 
     private val modelManager = RemoteModelManager.getInstance()
     private val arabicModel = TranslateRemoteModel.Builder(TranslateLanguage.ARABIC).build()
@@ -174,6 +177,12 @@ class TranslationManager(
             return@withContext patchMatch
         }
 
+        // Fast In-Memory LRU Cache (0ms)
+        val memMatch = fastMemoryCache.get(trimmed)
+        if (memMatch != null) {
+            return@withContext memMatch
+        }
+
         // 1. Direct Game Glossary Exact Match
         val glossaryMatch = glossaryManager.findExactMatch(trimmed)
         if (glossaryMatch != null) {
@@ -211,6 +220,7 @@ class TranslationManager(
         val finalResult = repairGluedArabicWords(deduplicated)
 
         // 7. Save to Cache for subsequent 0ms hits
+        fastMemoryCache.put(trimmed, finalResult)
         cacheManager.put(trimmed, finalResult)
 
         // 8. Log unique pair to Session Exporter (only for completed final sentences, skipping partial chunks)

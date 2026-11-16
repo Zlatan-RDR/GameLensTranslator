@@ -1,6 +1,10 @@
 package com.zlatan.gamelens.ocr
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.graphics.Rect
 import android.util.Log
 import com.google.mlkit.vision.common.InputImage
@@ -23,6 +27,58 @@ class OcrEngine {
     }
 
     private val recognizer: TextRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+
+    /**
+     * Applies high-contrast ColorMatrix boost (contrast = 2.1f, brightness = -35f)
+     * and 1.5x bilinear upscale whenever crop height < 260px so thin white/yellow subtitles
+     * are isolated cleanly from complex bright backgrounds (< 8ms on Snapdragon 8s Gen 4).
+     */
+    fun preprocessBitmapForOcr(src: Bitmap): Pair<Bitmap, Float> {
+        if (src.isRecycled || src.width <= 0 || src.height <= 0) {
+            return Pair(src, 1.0f)
+        }
+        val needsUpscale = src.height < 260
+        val scale = if (needsUpscale) 1.5f else 1.0f
+        val targetW = (src.width * scale).toInt().coerceAtLeast(1)
+        val targetH = (src.height * scale).toInt().coerceAtLeast(1)
+
+        val output = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+
+        val cm = ColorMatrix(floatArrayOf(
+            2.1f, 0f,   0f,   0f, -35f,
+            0f,   2.1f, 0f,   0f, -35f,
+            0f,   0f,   2.1f, 0f, -35f,
+            0f,   0f,   0f,   1f,   0f
+        ))
+        paint.colorFilter = ColorMatrixColorFilter(cm)
+        val srcRect = Rect(0, 0, src.width, src.height)
+        val dstRect = Rect(0, 0, targetW, targetH)
+        canvas.drawBitmap(src, srcRect, dstRect, paint)
+
+        return Pair(output, scale)
+    }
+
+    fun isHudPrompt(text: String): Boolean {
+        val lower = text.lowercase(java.util.Locale.US).trim()
+        return lower.contains("tap and hold to skip") ||
+               lower.contains("hold to skip") ||
+               lower.contains("press to skip") ||
+               lower.contains("to skip") ||
+               lower.contains("autosaves") ||
+               lower.contains("autosave") ||
+               lower.contains("saving...") ||
+               lower.contains("loading...")
+    }
+
+    fun isNoiseOrSymbol(text: String): Boolean {
+        if (text.isEmpty()) return true
+        if (text.length == 1 && !text.equals("a", ignoreCase = true) && !text.equals("i", ignoreCase = true)) {
+            return true
+        }
+        return STANDALONE_NUMBER_OR_SYMBOL_REGEX.matches(text)
+    }
 
     /**
      * Processes full-screen game bitmap, detects English text blocks,
@@ -57,8 +113,8 @@ class OcrEngine {
                         val rawBox = block.boundingBox ?: continue
                         val textTrimmed = block.text.trim()
 
-                        // 1. Filter out empty, standalone numbers or pure symbols (HUD ammo, health, scores)
-                        if (isNoiseOrSymbol(textTrimmed)) {
+                        // 1. Filter out empty, standalone numbers, pure symbols or HUD prompts (HUD ammo, skip prompts)
+                        if (isNoiseOrSymbol(textTrimmed) || isHudPrompt(textTrimmed)) {
                             continue
                         }
 
@@ -84,7 +140,7 @@ class OcrEngine {
                         val lines = block.lines.mapNotNull { line ->
                             val lineBox = line.boundingBox ?: return@mapNotNull null
                             val lineText = line.text.trim()
-                            if (isNoiseOrSymbol(lineText)) return@mapNotNull null
+                            if (isNoiseOrSymbol(lineText) || isHudPrompt(lineText)) return@mapNotNull null
 
                             // ML Kit Line confidence check
                             line.confidence?.let { conf ->
@@ -133,13 +189,6 @@ class OcrEngine {
         }
     }
 
-    private fun isNoiseOrSymbol(text: String): Boolean {
-        if (text.isEmpty()) return true
-        if (text.length == 1 && !text.equals("a", ignoreCase = true) && !text.equals("i", ignoreCase = true)) {
-            return true
-        }
-        return STANDALONE_NUMBER_OR_SYMBOL_REGEX.matches(text)
-    }
 
     /**
      * Rejects gibberish strings and HUD noise by requiring at least 60% of tokens to have

@@ -358,12 +358,8 @@ class MainActivity : AppCompatActivity() {
                             binding.pbAsrDownload.visibility = View.GONE
                             binding.tvAsrDownloadProgress.visibility = View.GONE
                             updateAudioModelStatus()
-                            Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح!", Toast.LENGTH_SHORT).show()
-                            prefs.edit()
-                                .putBoolean(KEY_GAME_AUDIO_ENABLED, true)
-                                .putBoolean("audio_translation_enabled", true)
-                                .apply()
-                            binding.switchGameAudio.isChecked = true
+                            Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح! يمكنك تفعيله من المفتاح أدناه.", Toast.LENGTH_SHORT).show()
+                            binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
                             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
                                 != PackageManager.PERMISSION_GRANTED
                             ) {

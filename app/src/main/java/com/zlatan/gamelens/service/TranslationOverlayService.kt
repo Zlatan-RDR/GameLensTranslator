@@ -104,6 +104,9 @@ class TranslationOverlayService : Service() {
     @Volatile
     private var forceInstantPass = true
 
+    @Volatile
+    private var lastDisplayedNormalizedText = ""
+
     private var displayManager: DisplayManager? = null
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) {}
@@ -403,11 +406,12 @@ class TranslationOverlayService : Service() {
 
             // Initialize Internal Game Audio Translation (Sherpa-ONNX + AudioPlaybackCapture)
             val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-            val isAudioEnabled = prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, false)
+            val isAudioEnabled = prefs.getBoolean("audio_translation_enabled", false) || prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, false)
             if (isAudioEnabled && GameAudioTranslator.isAsrModelInstalled(this)) {
                 startAudioTranslation()
             } else {
                 isAudioModeActive = false
+                isAutoTranslationActive = true
             }
             updateBubbleVisualState()
         } catch (e: SecurityException) {
@@ -424,26 +428,36 @@ class TranslationOverlayService : Service() {
     private fun startCaptureLoop() {
         captureJob?.cancel()
         captureJob = serviceScope.launch {
-            Log.d(TAG, "Full-Screen GameLens Pipeline active (interval: ${FRAME_INTERVAL_MS}ms)")
+            Log.d(TAG, "Visual Subtitle OCR Pipeline active")
             DiagnosticLogger.log("Pipeline loop started")
             while (isActive) {
+                val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
+                val intervalMs = if (isOpaqueCover) 320L else 100L
+
                 try {
-                    processFramePipeline()
+                    processFramePipeline(isOpaqueCover)
                 } catch (t: Throwable) {
                     Log.e(TAG, "Error in Pipeline: ${t.message}", t)
                     DiagnosticLogger.log("Pipeline error: ${t.javaClass.simpleName} - ${t.message}")
                 }
-                delay(FRAME_INTERVAL_MS)
+                delay(intervalMs)
             }
         }
     }
 
-    private suspend fun captureFrameForOcr(): Bitmap? {
+    private suspend fun captureFrameForOcr(isOpaqueCover: Boolean = true): Bitmap? {
         val captureMgr = screenCaptureManager ?: return null
+        if (!isOpaqueCover) {
+            // Offset Above Mode: capture immediately with zero overlay hiding (since Arabic bar sits cleanly above subtitle zone)
+            return captureMgr.acquireLatestBitmap()
+        }
+
+        // Opaque Cover Mode: set invisible for 20ms right before capture, restore immediately
         withContext(Dispatchers.Main) {
             seamlessOverlayRenderer?.setInvisibleForCapture()
         }
-        delay(ANTI_FEEDBACK_VSYNC_DELAY_MS)
+        delay(20L)
         val bitmap = captureMgr.acquireLatestBitmap()
         withContext(Dispatchers.Main) {
             seamlessOverlayRenderer?.restoreVisibilityAfterCapture()
@@ -451,7 +465,7 @@ class TranslationOverlayService : Service() {
         return bitmap
     }
 
-    private suspend fun processFramePipeline() {
+    private suspend fun processFramePipeline(isOpaqueCover: Boolean) {
         // When Audio Mode is active, NEVER run continuous background OCR to prevent texture clutter
         if (isAudioModeActive || !isAutoTranslationActive) {
             return
@@ -467,14 +481,13 @@ class TranslationOverlayService : Service() {
             clampBubbleWithinScreen(screenW, screenH)
         }
 
-        // 1-3. Anti-Feedback Loop: hide overlays synchronously, wait 35ms for SurfaceFlinger, capture clean frame, restore visibility
-        val fullBitmap: Bitmap? = captureFrameForOcr()
-
+        // 1. Unoccluded capture (100ms non-hiding for Offset Above, 320ms with 20ms invisible pulse for Opaque Cover)
+        val fullBitmap: Bitmap? = captureFrameForOcr(isOpaqueCover)
         if (fullBitmap == null) return
 
         val bubbleBounds = getBubbleBounds()
 
-        // 4. Fast Full-Screen Frame Diffing: skip unchanged frames, ignoring floating bubble area
+        // 2. Fast Frame Diffing: skip unchanged frames, ignoring floating bubble area
         val shouldForce = forceInstantPass
         forceInstantPass = false
         val hasChanged = if (shouldForce) true else frameDiffEngine.hasFrameChanged(fullBitmap, bubbleBounds)
@@ -482,9 +495,7 @@ class TranslationOverlayService : Service() {
             return
         }
 
-        DiagnosticLogger.log("Frame captured: ${fullBitmap.width}x${fullBitmap.height}")
-
-        // 5. Restrict OCR strictly to Calibrated Reading Box (defaults to Bottom Subtitles)
+        // 3. Restrict OCR strictly to Calibrated Reading Box (defaults to Bottom Subtitles: RectF(0.08f, 0.68f, 0.94f, 0.95f))
         val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
 
@@ -493,82 +504,135 @@ class TranslationOverlayService : Service() {
         val cropW = (calRect.width() * fullBitmap.width).toInt().coerceIn(1, fullBitmap.width - cropX)
         val cropH = (calRect.height() * fullBitmap.height).toInt().coerceIn(1, fullBitmap.height - cropY)
 
-        val isCropped = (cropW < fullBitmap.width || cropH < fullBitmap.height)
-        val ocrBitmap = if (isCropped) {
-            Bitmap.createBitmap(fullBitmap, cropX, cropY, cropW, cropH)
-        } else {
-            fullBitmap
+        val rawCropped = Bitmap.createBitmap(fullBitmap, cropX, cropY, cropW, cropH)
+
+        // 4. Fast ColorMatrix Contrast Boost (contrast = 2.1f, brightness = -35f) & 1.5x Bilinear Upscale if height < 260px
+        val (enhancedBitmap, scaleFactor) = ocrEngine.preprocessBitmapForOcr(rawCropped)
+        if (enhancedBitmap !== rawCropped && !rawCropped.isRecycled) {
+            rawCropped.recycle()
         }
 
-        // Fast On-Device ML Kit OCR Recognition on the active region
+        // 5. Fast On-Device ML Kit OCR Recognition on the enhanced region
         val detectedBlocks = try {
-            ocrEngine.recognizeText(ocrBitmap, bubbleBounds)
+            ocrEngine.recognizeText(enhancedBitmap, bubbleBounds)
         } finally {
-            if (isCropped && !ocrBitmap.isRecycled) {
-                ocrBitmap.recycle()
+            if (!enhancedBitmap.isRecycled) {
+                enhancedBitmap.recycle()
             }
         }
 
-        // 6. Two Consecutive Empty Passes Guard: Require 2 empty passes (~240ms) before clearing overlay
-        if (detectedBlocks.isEmpty()) {
+        // Remap bounding boxes back from upscaled space & offset to full screen space
+        for (block in detectedBlocks) {
+            val b = block.boundingBox
+            if (scaleFactor != 1.0f) {
+                b.left = (b.left / scaleFactor).toInt()
+                b.top = (b.top / scaleFactor).toInt()
+                b.right = (b.right / scaleFactor).toInt()
+                b.bottom = (b.bottom / scaleFactor).toInt()
+            }
+            b.offset(cropX, cropY)
+
+            for (line in block.lines) {
+                val lb = line.boundingBox
+                if (scaleFactor != 1.0f) {
+                    lb.left = (lb.left / scaleFactor).toInt()
+                    lb.top = (lb.top / scaleFactor).toInt()
+                    lb.right = (lb.right / scaleFactor).toInt()
+                    lb.bottom = (lb.bottom / scaleFactor).toInt()
+                }
+                lb.offset(cropX, cropY)
+            }
+        }
+
+        // 6. Extract all valid lines, filter out HUD prompts, sort top-to-bottom
+        val allLines = detectedBlocks.flatMap { it.lines }
+            .filter { !ocrEngine.isNoiseOrSymbol(it.text) && !ocrEngine.isHudPrompt(it.text) }
+            .sortedBy { it.boundingBox.top }
+
+        if (allLines.isEmpty()) {
             consecutiveEmptyOcrPasses++
             if (consecutiveEmptyOcrPasses >= 2) {
                 latestDetectedBlocks = emptyList()
+                lastDisplayedNormalizedText = ""
                 seamlessOverlayRenderer?.clear()
             }
             return
         }
 
-        // Remap bounding boxes back to full screen space
-        if (isCropped) {
-            for (block in detectedBlocks) {
-                block.boundingBox.offset(cropX, cropY)
-            }
-        }
+        // 7. Multi-Line Paragraph Merging: combine lines into single coherent English paragraph
+        val mergedEnglish = allLines.joinToString(" ") { it.text.trim() }
+        if (mergedEnglish.isBlank()) return
 
-        DiagnosticLogger.log("OCR blocks: ${detectedBlocks.size}")
-
-        // Synchronously sample background edge colors while fullBitmap is 100% valid and guaranteed alive
-        for (block in detectedBlocks) {
-            block.colorScheme = EdgeColorSampler.sampleEdgeColors(fullBitmap, block.boundingBox)
-        }
-
-        // 7. Non-blocking Asynchronous Translation through Glossary, Cache & Translation Engine
-        withContext(Dispatchers.IO) {
-            for (block in detectedBlocks) {
-                val translated = translationManager.translate(block.text)
-                block.translatedText = translated
-            }
-        }
-
-        DiagnosticLogger.log("Translated: ${detectedBlocks.size}")
-
-        // Filter out non-Arabic or unchanged translations (e.g. Latin app names or untranslated UI)
-        val arabicBlocks = detectedBlocks.filter { block ->
-            val trans = block.translatedText
-            !trans.isNullOrBlank() &&
-            !trans.trim().equals(block.text.trim(), ignoreCase = true) &&
-            ARABIC_REGEX.containsMatchIn(trans)
-        }
-
-        latestDetectedBlocks = arabicBlocks
-
-        if (arabicBlocks.isEmpty()) {
-            consecutiveEmptyOcrPasses++
-            if (consecutiveEmptyOcrPasses >= 2) {
-                seamlessOverlayRenderer?.clear()
-                DiagnosticLogger.log("Rendered: 0 overlays (cleared after 2 empty passes)")
-            }
+        // 8. Jitter Gate: Levenshtein distance <= 1 skips translation and redraw (0ms, zero flicker)
+        val normalized = normalizeForJitterGate(mergedEnglish)
+        if (lastDisplayedNormalizedText.isNotEmpty() && calculateLevenshteinDistance(normalized, lastDisplayedNormalizedText) <= 1) {
+            consecutiveEmptyOcrPasses = 0
             return
         }
 
-        // Active valid Arabic blocks rendered -> reset empty passes counter
+        // 9. Union Bounding Box spanning all merged lines (+10dp padding applied in renderer)
+        val unionBox = Rect(allLines.first().boundingBox)
+        for (line in allLines) {
+            unionBox.union(line.boundingBox)
+        }
+
+        // 10. Non-blocking Asynchronous Translation through Glossary, Cache & Translation Engine
+        val translated = withContext(Dispatchers.IO) {
+            translationManager.translate(mergedEnglish)
+        }
+
+        if (translated.isBlank() || translated.trim().equals(mergedEnglish.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(translated)) {
+            return
+        }
+
+        // Reset empty passes counter and update last displayed text
         consecutiveEmptyOcrPasses = 0
+        lastDisplayedNormalizedText = normalized
 
-        // 8. 100% Touch-Passthrough Seamless Overlay Rendering directly over original text bounding boxes
-        // Passes valid Arabic blocks and dimensions for accurate coordinate scaling
-        seamlessOverlayRenderer?.renderTranslations(arabicBlocks, screenW, screenH, fullBitmap.width, fullBitmap.height)
-        DiagnosticLogger.log("Rendered: ${arabicBlocks.size} overlays")
+        val mergedBlock = OcrBlock(
+            text = mergedEnglish,
+            boundingBox = unionBox,
+            lines = allLines
+        ).apply {
+            translatedText = translated
+            colorScheme = EdgeColorSampler.sampleEdgeColors(fullBitmap, unionBox)
+        }
+
+        latestDetectedBlocks = listOf(mergedBlock)
+
+        // 11. Render overlay
+        seamlessOverlayRenderer?.renderTranslations(listOf(mergedBlock), screenW, screenH, fullBitmap.width, fullBitmap.height)
+        DiagnosticLogger.log("Rendered merged subtitle: \"$mergedEnglish\" -> \"$translated\"")
+    }
+
+    private fun normalizeForJitterGate(text: String): String {
+        return text.lowercase(java.util.Locale.US)
+            .replace(Regex("[^a-z0-9 ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
+
+    private fun calculateLevenshteinDistance(s1: String, s2: String): Int {
+        if (s1 == s2) return 0
+        val len1 = s1.length
+        val len2 = s2.length
+        if (len1 == 0) return len2
+        if (len2 == 0) return len1
+        if (Math.abs(len1 - len2) > 2) return Math.abs(len1 - len2)
+
+        val dp = IntArray(len2 + 1) { it }
+        for (i in 1..len1) {
+            var prevDiag = dp[0]
+            dp[0] = i
+            val c1 = s1[i - 1]
+            for (j in 1..len2) {
+                val temp = dp[j]
+                val cost = if (c1 == s2[j - 1]) 0 else 1
+                dp[j] = minOf(dp[j] + 1, dp[j - 1] + 1, prevDiag + cost)
+                prevDiag = temp
+            }
+        }
+        return dp[len2]
     }
 
     @SuppressLint("InflateParams", "ClickableViewAccessibility")
@@ -893,7 +957,6 @@ class TranslationOverlayService : Service() {
         mainHandler.post {
             val density = resources.displayMetrics.density
             val hasPinned = seamlessOverlayRenderer?.hasPinnedMenuCards() == true
-            val isAudioCapturing = isAudioModeActive && (gameAudioTranslator?.isCapturing == true)
 
             val backgroundDrawable = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
@@ -903,25 +966,25 @@ class TranslationOverlayService : Service() {
                         setColor(Color.parseColor("#FFB300"))
                         setStroke((2.5f * density).toInt(), Color.WHITE)
                     }
-                    isAudioCapturing -> {
-                        // Cyan (#00BCD4) ONLY when GameAudioTranslator is actively capturing and streaming PCM audio
+                    isAudioModeActive -> {
+                        // Cyan (#00BCD4): Live Voice ASR active
                         setColor(Color.parseColor("#00BCD4"))
                         setStroke((2.5f * density).toInt(), Color.parseColor("#E0F7FA"))
                     }
                     isAutoTranslationActive || hasPinned -> {
-                        // Green (#10B981) when periodic or pinned Visual OCR mode is active
+                        // Emerald Green (#10B981): Visual Subtitle OCR active
                         setColor(Color.parseColor("#10B981"))
                         setStroke((2 * density).toInt(), Color.WHITE)
                     }
                     else -> {
-                        // Slate (#475569) when both Audio and Visual OCR are paused/standby
+                        // Slate (#475569): Paused / Standby
                         setColor(Color.parseColor("#475569"))
                         setStroke((1.5f * density).toInt(), Color.parseColor("#94A3B8"))
                     }
                 }
             }
             bubbleView?.background = backgroundDrawable
-            bubbleView?.alpha = if (isAudioCapturing || hasPinned || isAutoTranslationActive) 1.0f else 0.85f
+            bubbleView?.alpha = if (isAudioModeActive || hasPinned || isAutoTranslationActive) 1.0f else 0.85f
             ivBubbleIcon?.setColorFilter(Color.WHITE)
         }
     }
