@@ -284,8 +284,21 @@ class SeamlessOverlayRenderer(private val context: Context) {
     }
 
     /**
+     * Instantly clears all OCR views, pinned cards, and voice subtitle text.
+     * Enforces complete clean state when switching between OCR and live audio modes.
+     */
+    fun clearAllOverlays() {
+        mainHandler.post {
+            clearOcrViews()
+            _hasPinnedCards = false
+            subtitleView?.visibility = View.GONE
+            subtitleView?.text = ""
+        }
+    }
+
+    /**
      * Renders speech translations in the zero-flicker bottom cinematic subtitle bar.
-     * Supports Opaque Cover Mode (100% solid dark 0xFF080A0F over calibrated bottom zone)
+     * Supports Opaque Cover Mode (100% solid dark 0xFF06080D over bottom subtitle zone 76%-94% screen height)
      * and Offset Above Mode (translucent bar positioned cleanly above bottom zone).
      * Auto-hides after 2.0 seconds of silence so old lines clear promptly between scenes.
      */
@@ -317,21 +330,27 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val zoneH = (zoneBottom - zoneTop).coerceAtLeast((28 * density).toInt())
 
             if (isOpaqueCover) {
-                // 100% solid opaque dark (0xFF080A0F, alpha = 255) positioned directly over calibrated bottom subtitle zone
+                // 100% solid opaque dark (0xFF06080D, alpha = 255) positioned directly over bottom subtitle zone (76% to 94% screen height)
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(0xFF080A0F.toInt())
-                    cornerRadius = 6f * density
+                    setColor(0xFF06080D.toInt())
+                    cornerRadius = 8f * density
                 }
                 sub.background = bg
-                sub.setPadding((12 * density).toInt(), (10 * density).toInt(), (12 * density).toInt(), (10 * density).toInt())
+                sub.setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
 
-                val layoutParams = FrameLayout.LayoutParams(zoneW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                val opaqueTop = (0.76f * screenH).toInt()
+                val opaqueBottom = (0.94f * screenH).toInt()
+                val opaqueH = (opaqueBottom - opaqueTop).coerceAtLeast((64 * density).toInt())
+                val opaqueW = (0.92f * screenW).toInt()
+                val opaqueLeft = ((screenW - opaqueW) / 2).coerceAtLeast(0)
+
+                val layoutParams = FrameLayout.LayoutParams(opaqueW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     gravity = Gravity.TOP or Gravity.START
-                    leftMargin = zoneLeft
-                    topMargin = zoneTop
+                    leftMargin = opaqueLeft
+                    topMargin = opaqueTop
                 }
-                sub.minimumHeight = zoneH
+                sub.minimumHeight = opaqueH
                 sub.layoutParams = layoutParams
             } else {
                 // Offset Above Mode: position the Arabic subtitle bar cleanly above the calibrated bottom subtitle zone with zero overlap

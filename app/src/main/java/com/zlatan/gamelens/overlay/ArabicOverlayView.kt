@@ -38,7 +38,7 @@ class ArabicOverlayView(
 
     /**
      * Updates the content and styling of the overlay view using the translated Arabic text.
-     * In Opaque Cover Mode (0xFF080A0F, alpha=255), completely conceals original English text underneath for clean native look.
+     * In Opaque Cover Mode (0xFF06080D, alpha=255), completely conceals original English text underneath for clean native look.
      */
     fun bindTranslation(translatedText: String, colorScheme: SampledColorScheme? = null) {
         text = translatedText
@@ -46,7 +46,7 @@ class ArabicOverlayView(
 
         val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
-        val bgColor = if (isOpaqueCover) 0xFF080A0F.toInt() else 0xD910141D.toInt()
+        val bgColor = if (isOpaqueCover) 0xFF06080D.toInt() else 0xD910141D.toInt()
 
         val cornerRadiusPx = 4f * resources.displayMetrics.density
         val backgroundDrawable = GradientDrawable().apply {

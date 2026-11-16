@@ -285,14 +285,21 @@ class TranslationManager(
         if (arabicText.isBlank()) return ""
         var sanitized = arabicText
 
-        // 1. High-frequency specific ML Kit glued words
-        sanitized = sanitized.replace(Regex("\\bهذهي\\b"), "هذه هي")
-        sanitized = sanitized.replace(Regex("\\bالتيجب\\b"), "التي يجب")
-        sanitized = sanitized.replace(Regex("\\bهذال(\\S+)"), "هذا ال$1")
-        sanitized = sanitized.replace(Regex("\\bديانال(\\S+)"), "ديانا ال$1")
+        // 1. High-frequency specific ML Kit glued words and contractions
+        sanitized = sanitized.replace(Regex("\\b\\u0647\\u0630\\u0647\\u064A\\b"), "\u0647\u0630\u0647 \u0647\u064A")
+        sanitized = sanitized.replace(Regex("\\b\\u0627\\u0644\\u062A\\u064A\\u062C\\u0628\\b"), "\u0627\u0644\u062A\u064A \u064A\u062C\u0628")
+        sanitized = sanitized.replace(Regex("\\b\\u0627\\u0644\\u0630\\u064A\\u064A\\u062C\\u0628\\b"), "\u0627\u0644\u0630\u064A \u064A\u062C\u0628")
+        sanitized = sanitized.replace(Regex("\\b\\u0647\\u0630\\u0627\\u0644\\u0631\\u062C\\u0644\\b"), "\u0647\u0630\u0627 \u0627\u0644\u0631\u062C\u0644")
+        sanitized = sanitized.replace(Regex("\\b\\u0647\\u0630\\u0647\\u0627\\u0644\\u0637\\u0631\\u064A\\u0642\\u0629\\b"), "\u0647\u0630\u0647 \u0627\u0644\u0637\u0631\u064A\u0642\u0629")
+        sanitized = sanitized.replace(Regex("\\b\\u0645\\u0627\\u0623\\u0642\\u0648\\u0645\\b"), "\u0645\u0627 \u0623\u0642\u0648\u0645")
+        sanitized = sanitized.replace(Regex("\\b\\u0647\\u0630\\u0644(\\S+)"), "\u0647\u0630\u0627 \u0627\u0644$1")
+        sanitized = sanitized.replace(Regex("\\b\\u062F\\u064A\\u0627\\u0646\\u0627\\u0644(\\S+)"), "\u062F\u064A\u0627\u0646\u0627 \u0627\u0644$1")
 
-        // 2. Insert space between non-connecting terminal letters and demonstrative/article prefixes
-        val gluedPattern = Regex("([\\u0627\\u0649\\u0629\\u0647\\u062F\\u0630\\u0631\\u0632\\u0648])(?=\\u0627\\u0644[\\u0600-\\u06FF]|\\u0647\\u0630|\\u0627\\u0644\\u062A\\u064A|\\u0627\\u0644\\u0630\\u064A|\\u0623\\u0646)")
+        // 2. Insert space between non-connecting terminal letters and definite-article prefix or particles/pronouns
+        val gluedPattern = Regex(
+            "([\\u0627\\u0649\\u0629\\u0647\\u062F\\u0630\\u0631\\u0632\\u0648])" +
+            "(?=\\u0627\\u0644[\\u0600-\\u06FF]|(?:(?:\\u0647\\u064A|\\u0647\\u0648|\\u0647\\u0645|\\u064A\\u062C\\u0628|\\u0623\\u0646|\\u0623\\u0648|\\u0625\\u0644\\u0649|\\u0639\\u0644\\u0649|\\u0641\\u064A|\\u0645\\u0646|\\u0639\\u0646|\\u0645\\u0639|\\u0647\\u0630\\u0627|\\u0647\\u0630\\u0647|\\u0630\\u0644\\u0643)\\b))"
+        )
         sanitized = sanitized.replace(gluedPattern, "$1 ")
 
         return sanitized.trim()

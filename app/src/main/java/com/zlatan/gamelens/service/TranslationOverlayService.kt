@@ -729,8 +729,8 @@ class TranslationOverlayService : Service() {
         }
 
         isAudioModeActive = true
-        // Clear any pinned menu cards when activating audio subtitle mode
-        seamlessOverlayRenderer?.clearMenuCards()
+        // Clear all overlays and pinned cards when activating audio subtitle mode
+        seamlessOverlayRenderer?.clearAllOverlays()
 
         gameAudioTranslator?.stop()
         gameAudioTranslator = GameAudioTranslator(

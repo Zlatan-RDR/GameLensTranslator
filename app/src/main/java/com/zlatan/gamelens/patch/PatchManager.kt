@@ -290,7 +290,8 @@ object PatchManager {
     }
 
     private fun parseJson(content: String) {
-        val trimmed = content.trim()
+        val sanitized = sanitizeJsonStringLiterals(content.trim())
+        val trimmed = sanitized.trim()
         try {
             if (trimmed.startsWith("{")) {
                 val jsonObject = JSONObject(trimmed)
@@ -317,18 +318,92 @@ object PatchManager {
                     }
                 }
             } else {
-                val err = "محتوى JSON غير صالح: يجب أن يبدأ بـ { أو ["
-                lastPairingError = err
-                DiagnosticLogger.log("PatchManager JSON Error: $err")
-                Log.e(TAG, err)
+                val count = extractJsonPairsViaRegex(sanitized)
+                if (count == 0) {
+                    val err = "محتوى JSON غير صالح: يجب أن يبدأ بـ { أو ["
+                    lastPairingError = err
+                    DiagnosticLogger.log("PatchManager JSON Error: $err")
+                    Log.e(TAG, err)
+                }
             }
         } catch (e: Exception) {
-            val err = "خطأ في صيغة JSON: ${e.message}"
-            lastPairingError = err
-            Log.e(TAG, "JSON parse failed: ${e.message}", e)
-            DiagnosticLogger.log("PatchManager JSON Error: ${e.message}")
-            // Strictly DO NOT fall back to CSV/delimited text!
+            val count = extractJsonPairsViaRegex(sanitized)
+            if (count > 0) {
+                DiagnosticLogger.log("PatchManager: Recovered $count JSON pairs via secondary regex parser")
+                Log.i(TAG, "Recovered $count JSON pairs via secondary regex parser")
+            } else {
+                val err = "خطأ في صيغة JSON: ${e.message}"
+                lastPairingError = err
+                Log.e(TAG, "JSON parse failed: ${e.message}", e)
+                DiagnosticLogger.log("PatchManager JSON Error: ${e.message}")
+            }
         }
+    }
+
+    fun sanitizeJsonStringLiterals(content: String): String {
+        val sb = java.lang.StringBuilder(content.length)
+        var inString = false
+        var isEscaped = false
+        for (i in 0 until content.length) {
+            val c = content[i]
+            if (inString) {
+                if (c == '\\' && !isEscaped) {
+                    isEscaped = true
+                    sb.append(c)
+                } else if (c == '"' && !isEscaped) {
+                    inString = false
+                    sb.append(c)
+                } else if (c == '\n' || c == '\r') {
+                    sb.append(' ')
+                    isEscaped = false
+                } else {
+                    isEscaped = false
+                    sb.append(c)
+                }
+            } else {
+                if (c == '"') {
+                    inString = true
+                }
+                sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun unescapeJsonString(str: String): String {
+        return str.replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+            .replace("\\/", "/")
+    }
+
+    private fun extractJsonPairsViaRegex(content: String): Int {
+        val pattern = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOption.DOT_MATCHES_ALL)
+        var count = 0
+        for (match in pattern.findAll(content)) {
+            val k = unescapeJsonString(match.groupValues[1]).trim()
+            val v = unescapeJsonString(match.groupValues[2]).trim()
+            if (k.isNotBlank() && v.isNotBlank()) {
+                addEntry(k, v)
+                count++
+            }
+        }
+        return count
+    }
+
+    private fun extractJsonMapViaRegex(content: String): Map<String, String> {
+        val pattern = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOption.DOT_MATCHES_ALL)
+        val map = mutableMapOf<String, String>()
+        for (match in pattern.findAll(content)) {
+            val k = unescapeJsonString(match.groupValues[1]).trim()
+            val v = unescapeJsonString(match.groupValues[2]).trim()
+            if (k.isNotBlank() && v.isNotBlank()) {
+                map[k] = v
+            }
+        }
+        return map
     }
 
     private fun parseSrt(content: String) {
@@ -762,9 +837,12 @@ object PatchManager {
     }
 
     private fun pairJsonFiles(enContent: String, arContent: String): Int {
+        val enSanitized = sanitizeJsonStringLiterals(enContent.trim())
+        val arSanitized = sanitizeJsonStringLiterals(arContent.trim())
+        val enTrimmed = enSanitized.trim()
+        val arTrimmed = arSanitized.trim()
+
         try {
-            val enTrimmed = enContent.trim()
-            val arTrimmed = arContent.trim()
             if (enTrimmed.startsWith("{") && arTrimmed.startsWith("{")) {
                 val enObj = JSONObject(enTrimmed)
                 val arObj = JSONObject(arTrimmed)
@@ -780,19 +858,33 @@ object PatchManager {
                     }
                 }
                 return matched
-            } else {
-                val err = "ملفات JSON يجب أن تبدأ بـ {"
-                lastPairingError = err
-                Log.w(TAG, err)
-                return -1
             }
         } catch (e: Exception) {
-            val err = "خطأ في قراءة ملفات JSON: ${e.message}"
-            lastPairingError = err
-            Log.e(TAG, err, e)
-            DiagnosticLogger.log("PatchManager JSON Error: ${e.message}")
-            return -1
+            DiagnosticLogger.log("PatchManager pairJsonFiles JSONObject failed: ${e.message}, attempting regex map extraction")
         }
+
+        // Secondary regex fallback for dual JSON pairing
+        val enMap = extractJsonMapViaRegex(enSanitized)
+        val arMap = extractJsonMapViaRegex(arSanitized)
+        if (enMap.isNotEmpty() && arMap.isNotEmpty()) {
+            var matched = 0
+            for ((k, enVal) in enMap) {
+                val arVal = arMap[k]
+                if (!arVal.isNullOrBlank()) {
+                    addEntry(enVal, arVal)
+                    matched++
+                }
+            }
+            if (matched > 0) {
+                DiagnosticLogger.log("PatchManager: Paired $matched dual JSON entries via secondary regex")
+                return matched
+            }
+        }
+
+        val err = "ملفات JSON غير صالحة أو لم يتم العثور على مفاتيح متطابقة"
+        lastPairingError = err
+        Log.w(TAG, err)
+        return -1
     }
 
     private fun pairXmlFiles(enContent: String, arContent: String): Int {
