@@ -921,7 +921,6 @@ class TranslationOverlayService : Service() {
                 }
 
                 // 7. Render menu translations with opaque dark cards (#F210141D) pinned stably
-                val (screenW, screenH, _) = getRealScreenDimensions()
                 seamlessOverlayRenderer?.renderTranslations(
                     blocks = arabicBlocks,
                     screenW = screenW,
