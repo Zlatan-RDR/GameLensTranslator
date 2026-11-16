@@ -688,6 +688,19 @@
                         app:backgroundTint="#37474F"
                         app:cornerRadius="6dp" />
                 </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnTestOverlay"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/btn_test_overlay"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    app:backgroundTint="#263238"
+                    app:strokeColor="@color/accent"
+                    app:strokeWidth="1dp"
+                    app:cornerRadius="6dp" />
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 

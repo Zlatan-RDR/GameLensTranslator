@@ -74,4 +74,5 @@
     <string name="preset_full_screen">كامل الشاشة</string>
     <string name="preset_center_dialog">وسط الشاشة</string>
     <string name="preset_bottom_subtitles">شريط سفلي</string>
+    <string name="btn_test_overlay">فحص ظهور الترجمة السينمائية (3 ثوانٍ)</string>
 </resources>

@@ -93,8 +93,17 @@ class OcrEngine {
      * Processes full-screen game bitmap, detects English text blocks,
      * filters out noise, HUD numbers, and text intersecting the floating bubble.
      * Enforces strict confidence (>= 0.78) and English token linguistic validity (>= 60%).
+     * Maps all coordinates back to full-screen display space and clamps within display boundaries.
      */
-    suspend fun recognizeText(bitmap: Bitmap, excludedBounds: Rect? = null): List<OcrBlock> = suspendCancellableCoroutine { continuation ->
+    suspend fun recognizeText(
+        bitmap: Bitmap,
+        excludedBounds: Rect? = null,
+        cropLeft: Int = 0,
+        cropTop: Int = 0,
+        scaleFactor: Float = 1.0f,
+        screenWidth: Int = 0,
+        screenHeight: Int = 0
+    ): List<OcrBlock> = suspendCancellableCoroutine { continuation ->
         if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
             continuation.resume(emptyList())
             return@suspendCancellableCoroutine
@@ -117,6 +126,7 @@ class OcrEngine {
             recognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
                     val resultBlocks = mutableListOf<OcrBlock>()
+                    val s = if (scaleFactor > 0f) scaleFactor else 1.0f
 
                     for (block in visionText.textBlocks) {
                         val rawBox = block.boundingBox ?: continue
@@ -132,13 +142,20 @@ class OcrEngine {
                             continue
                         }
 
+                        // Map bounding box back to full screen display coordinates and clamp
+                        val realLeft = (cropLeft + (rawBox.left / s)).toInt().coerceIn(0, if (screenWidth > 0) screenWidth else Int.MAX_VALUE)
+                        val realTop = (cropTop + (rawBox.top / s)).toInt().coerceIn(0, if (screenHeight > 0) screenHeight else Int.MAX_VALUE)
+                        val realRight = (cropLeft + (rawBox.right / s)).toInt().coerceIn(realLeft, if (screenWidth > 0) screenWidth else Int.MAX_VALUE)
+                        val realBottom = (cropTop + (rawBox.bottom / s)).toInt().coerceIn(realTop, if (screenHeight > 0) screenHeight else Int.MAX_VALUE)
+                        val mappedBlockBox = Rect(realLeft, realTop, realRight, realBottom)
+
                         // 3. Filter out elements strictly intersecting the floating control bubble
-                        if (excludedBounds != null && (excludedBounds.contains(rawBox.centerX(), rawBox.centerY()) || Rect.intersects(rawBox, excludedBounds))) {
+                        if (excludedBounds != null && (excludedBounds.contains(mappedBlockBox.centerX(), mappedBlockBox.centerY()) || Rect.intersects(mappedBlockBox, excludedBounds))) {
                             continue
                         }
 
                         // 4. Minimum size threshold
-                        if (rawBox.width() < 10 || rawBox.height() < 10) {
+                        if (mappedBlockBox.width() < 10 || mappedBlockBox.height() < 10) {
                             continue
                         }
 
@@ -157,9 +174,14 @@ class OcrEngine {
                                 confCount++
                             }
 
+                            val lineRealLeft = (cropLeft + (lineBox.left / s)).toInt().coerceIn(0, if (screenWidth > 0) screenWidth else Int.MAX_VALUE)
+                            val lineRealTop = (cropTop + (lineBox.top / s)).toInt().coerceIn(0, if (screenHeight > 0) screenHeight else Int.MAX_VALUE)
+                            val lineRealRight = (cropLeft + (lineBox.right / s)).toInt().coerceIn(lineRealLeft, if (screenWidth > 0) screenWidth else Int.MAX_VALUE)
+                            val lineRealBottom = (cropTop + (lineBox.bottom / s)).toInt().coerceIn(lineRealTop, if (screenHeight > 0) screenHeight else Int.MAX_VALUE)
+
                             OcrLine(
                                 text = lineText,
-                                boundingBox = lineBox
+                                boundingBox = Rect(lineRealLeft, lineRealTop, lineRealRight, lineRealBottom)
                             )
                         }
 
@@ -177,7 +199,7 @@ class OcrEngine {
                         resultBlocks.add(
                             OcrBlock(
                                 text = textTrimmed,
-                                boundingBox = rawBox,
+                                boundingBox = mappedBlockBox,
                                 confidence = blockConfidence,
                                 lines = lines
                             )

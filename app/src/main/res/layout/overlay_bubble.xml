@@ -15,4 +15,14 @@
         android:src="@drawable/ic_lens_bubble"
         android:contentDescription="@string/app_name" />
 
+    <View
+        android:id="@+id/viewHeartbeatDot"
+        android:layout_width="10dp"
+        android:layout_height="10dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="5dp"
+        android:layout_marginEnd="5dp"
+        android:background="@drawable/bg_heartbeat_dot"
+        android:visibility="gone" />
+
 </FrameLayout>

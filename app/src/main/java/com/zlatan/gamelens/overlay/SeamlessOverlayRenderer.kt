@@ -67,8 +67,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
         // 100% Touch Pass-Through flags: Zero touch interception, full-screen alignment
         val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -80,6 +79,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
             gravity = Gravity.TOP or Gravity.LEFT
             x = 0
             y = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                setFitInsetsTypes(0)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             }
@@ -293,6 +295,66 @@ class SeamlessOverlayRenderer(private val context: Context) {
             _hasPinnedCards = false
             subtitleView?.visibility = View.GONE
             subtitleView?.text = ""
+        }
+    }
+
+    /**
+     * Re-synchronizes overlay window container layout metrics on display or orientation change.
+     */
+    fun updateScreenDimensions() {
+        mainHandler.post {
+            val container = overlayContainer ?: return@post
+            if (!isContainerAttached) return@post
+            val lp = container.layoutParams as? WindowManager.LayoutParams ?: return@post
+            try {
+                windowManager.updateViewLayout(container, lp)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to update overlay view layout on config change: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Renders a sample solid-opaque cinematic Arabic subtitle card on screen for 3 seconds.
+     * Allows 1-tap verification of overlay visibility and screen-space alignment over fullscreen games.
+     */
+    fun renderTestOverlay() {
+        mainHandler.post {
+            if (!isContainerAttached || overlayContainer == null) {
+                initOverlayContainer()
+            }
+            val container = overlayContainer ?: return@post
+            clearOcrViews()
+            _hasPinnedCards = true
+
+            val metrics = context.resources.displayMetrics
+            val screenW = metrics.widthPixels
+            val screenH = metrics.heightPixels
+            val density = metrics.density
+
+            val targetW = (0.88f * screenW).toInt()
+            val targetLeft = ((screenW - targetW) / 2).coerceAtLeast(0)
+            val targetTop = (0.80f * screenH).toInt()
+            val targetH = (56 * density).toInt()
+            val renderBox = Rect(targetLeft, targetTop, targetLeft + targetW, targetTop + targetH)
+
+            val testView = ArabicOverlayView(context, renderBox).apply {
+                bindTranslation("فحص ظهور الترجمة: طبقة العرض السينمائية تعمل بنجاح 100%", null)
+            }
+
+            val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
+                gravity = Gravity.TOP or Gravity.LEFT
+                leftMargin = targetLeft
+                topMargin = targetTop
+            }
+
+            container.addView(testView, layoutParams)
+
+            // Auto-dismiss test card after 3.0 seconds
+            mainHandler.postDelayed({
+                clearOcrViews()
+                _hasPinnedCards = false
+            }, 3000L)
         }
     }
 

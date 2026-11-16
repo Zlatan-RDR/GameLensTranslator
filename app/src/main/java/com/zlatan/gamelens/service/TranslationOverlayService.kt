@@ -68,6 +68,7 @@ class TranslationOverlayService : Service() {
         const val ACTION_STOP = "com.zlatan.gamelens.ACTION_STOP"
         const val ACTION_CALIBRATE = "com.zlatan.gamelens.ACTION_CALIBRATE"
         const val ACTION_UPDATE_PROJECTION = "com.zlatan.gamelens.ACTION_UPDATE_PROJECTION"
+        const val ACTION_TEST_OVERLAY = "com.zlatan.gamelens.ACTION_TEST_OVERLAY"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_AUTO_START_AUDIO = "extra_auto_start_audio"
@@ -88,6 +89,7 @@ class TranslationOverlayService : Service() {
     private var bubbleView: View? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var ivBubbleIcon: ImageView? = null
+    private var viewHeartbeatDot: View? = null
 
     // Single touchable control state
     @Volatile
@@ -189,7 +191,7 @@ class TranslationOverlayService : Service() {
     private fun getRealScreenDimensions(): Triple<Int, Int, Int> {
         val densityDpi = resources.displayMetrics.densityDpi
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = windowManager.currentWindowMetrics.bounds
+            val bounds = windowManager.maximumWindowMetrics.bounds
             Triple(bounds.width(), bounds.height(), densityDpi)
         } else {
             val dm = DisplayMetrics()
@@ -203,6 +205,7 @@ class TranslationOverlayService : Service() {
         val (w, h, dpi) = getRealScreenDimensions()
         screenCaptureManager?.updateDimensions(w, h, dpi)
         clampBubbleWithinScreen(w, h)
+        seamlessOverlayRenderer?.updateScreenDimensions()
     }
 
     private fun clampBubbleWithinScreen(screenW: Int, screenH: Int) {
@@ -314,6 +317,10 @@ class TranslationOverlayService : Service() {
                 } else {
                     DiagnosticLogger.log("ACTION_UPDATE_PROJECTION: invalid result code or data")
                 }
+            }
+            ACTION_TEST_OVERLAY -> {
+                seamlessOverlayRenderer?.renderTestOverlay()
+                showToast("جاري اختبار عرض طبقة الترجمة لمدة 3 ثوانٍ")
             }
         }
         return START_NOT_STICKY
@@ -518,35 +525,20 @@ class TranslationOverlayService : Service() {
             rawCropped.recycle()
         }
 
-        // 5. Fast On-Device ML Kit OCR Recognition on the enhanced region
+        // 5. Fast On-Device ML Kit OCR Recognition mapped directly to clamped full-screen display space
         val detectedBlocks = try {
-            ocrEngine.recognizeText(enhancedBitmap, bubbleBounds)
+            ocrEngine.recognizeText(
+                bitmap = enhancedBitmap,
+                excludedBounds = bubbleBounds,
+                cropLeft = cropX,
+                cropTop = cropY,
+                scaleFactor = scaleFactor,
+                screenWidth = screenW,
+                screenHeight = screenH
+            )
         } finally {
             if (!enhancedBitmap.isRecycled) {
                 enhancedBitmap.recycle()
-            }
-        }
-
-        // Remap bounding boxes back from upscaled space & offset to full screen space
-        for (block in detectedBlocks) {
-            val b = block.boundingBox
-            if (scaleFactor != 1.0f) {
-                b.left = (b.left / scaleFactor).toInt()
-                b.top = (b.top / scaleFactor).toInt()
-                b.right = (b.right / scaleFactor).toInt()
-                b.bottom = (b.bottom / scaleFactor).toInt()
-            }
-            b.offset(cropX, cropY)
-
-            for (line in block.lines) {
-                val lb = line.boundingBox
-                if (scaleFactor != 1.0f) {
-                    lb.left = (lb.left / scaleFactor).toInt()
-                    lb.top = (lb.top / scaleFactor).toInt()
-                    lb.right = (lb.right / scaleFactor).toInt()
-                    lb.bottom = (lb.bottom / scaleFactor).toInt()
-                }
-                lb.offset(cropX, cropY)
             }
         }
 
@@ -608,6 +600,7 @@ class TranslationOverlayService : Service() {
 
         // 11. Render overlay
         seamlessOverlayRenderer?.renderTranslations(listOf(mergedBlock), screenW, screenH, fullBitmap.width, fullBitmap.height)
+        pulseHeartbeat()
         DiagnosticLogger.log("Rendered merged subtitle: \"$mergedEnglish\" -> \"$translated\"")
     }
 
@@ -648,6 +641,7 @@ class TranslationOverlayService : Service() {
         try {
             bubbleView = LayoutInflater.from(this).inflate(R.layout.overlay_bubble, null)
             ivBubbleIcon = bubbleView?.findViewById(R.id.ivBubbleIcon)
+            viewHeartbeatDot = bubbleView?.findViewById(R.id.viewHeartbeatDot)
 
             val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -887,19 +881,22 @@ class TranslationOverlayService : Service() {
                     fullBitmap
                 }
 
+                val (screenW, screenH, _) = getRealScreenDimensions()
+
                 // ML Kit OCR with confidence >= 0.78 & English token linguistic filter (>= 60%)
-                val detectedBlocks = ocrEngine.recognizeText(ocrBitmap, bubbleBounds)
+                val detectedBlocks = ocrEngine.recognizeText(
+                    bitmap = ocrBitmap,
+                    excludedBounds = bubbleBounds,
+                    cropLeft = if (isCropped) cropX else 0,
+                    cropTop = if (isCropped) cropY else 0,
+                    scaleFactor = 1.0f,
+                    screenWidth = screenW,
+                    screenHeight = screenH
+                )
                 if (detectedBlocks.isEmpty()) {
                     showToast("لم يتم العثور على نصوص واضحة في القائمة")
                     updateBubbleVisualState()
                     return@launch
-                }
-
-                // If cropped, remap bounding boxes back to full screen space
-                if (isCropped) {
-                    for (block in detectedBlocks) {
-                        block.boundingBox.offset(cropX, cropY)
-                    }
                 }
 
                 // 6. Translate detected blocks
@@ -932,6 +929,7 @@ class TranslationOverlayService : Service() {
                     bitmapW = fullBitmap.width,
                     bitmapH = fullBitmap.height
                 )
+                pulseHeartbeat()
 
                 updateBubbleVisualState()
                 showToast("تم تثبيت ترجمة القائمة (انقر نقرة واحدة للإخفاء)")
@@ -992,6 +990,25 @@ class TranslationOverlayService : Service() {
             bubbleView?.background = backgroundDrawable
             bubbleView?.alpha = if (isAudioModeActive || hasPinned || isAutoTranslationActive) 1.0f else 0.85f
             ivBubbleIcon?.setColorFilter(Color.WHITE)
+        }
+    }
+
+    private fun pulseHeartbeat() {
+        mainHandler.post {
+            val dot = viewHeartbeatDot ?: return@post
+            dot.visibility = View.VISIBLE
+            dot.alpha = 1.0f
+            dot.scaleX = 1.3f
+            dot.scaleY = 1.3f
+            dot.animate()
+                .scaleX(1.0f)
+                .scaleY(1.0f)
+                .alpha(0.0f)
+                .setDuration(800L)
+                .withEndAction {
+                    dot.visibility = View.GONE
+                }
+                .start()
         }
     }
 

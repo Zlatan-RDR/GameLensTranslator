@@ -598,6 +598,21 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "تم ضبط المعايرة: شريط الترجمة السفلي", Toast.LENGTH_SHORT).show()
         }
 
+        binding.btnTestOverlay.setOnClickListener {
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this, "يرجى منح إذن الظهور فوق التطبيقات أولاً", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (isServiceRunning) {
+                val intent = Intent(this, TranslationOverlayService::class.java).apply {
+                    action = TranslationOverlayService.ACTION_TEST_OVERLAY
+                }
+                startService(intent)
+            } else {
+                Toast.makeText(this, "يرجى تشغيل الخدمة العائمة أولاً للتحقق من طبقة الترجمة", Toast.LENGTH_SHORT).show()
+            }
+        }
+
         binding.btnGrantOverlay.setOnClickListener {
             if (!Settings.canDrawOverlays(this)) {
                 val intent = Intent(
