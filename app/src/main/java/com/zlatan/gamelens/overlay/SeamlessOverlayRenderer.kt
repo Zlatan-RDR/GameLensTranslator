@@ -219,6 +219,10 @@ class SeamlessOverlayRenderer(private val context: Context) {
                     val combinedArabicText = combinedLines.joinToString("\n")
                     val overlayView = ArabicOverlayView(context, renderBox).apply {
                         bindTranslation(combinedArabicText, null)
+                        if (isOpaqueCover) {
+                            alpha = 1.0f
+                            background?.alpha = 255
+                        }
                     }
 
                     val layoutParams = FrameLayout.LayoutParams(targetW, targetH).apply {
@@ -392,13 +396,16 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val zoneH = (zoneBottom - zoneTop).coerceAtLeast((28 * density).toInt())
 
             if (isOpaqueCover) {
-                // 100% solid opaque dark (0xFF06080D, alpha = 255) positioned directly over bottom subtitle zone (76% to 94% screen height)
+                // 100% solid opaque dark (0xFF05070B, alpha = 255) positioned directly over bottom subtitle zone (76% to 94% screen height)
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(0xFF06080D.toInt())
+                    setColor(Color.argb(255, 5, 7, 11)) // 0xFF05070B
                     cornerRadius = 8f * density
+                    alpha = 255
                 }
                 sub.background = bg
+                sub.alpha = 1.0f
+                sub.background?.alpha = 255
                 sub.setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
 
                 val opaqueTop = (0.76f * screenH).toInt()

@@ -86,12 +86,12 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
+            prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).putBoolean("audio_translation_enabled", true).apply()
             binding.switchGameAudio.isChecked = true
             Toast.makeText(this, "تم تفعيل الترجمة الصوتية الداخلية للألعاب", Toast.LENGTH_SHORT).show()
         } else {
             binding.switchGameAudio.isChecked = false
-            prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).apply()
+            prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).putBoolean("audio_translation_enabled", false).apply()
             Toast.makeText(this, "إذن تسجيل الصوت مطلوب لترجمة صوت الألعاب", Toast.LENGTH_SHORT).show()
         }
         updateAudioModelStatus()
@@ -368,7 +368,7 @@ class MainActivity : AppCompatActivity() {
                             binding.tvAsrDownloadProgress.visibility = View.GONE
                             updateAudioModelStatus()
                             Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح! يمكنك تفعيله من المفتاح أدناه.", Toast.LENGTH_SHORT).show()
-                            binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
+                            binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, true)
                             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
                                 != PackageManager.PERMISSION_GRANTED
                             ) {
@@ -450,7 +450,7 @@ class MainActivity : AppCompatActivity() {
         binding.etApiKey.setText(prefs.getString(KEY_API_KEY, ""))
         binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions"))
 
-        binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
+        binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, true)
 
         val coverMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OPAQUE_COVER)
         if (coverMode == MODE_OFFSET_ABOVE) {
@@ -526,11 +526,11 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 } else {
-                    prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).apply()
+                    prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).putBoolean("audio_translation_enabled", true).apply()
                     Toast.makeText(this, "تم تفعيل الترجمة الصوتية الداخلية للألعاب", Toast.LENGTH_SHORT).show()
                 }
             } else {
-                prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).apply()
+                prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).putBoolean("audio_translation_enabled", false).apply()
                 Toast.makeText(this, "تم إيقاف الترجمة الصوتية", Toast.LENGTH_SHORT).show()
             }
         }

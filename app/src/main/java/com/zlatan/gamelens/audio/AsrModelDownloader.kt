@@ -36,6 +36,7 @@ object AsrModelDownloader {
 
     private const val TAG = "AsrModelDownloader"
     const val MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
+    const val SILERO_VAD_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
     private const val PART_FILE_NAME = "asr_model.tar.bz2.part"
     private const val EXPECTED_ARCHIVE_SIZE_ESTIMATE = 122L * 1024L * 1024L // ~122 MB
 
@@ -68,11 +69,25 @@ object AsrModelDownloader {
         val destDir = GameAudioTranslator.getAsrModelDir(context)
         val partFile = getPartFile(context)
 
-        // If model already fully installed, mark complete
+        // If model already fully installed (Zipformer int8 + Silero VAD), mark complete
         if (GameAudioTranslator.isAsrModelInstalled(context)) {
-            DiagnosticLogger.log("ASR Downloader: Model already installed and verified on disk")
+            DiagnosticLogger.log("ASR Downloader: Model and Silero VAD already installed and verified on disk")
             onStateChange(AsrDownloadState.Completed)
             return@withContext true
+        }
+
+        // Fast path: Zipformer int8 weights already installed, fetch Silero VAD (~1.8 MB)
+        if (GameAudioTranslator.hasZipformerFiles(context)) {
+            DiagnosticLogger.log("ASR Downloader: Zipformer installed, fetching Silero VAD (~1.8 MB)...")
+            onStateChange(AsrDownloadState.Downloading(50, 0, 1_800_000L))
+            val vadSuccess = downloadSileroVad(context)
+            if (vadSuccess && GameAudioTranslator.isAsrModelInstalled(context)) {
+                DiagnosticLogger.log("ASR Downloader: Silero VAD installed successfully (~1.8 MB)")
+                onStateChange(AsrDownloadState.Completed)
+                return@withContext true
+            } else {
+                DiagnosticLogger.log("ASR Downloader: Silero VAD fetch failed, retrying...")
+            }
         }
 
         try {
@@ -174,13 +189,20 @@ object AsrModelDownloader {
                 DiagnosticLogger.log("ASR Downloader: Deleted temporary archive part to save storage")
             }
 
+            // Also download Silero VAD (~1.8 MB)
+            DiagnosticLogger.log("ASR Downloader: Fetching Silero VAD (~1.8 MB)...")
+            val vadSuccess = downloadSileroVad(context)
+            if (!vadSuccess) {
+                DiagnosticLogger.log("ASR Downloader: Silero VAD download failed during unpack")
+            }
+
             val isVerified = GameAudioTranslator.isAsrModelInstalled(context)
             if (isVerified) {
-                DiagnosticLogger.log("ASR Downloader: All 4 int8 files verified on disk (~22 MB)")
+                DiagnosticLogger.log("ASR Downloader: All Zipformer int8 files + Silero VAD verified on disk (~24 MB total)")
                 onStateChange(AsrDownloadState.Completed)
                 return@withContext true
             } else {
-                throw IOException("Verification failed: Required Zipformer int8 weights missing after unpack")
+                throw IOException("Verification failed: Required Zipformer int8 weights or Silero VAD missing after unpack")
             }
 
         } catch (e: Exception) {
@@ -190,6 +212,55 @@ object AsrModelDownloader {
             // Keep partFile intact for HTTP Range resume!
             onStateChange(AsrDownloadState.Error(e.message ?: "Unknown download interruption", canResume = true))
             return@withContext false
+        }
+    }
+
+    fun downloadSileroVad(context: Context): Boolean {
+        val destDir = GameAudioTranslator.getAsrModelDir(context)
+        destDir.mkdirs()
+        val vadFile = GameAudioTranslator.getSileroVadFile(context)
+        if (vadFile.exists() && vadFile.length() > 500_000L) {
+            return true
+        }
+
+        val tempFile = File(destDir, "silero_vad.onnx.tmp")
+        try {
+            DiagnosticLogger.log("ASR Downloader: Downloading Silero VAD from $SILERO_VAD_URL...")
+            val request = Request.Builder().url(SILERO_VAD_URL).build()
+            val response = httpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                DiagnosticLogger.log("ASR Downloader: Silero VAD HTTP response failed code ${response.code}")
+                response.close()
+                return false
+            }
+            val body = response.body ?: run {
+                response.close()
+                return false
+            }
+            FileOutputStream(tempFile).use { fos ->
+                body.byteStream().use { input ->
+                    input.copyTo(fos)
+                }
+            }
+            if (tempFile.length() > 500_000L) {
+                if (vadFile.exists()) vadFile.delete()
+                val renamed = tempFile.renameTo(vadFile)
+                if (!renamed) {
+                    tempFile.copyTo(vadFile, overwrite = true)
+                    tempFile.delete()
+                }
+                DiagnosticLogger.log("ASR Downloader: Silero VAD installed successfully (${vadFile.length()} bytes)")
+                return true
+            } else {
+                DiagnosticLogger.log("ASR Downloader: Silero VAD file corrupted or too small (${tempFile.length()} bytes)")
+                tempFile.delete()
+                return false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed downloading Silero VAD: ${e.message}", e)
+            DiagnosticLogger.log("ASR Downloader: Silero VAD error: ${e.message}")
+            if (tempFile.exists()) tempFile.delete()
+            return false
         }
     }
 

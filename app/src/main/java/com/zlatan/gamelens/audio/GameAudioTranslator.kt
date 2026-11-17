@@ -18,6 +18,9 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
+import com.k2fsa.sherpa.onnx.SileroVadModelConfig
+import com.k2fsa.sherpa.onnx.Vad
+import com.k2fsa.sherpa.onnx.VadModelConfig
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.translation.TranslationManager
 import kotlinx.coroutines.CoroutineScope
@@ -52,16 +55,6 @@ class GameAudioTranslator(
         private const val TAG = "GameAudioTranslator"
         private const val SAMPLE_RATE = 16000
         private const val READ_BUFFER_SIZE = 2048
-        private const val MIN_ACTIVE_SPEECH_MS = 350L // 350ms speech duration before finalization
-        private const val SILENCE_PAUSE_FLUSH_MS = 420L // 420ms pause triggers finalization
-        private const val EXTRA_DANGLING_PAUSE_MS = 350L // +350ms wait window if utterance ends with dangling word
-        private const val MAX_MONOLOGUE_HARD_CAP_MS = 5500L // 5.5s hard cap for continuous monologues
-        private const val PARTIAL_POLL_INTERVAL_MS = 250L // 250ms live streaming partial poll
-        private const val PARTIAL_MIN_WORDS_DIFF = 3 // Translate partial text when >= 3 new words added
-
-        private val DANGLING_FUNCTION_WORDS = setOf(
-            "to", "the", "a", "an", "is", "are", "was", "were", "in", "on", "of", "and", "but", "that", "with", "for", "at", "by", "from"
-        )
 
         fun getAsrModelDir(context: Context): File {
             val dir = File(context.filesDir, "asr-model")
@@ -71,7 +64,11 @@ class GameAudioTranslator(
             return dir
         }
 
-        fun isAsrModelInstalled(context: Context): Boolean {
+        fun getSileroVadFile(context: Context): File {
+            return File(getAsrModelDir(context), "silero_vad.onnx")
+        }
+
+        fun hasZipformerFiles(context: Context): Boolean {
             val dir = getAsrModelDir(context)
             val hasEncoder = File(dir, "encoder.onnx").exists() || File(dir, "encoder.int8.onnx").exists() ||
                     File(dir, "encoder-epoch-99-avg-1.int8.onnx").exists() || File(dir, "encoder-epoch-99-avg-1.onnx").exists()
@@ -82,6 +79,12 @@ class GameAudioTranslator(
             val hasTokens = File(dir, "tokens.txt").exists()
             return hasEncoder && hasDecoder && hasJoiner && hasTokens
         }
+
+        fun isAsrModelInstalled(context: Context): Boolean {
+            val vadFile = getSileroVadFile(context)
+            val hasVad = vadFile.exists() && vadFile.length() > 500_000L
+            return hasZipformerFiles(context) && hasVad
+        }
     }
 
     private val audioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -90,6 +93,7 @@ class GameAudioTranslator(
     private var audioRecord: AudioRecord? = null
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
+    private var vad: Vad? = null
 
     @Volatile
     private var isRunning = false
@@ -136,6 +140,7 @@ class GameAudioTranslator(
             ?: File(dir, "joiner-epoch-99-avg-1.onnx").takeIf { it.exists() }
 
         val tokens = File(dir, "tokens.txt").takeIf { it.exists() }
+        val vadFile = getSileroVadFile(context).takeIf { it.exists() && it.length() > 500_000L }
 
         if (encoder != null && decoder != null && joiner != null && tokens != null) {
             try {
@@ -152,17 +157,41 @@ class GameAudioTranslator(
                 )
                 val config = OnlineRecognizerConfig(
                     modelConfig = modelConfig,
-                    enableEndpoint = true,
+                    enableEndpoint = false,
                     decodingMethod = "greedy_search"
                 )
                 val rec = OnlineRecognizer(assetManager = null, config = config)
                 recognizer = rec
                 stream = rec.createStream()
-                DiagnosticLogger.log("GameAudio: Sherpa-ONNX streaming ASR loaded successfully")
+                DiagnosticLogger.log("GameAudio: Sherpa-ONNX streaming ASR loaded (enableEndpoint=false)")
                 Log.i(TAG, "Sherpa-ONNX streaming recognizer initialized with local model files")
+
+                if (vadFile != null) {
+                    val sileroConfig = SileroVadModelConfig(
+                        model = vadFile.absolutePath,
+                        threshold = 0.50f,
+                        minSilenceDuration = 0.60f,
+                        minSpeechDuration = 0.25f,
+                        windowSize = 512,
+                        maxSpeechDuration = 15.0f
+                    )
+                    val vadConfig = VadModelConfig(
+                        sileroVadModelConfig = sileroConfig,
+                        sampleRate = SAMPLE_RATE,
+                        numThreads = 2,
+                        provider = "cpu",
+                        debug = false
+                    )
+                    vad = Vad(assetManager = null, config = vadConfig)
+                    DiagnosticLogger.log("GameAudio: Neural Silero VAD initialized (${vadFile.name})")
+                    Log.i(TAG, "Sherpa-ONNX Silero VAD initialized successfully")
+                } else {
+                    DiagnosticLogger.log("GameAudio: Silero VAD missing in ${dir.absolutePath}")
+                    Log.w(TAG, "Silero VAD file not found on disk")
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize Sherpa-ONNX: ${e.message}", e)
-                DiagnosticLogger.log("GameAudio: Sherpa-ONNX init failed: ${e.message}")
+                Log.e(TAG, "Failed to initialize Sherpa-ONNX or Vad: ${e.message}", e)
+                DiagnosticLogger.log("GameAudio: Sherpa/Vad init failed: ${e.message}")
             }
         } else {
             DiagnosticLogger.log("GameAudio: Model pack not in filesDir/asr-model/ (ASR pending pack)")
@@ -214,128 +243,43 @@ class GameAudioTranslator(
                 Log.i(TAG, "AudioRecord started recording game playback audio")
 
                 val shortBuffer = ShortArray(READ_BUFFER_SIZE)
-                var lastRecognizedPhrase = ""
-                var lastTranslatedWordCount = 0
-                var lastPartialPollTimeMs = 0L
-                var speechFrames = 0
-                var speechStartTimeMs = 0L
-                var lastSpeechDetectedTimeMs = 0L
-                var silenceStartTimeMs = 0L
-                var noiseFloorRms = 0.005f
 
                 while (isActive && isRunning) {
                     val readShorts = record.read(shortBuffer, 0, shortBuffer.size)
                     if (readShorts <= 0) continue
 
-                    // Calculate normalized float RMS energy for Adaptive Noise-Floor VAD
-                    var sumSquare = 0.0
                     val floatSamples = FloatArray(readShorts)
                     for (i in 0 until readShorts) {
-                        val s = shortBuffer[i]
-                        val f = s / 32768.0f
-                        floatSamples[i] = f
-                        sumSquare += (f * f).toDouble()
-                    }
-                    val currentRms = sqrt(sumSquare / readShorts).toFloat()
-
-                    // Track exponential moving average (EMA) of ambient noise/music floor
-                    if (speechStartTimeMs == 0L) {
-                        noiseFloorRms = noiseFloorRms * 0.95f + currentRms * 0.05f
-                    } else {
-                        noiseFloorRms = noiseFloorRms * 0.99f + min(currentRms, noiseFloorRms * 1.25f) * 0.01f
+                        floatSamples[i] = shortBuffer[i] / 32768.0f
                     }
 
-                    // Dynamic threshold: music cutscenes won't stall ASR because cutoff adapts to background music
-                    val silenceCutoff = max(noiseFloorRms * 1.40f, 0.008f)
-                    val isSpeechRms = currentRms >= silenceCutoff
-
+                    val activeVad = vad
                     val rec = recognizer
                     val st = stream
-                    val now = System.currentTimeMillis()
 
-                    if (isSpeechRms) {
-                        speechFrames++
-                        if (speechStartTimeMs == 0L) {
-                            speechStartTimeMs = now
-                            lastPartialPollTimeMs = now
-                        }
-                        lastSpeechDetectedTimeMs = now
-                        silenceStartTimeMs = 0L
+                    if (activeVad != null && rec != null && st != null) {
+                        activeVad.acceptWaveform(floatSamples)
 
-                        if (rec != null && st != null) {
-                            st.acceptWaveform(floatSamples, sampleRate = SAMPLE_RATE)
-                            while (rec.isReady(st)) {
-                                rec.decode(st)
-                            }
-                            val text = rec.getResult(st).text.trim()
-                            if (text.isNotBlank() && text != lastRecognizedPhrase) {
-                                lastRecognizedPhrase = text
-                            }
+                        while (!activeVad.empty()) {
+                            val segment = activeVad.front()
+                            activeVad.pop()
+                            val samples = segment.samples
+                            if (samples.isNotEmpty()) {
+                                // 0.4s trailing silence padding (6400 floats @ 16kHz) to flush Zipformer final state
+                                val paddedSamples = FloatArray(samples.size + 6400)
+                                System.arraycopy(samples, 0, paddedSamples, 0, samples.size)
 
-                            // Live Partial Translation While Speaking: Poll every 250ms; if >= 3 new words, translate in-place!
-                            if (now - lastPartialPollTimeMs >= PARTIAL_POLL_INTERVAL_MS && lastRecognizedPhrase.isNotBlank()) {
-                                lastPartialPollTimeMs = now
-                                val words = lastRecognizedPhrase.split(Regex("\\s+")).filter { it.isNotBlank() }
-                                if (words.size - lastTranslatedWordCount >= PARTIAL_MIN_WORDS_DIFF) {
-                                    lastTranslatedWordCount = words.size
-                                    translatePartialInPlace(lastRecognizedPhrase)
-                                }
-                            }
-
-                            val phraseDuration = now - speechStartTimeMs
-                            val isEndpoint = rec.isEndpoint(st)
-                            val isMonologueHardCap = phraseDuration >= MAX_MONOLOGUE_HARD_CAP_MS && (lastRecognizedPhrase.isNotBlank() || rec.getResult(st).text.isNotBlank())
-
-                            if (isEndpoint || isMonologueHardCap) {
-                                val latestText = rec.getResult(st).text.trim().ifBlank { lastRecognizedPhrase }
-                                if (phraseDuration >= MIN_ACTIVE_SPEECH_MS && latestText.isNotBlank()) {
-                                    flushAndTranslate(latestText, phraseDuration)
-                                }
-                                rec.reset(st)
-                                lastRecognizedPhrase = ""
-                                lastTranslatedWordCount = 0
-                                lastPartialPollTimeMs = 0L
-                                speechFrames = 0
-                                speechStartTimeMs = 0L
-                                silenceStartTimeMs = 0L
-                            }
-                        }
-                    } else {
-                        // Ambient floor or silence
-                        if (speechStartTimeMs > 0L) {
-                            if (silenceStartTimeMs == 0L) {
-                                silenceStartTimeMs = now
-                            }
-                            val silenceDuration = now - silenceStartTimeMs
-                            val speechDuration = lastSpeechDetectedTimeMs - speechStartTimeMs
-
-                            if (rec != null && st != null) {
-                                st.acceptWaveform(floatSamples, sampleRate = SAMPLE_RATE)
+                                st.acceptWaveform(paddedSamples, sampleRate = SAMPLE_RATE)
+                                st.inputFinished()
                                 while (rec.isReady(st)) {
                                     rec.decode(st)
                                 }
                                 val text = rec.getResult(st).text.trim()
-                                if (text.isNotBlank() && text != lastRecognizedPhrase) {
-                                    lastRecognizedPhrase = text
-                                }
+                                rec.reset(st)
 
-                                val isEndpoint = rec.isEndpoint(st)
-                                val extraDanglingWait = if (endsWithDanglingWord(lastRecognizedPhrase)) EXTRA_DANGLING_PAUSE_MS else 0L
-                                val requiredSilence = SILENCE_PAUSE_FLUSH_MS + extraDanglingWait
-
-                                // Trigger finalization when silenceDuration >= 420ms (+350ms if dangling word) OR isEndpoint
-                                if ((silenceDuration >= requiredSilence && speechDuration >= MIN_ACTIVE_SPEECH_MS) || isEndpoint) {
-                                    val latestText = rec.getResult(st).text.trim().ifBlank { lastRecognizedPhrase }
-                                    if (speechDuration >= MIN_ACTIVE_SPEECH_MS && latestText.isNotBlank()) {
-                                        flushAndTranslate(latestText, speechDuration)
-                                    }
-                                    rec.reset(st)
-                                    lastRecognizedPhrase = ""
-                                    lastTranslatedWordCount = 0
-                                    lastPartialPollTimeMs = 0L
-                                    speechFrames = 0
-                                    speechStartTimeMs = 0L
-                                    silenceStartTimeMs = 0L
+                                if (text.isNotBlank()) {
+                                    val durationMs = (samples.size * 1000L) / SAMPLE_RATE
+                                    flushAndTranslate(text, durationMs)
                                 }
                             }
                         }
@@ -348,24 +292,6 @@ class GameAudioTranslator(
                 isRunning = false
                 onStateChanged?.invoke()
             }
-        }
-    }
-
-    private suspend fun translatePartialInPlace(phrase: String) {
-        val trimmed = phrase.trim()
-        if (trimmed.isBlank()) return
-
-        val normalizedEn = normalizeAsrText(trimmed)
-        val patchMatch = com.zlatan.gamelens.patch.PatchManager.findAsrMatch(normalizedEn)
-        val arabicText = if (patchMatch != null) {
-            patchMatch.second
-        } else {
-            val trans = translationManager.translate(normalizedEn, isFinal = false)
-            translationManager.deduplicateRepetitions(trans)
-        }
-
-        if (arabicText.isNotBlank() && !arabicText.equals(normalizedEn, ignoreCase = true)) {
-            onSubtitleReady(arabicText)
         }
     }
 
@@ -391,14 +317,7 @@ class GameAudioTranslator(
         if (finalArabic.isNotBlank() && !finalArabic.equals(normalizedEn, ignoreCase = true)) {
             DiagnosticLogger.log("ASR Subtitle: \"$finalArabic\"")
             onSubtitleReady(finalArabic)
-            // Note: translationManager.translate already logs to Session Exporter.
-            // Duplicate write avoided for patch matches and repeated calls.
         }
-    }
-
-    private fun endsWithDanglingWord(text: String): Boolean {
-        val lastWord = text.trim().lowercase().split(Regex("[^a-zA-Z]+")).lastOrNull { it.isNotBlank() } ?: return false
-        return DANGLING_FUNCTION_WORDS.contains(lastWord)
     }
 
     private fun normalizeAsrText(rawText: String): String {
@@ -425,6 +344,14 @@ class GameAudioTranslator(
             audioRecord?.release()
         } catch (_: Exception) {}
         audioRecord = null
+
+        try {
+            vad?.clear()
+        } catch (_: Exception) {}
+        try {
+            vad?.release()
+        } catch (_: Exception) {}
+        vad = null
 
         try {
             stream?.release()

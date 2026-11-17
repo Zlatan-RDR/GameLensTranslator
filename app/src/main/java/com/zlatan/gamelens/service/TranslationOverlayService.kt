@@ -413,7 +413,7 @@ class TranslationOverlayService : Service() {
 
             // Initialize Internal Game Audio Translation (Sherpa-ONNX + AudioPlaybackCapture)
             val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-            val isAudioEnabled = prefs.getBoolean("audio_translation_enabled", false) || prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, false)
+            val isAudioEnabled = prefs.getBoolean("audio_translation_enabled", true) && prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, true)
             if (isAudioEnabled && GameAudioTranslator.isAsrModelInstalled(this)) {
                 startAudioTranslation()
             } else {
