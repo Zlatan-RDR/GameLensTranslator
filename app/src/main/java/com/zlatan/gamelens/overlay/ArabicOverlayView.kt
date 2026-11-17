@@ -46,24 +46,21 @@ class ArabicOverlayView(
 
         val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
-        val bgColor = if (isOpaqueCover) Color.argb(255, 5, 7, 11) else 0xD910141D.toInt()
+        val bgColor = Color.argb(255, 5, 7, 11) // 100% solid opaque #FF05070B
 
         val cornerRadiusPx = 4f * resources.displayMetrics.density
         val backgroundDrawable = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             setColor(bgColor)
             cornerRadius = cornerRadiusPx
-            if (isOpaqueCover) {
-                alpha = 255
-            } else {
+            alpha = 255
+            if (!isOpaqueCover) {
                 setStroke((1.2f * resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
             }
         }
         background = backgroundDrawable
-        if (isOpaqueCover) {
-            this.alpha = 1.0f
-            background?.alpha = 255
-        }
+        this.alpha = 1.0f
+        background?.alpha = 255
 
         // Dynamic Text Auto-Sizing with guaranteed readable minimum
         calculateOptimalTextSize(translatedText, targetBox.width(), targetBox.height())

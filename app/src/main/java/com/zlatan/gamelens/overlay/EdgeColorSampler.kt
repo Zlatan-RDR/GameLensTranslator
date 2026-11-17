@@ -12,8 +12,8 @@ data class SampledColorScheme(
 object EdgeColorSampler {
 
     private const val DEFAULT_MARGIN_PX = 3
-    private const val DEFAULT_BG_ALPHA = 225 // High opacity to completely mask original text
-    private val FALLBACK_BG_COLOR = 0xD9121212.toInt() // Dark translucent default
+    private const val DEFAULT_BG_ALPHA = 255 // 100% solid opacity to completely mask original text
+    private val FALLBACK_BG_COLOR = Color.argb(255, 5, 7, 11) // 100% solid opaque #FF05070B
     private val FALLBACK_TEXT_COLOR = 0xFFFFFFFF.toInt() // White
 
     /**

@@ -368,6 +368,12 @@ class TranslationManager(
         // 1. High-frequency specific ML Kit glued words and contractions
         sanitized = sanitized.replace("\u0645\u0627\u0630 ", "\u0645\u0627\u0630\u0627 ")
         sanitized = sanitized.replace(Regex("\\b\\u0645\\u0627\\u0630\\b"), "\u0645\u0627\u0630\u0627")
+        sanitized = sanitized.replace("\u0645\u0627 \u0632 \u0627\u0644\u0648\u0627", "\u0645\u0627 \u0632\u0627\u0644\u0648\u0627")
+        sanitized = sanitized.replace(Regex("\\b\\u0644\\u062F\\u064A\\u0647\\u0645([\\u0621-\\u064A]{3,})\\b"), "\u0644\u062F\u064A\u0647\u0645 $1")
+        sanitized = sanitized.replace(Regex("\\b\\u0623\\u0628\\u062F\\u0627([\\u0621-\\u064A]{3,})\\b"), "\u0623\u0628\u062F\u0627\u064B $1")
+        sanitized = sanitized.replace(Regex("\\b\\u0642\\u0627\\u0644([\\u0621-\\u064A]{2,})\\b"), "\u0642\u0627\u0644 $1")
+        sanitized = sanitized.replace(Regex("\\b\\u0645\\u0639\\u062F\\u0648\\u0643\\b"), "\u0645\u0639 \u0639\u062F\u0648\u0643")
+        sanitized = sanitized.replace(Regex("\\b\\u0645\\u0627\\u0644\\u0634\\u0631\\u064A\\u0643\\b"), "\u0645\u0627 \u0627\u0644\u0634\u0631\u064A\u0643")
         sanitized = sanitized.replace(Regex("\\b\\u0647\\u0630\\u0647\\u064A\\b"), "\u0647\u0630\u0647 \u0647\u064A")
         sanitized = sanitized.replace(Regex("\\b\\u0627\\u0644\\u062A\\u064A\\u062C\\u0628\\b"), "\u0627\u0644\u062A\u064A \u064A\u062C\u0628")
         sanitized = sanitized.replace(Regex("\\b\\u0627\\u0644\\u0630\\u064A\\u064A\\u062C\\u0628\\b"), "\u0627\u0644\u0630\u064A \u064A\u062C\u0628")

@@ -25,13 +25,14 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
     companion object {
         private const val TAG = "SeamlessRenderer"
-        private val FALLBACK_SCHEME = SampledColorScheme(0xD9121212.toInt(), Color.WHITE)
+        private val FALLBACK_SCHEME = SampledColorScheme(Color.argb(255, 5, 7, 11), Color.WHITE)
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var overlayContainer: FrameLayout? = null
+    private var containerParams: WindowManager.LayoutParams? = null
     private var isContainerAttached = false
     private var isVisible = true
 
@@ -79,6 +80,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             gravity = Gravity.TOP or Gravity.LEFT
             x = 0
             y = 0
+            alpha = 1.0f
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 setFitInsetsTypes(0)
             }
@@ -86,6 +88,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             }
         }
+        containerParams = params
 
         // Centered bottom cinematic subtitle bar for live game audio transcription
         val subView = TextView(context).apply {
@@ -103,11 +106,12 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                setColor(0xE60B0F17.toInt()) // Dark-translucent cinematic #E60B0F17
+                setColor(Color.argb(255, 5, 7, 11)) // Solid opaque #FF05070B
                 cornerRadius = 10f * context.resources.displayMetrics.density
-                setStroke((1.5f * context.resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+                alpha = 255
             }
             background = bg
+            alpha = 1.0f
             visibility = View.GONE
         }
 
@@ -396,6 +400,17 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val zoneH = (zoneBottom - zoneTop).coerceAtLeast((28 * density).toInt())
 
             if (isOpaqueCover) {
+                containerParams?.let { cp ->
+                    if (cp.alpha != 1.0f) {
+                        cp.alpha = 1.0f
+                        try {
+                            if (isContainerAttached && overlayContainer != null) {
+                                windowManager.updateViewLayout(overlayContainer, cp)
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+
                 // 100% solid opaque dark (0xFF05070B, alpha = 255) positioned directly over bottom subtitle zone (76% to 94% screen height)
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
@@ -425,11 +440,14 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 // Offset Above Mode: position the Arabic subtitle bar cleanly above the calibrated bottom subtitle zone with zero overlap
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(0xD90B0F17.toInt())
+                    setColor(Color.argb(255, 5, 7, 11)) // Solid opaque #FF05070B
                     cornerRadius = 10f * density
+                    alpha = 255
                     setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
                 }
                 sub.background = bg
+                sub.alpha = 1.0f
+                sub.background?.alpha = 255
                 sub.setPadding((16 * density).toInt(), (8 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
 
                 val targetTop = (zoneTop - zoneH - (8 * density).toInt()).coerceAtLeast(0)
