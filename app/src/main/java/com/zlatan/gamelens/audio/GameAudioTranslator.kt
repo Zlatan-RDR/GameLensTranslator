@@ -94,6 +94,8 @@ class GameAudioTranslator(
     private var recognizer: OnlineRecognizer? = null
     private var stream: OnlineStream? = null
     private var vad: Vad? = null
+    private var pendingEnglishBuffer: String = ""
+    private var lastSegmentEndTimestampMs: Long = 0L
 
     @Volatile
     private var isRunning = false
@@ -170,10 +172,10 @@ class GameAudioTranslator(
                     val sileroConfig = SileroVadModelConfig(
                         model = vadFile.absolutePath,
                         threshold = 0.50f,
-                        minSilenceDuration = 0.60f,
+                        minSilenceDuration = 0.44f,
                         minSpeechDuration = 0.25f,
                         windowSize = 512,
-                        maxSpeechDuration = 15.0f
+                        maxSpeechDuration = 8.0f
                     )
                     val vadConfig = VadModelConfig(
                         sileroVadModelConfig = sileroConfig,
@@ -299,22 +301,50 @@ class GameAudioTranslator(
         val trimmed = phrase.trim()
         if (trimmed.isBlank()) return
 
-        // Normalize ASR unpunctuated ALL CAPS to clean sentence case with terminal period
-        val normalizedEn = normalizeAsrText(trimmed)
-        DiagnosticLogger.log("ASR Voice ($durationMs ms): \"$normalizedEn\"")
+        val nowMs = System.currentTimeMillis()
+        val normalizedRaw = normalizeAsrText(trimmed)
+        val currentText = translationManager.normalizeAsrTranscript(normalizedRaw).trim()
+        if (currentText.isBlank()) return
+
+        val gapMs = if (lastSegmentEndTimestampMs > 0L) nowMs - lastSegmentEndTimestampMs else Long.MAX_VALUE
+
+        val shouldStitch = pendingEnglishBuffer.isNotEmpty() && (
+            (translationManager.isSyntacticallyIncomplete(pendingEnglishBuffer) && gapMs <= 2200L) ||
+            (translationManager.isContinuationClause(currentText) && gapMs <= 2000L) ||
+            (gapMs <= 1350L && (pendingEnglishBuffer.length + currentText.length) <= 170)
+        )
+
+        val mergedEnglish: String
+        if (shouldStitch) {
+            val prevClean = if (pendingEnglishBuffer.endsWith(".")) {
+                val base = pendingEnglishBuffer.dropLast(1).trim()
+                if (base.split(Regex("\\s+")).size <= 3) "$base," else pendingEnglishBuffer
+            } else {
+                pendingEnglishBuffer
+            }
+            mergedEnglish = "$prevClean $currentText"
+            pendingEnglishBuffer = mergedEnglish
+            DiagnosticLogger.log("ASR Clause Stitch (gap=${gapMs}ms): \"$mergedEnglish\"")
+        } else {
+            mergedEnglish = currentText
+            pendingEnglishBuffer = currentText
+        }
+        lastSegmentEndTimestampMs = nowMs
+
+        DiagnosticLogger.log("ASR Voice ($durationMs ms): \"$mergedEnglish\"")
 
         // 1. Check Fuzzy Patch Auto-Correction (snaps ASR phonetic typos like "caver" -> "cover")
-        val patchMatch = com.zlatan.gamelens.patch.PatchManager.findAsrMatch(normalizedEn)
+        val patchMatch = com.zlatan.gamelens.patch.PatchManager.findAsrMatch(mergedEnglish)
         val finalArabic = if (patchMatch != null) {
             val (correctedEn, patchArabic) = patchMatch
-            DiagnosticLogger.log("ASR Patch Snap: \"$normalizedEn\" -> \"$correctedEn\" = \"$patchArabic\"")
+            DiagnosticLogger.log("ASR Patch Snap: \"$mergedEnglish\" -> \"$correctedEn\" = \"$patchArabic\"")
             patchArabic
         } else {
-            val arabicTranslation = translationManager.translate(normalizedEn, isFinal = true)
+            val arabicTranslation = translationManager.translate(mergedEnglish, isFinal = true)
             translationManager.deduplicateRepetitions(arabicTranslation)
         }
 
-        if (finalArabic.isNotBlank() && !finalArabic.equals(normalizedEn, ignoreCase = true)) {
+        if (finalArabic.isNotBlank() && !finalArabic.equals(mergedEnglish, ignoreCase = true)) {
             DiagnosticLogger.log("ASR Subtitle: \"$finalArabic\"")
             onSubtitleReady(finalArabic)
         }
@@ -362,6 +392,9 @@ class GameAudioTranslator(
             recognizer?.release()
         } catch (_: Exception) {}
         recognizer = null
+
+        pendingEnglishBuffer = ""
+        lastSegmentEndTimestampMs = 0L
 
         audioScope.cancel()
         DiagnosticLogger.log("GameAudio: Stopped and released")

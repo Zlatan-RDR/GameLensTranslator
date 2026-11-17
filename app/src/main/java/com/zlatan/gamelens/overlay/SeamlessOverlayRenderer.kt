@@ -444,7 +444,8 @@ class SeamlessOverlayRenderer(private val context: Context) {
             sub.text = arabicText
             sub.visibility = View.VISIBLE
             mainHandler.removeCallbacks(hideSubtitleRunnable)
-            mainHandler.postDelayed(hideSubtitleRunnable, 2000L)
+            val holdMs = (4200L + arabicText.length * 65L).coerceIn(5000L, 10000L)
+            mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
         }
     }
 

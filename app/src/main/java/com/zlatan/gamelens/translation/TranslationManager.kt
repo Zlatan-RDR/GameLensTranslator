@@ -45,6 +45,26 @@ class TranslationManager(
         private const val TAG = "TranslationManager"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
+        private val DANGLING_WORDS = setOf(
+            "to", "for", "with", "and", "but", "or", "that", "which", "who", "if", "when", "while",
+            "because", "the", "a", "an", "my", "your", "his", "her", "their", "our", "is", "are",
+            "was", "were", "will", "would", "can", "could", "should", "must", "have", "has", "had",
+            "in", "on", "at", "from", "of", "by", "as", "just", "not"
+        )
+
+        private val CONTINUATION_WORDS = setOf(
+            "and", "but", "or", "so", "because", "which", "who", "that", "if", "when", "while", "until", "unless"
+        )
+
+        private val COMMON_VERBS = setOf(
+            "is", "are", "was", "were", "am", "be", "been", "being",
+            "do", "does", "did", "done", "have", "has", "had",
+            "go", "goes", "went", "gone", "come", "came", "see", "saw", "seen",
+            "run", "ran", "stop", "stopped", "wait", "waited", "look", "looked",
+            "kill", "killed", "shoot", "shot", "take", "took", "taken",
+            "get", "got", "gotten", "help", "helped", "hide", "hid", "move", "moved"
+        )
+
         /**
          * Quick static check for service startup gate.
          */
@@ -168,7 +188,8 @@ class TranslationManager(
      * 6. Session auto-exporter for community patch generation
      */
     suspend fun translate(text: String, isFinal: Boolean = true): String = withContext(Dispatchers.IO) {
-        val trimmed = text.trim()
+        val asrRepaired = normalizeAsrTranscript(text)
+        val trimmed = asrRepaired.trim()
         if (trimmed.isEmpty()) return@withContext ""
 
         // 0. Mandatory 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86)
@@ -287,6 +308,55 @@ class TranslationManager(
     }
 
     /**
+     * Phonetic ASR Error Repair for common Zipformer phonetic slips.
+     * Snaps misrecognized terms to canon names and phrases before PatchManager or ML Kit.
+     */
+    fun normalizeAsrTranscript(englishText: String): String {
+        if (englishText.isBlank()) return ""
+        var sanitized = englishText.trim()
+        sanitized = sanitized.replace(Regex("(?i)\\bforty servant\\b"), "47")
+        sanitized = sanitized.replace(Regex("(?i)\\bbenjamin trous\\b"), "Benjamin Travis")
+        sanitized = sanitized.replace(Regex("(?i)\\bdiana burne\\b"), "Diana Burnwood")
+        sanitized = sanitized.replace(Regex("(?i)\\bjohnnie has been wired\\b"), "the money has been wired")
+        sanitized = sanitized.replace(Regex("(?i)\\btrees and\\b"), "treasonous")
+        return sanitized
+    }
+
+    /**
+     * Returns true if the utterance is short (<= 2 words) and lacks a verb,
+     * or ends with a dangling preposition, conjunction, auxiliary verb, or article.
+     */
+    fun isSyntacticallyIncomplete(englishText: String): Boolean {
+        val cleaned = englishText.trim().trimEnd('.', '?', '!', ',', ';', ':')
+        if (cleaned.isBlank()) return true
+        val words = cleaned.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (words.isEmpty()) return true
+
+        val lastWord = words.last().lowercase().replace(Regex("[^a-z]"), "")
+        if (DANGLING_WORDS.contains(lastWord)) {
+            return true
+        }
+
+        if (words.size <= 2) {
+            val hasVerb = words.any { COMMON_VERBS.contains(it.lowercase().replace(Regex("[^a-z]"), "")) }
+            if (!hasVerb) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Returns true if the next clause starts with a coordinating/subordinating conjunction or relative pronoun.
+     */
+    fun isContinuationClause(nextEnglish: String): Boolean {
+        val cleaned = nextEnglish.trim()
+        if (cleaned.isBlank()) return false
+        val firstWord = cleaned.split(Regex("\\s+")).firstOrNull()?.lowercase()?.replace(Regex("[^a-z]"), "") ?: return false
+        return CONTINUATION_WORDS.contains(firstWord)
+    }
+
+    /**
      * Unicode-safe spacing sanitizer that repairs glued Arabic words produced by ML Kit neural boundaries.
      * Inserts spaces between non-connecting terminal letters and demonstrative/article prefixes,
      * and handles known frequent ML Kit contraction bugs (e.g. هذهي -> هذه هي, التيجب -> التي يجب).
@@ -296,6 +366,8 @@ class TranslationManager(
         var sanitized = arabicText
 
         // 1. High-frequency specific ML Kit glued words and contractions
+        sanitized = sanitized.replace("\u0645\u0627\u0630 ", "\u0645\u0627\u0630\u0627 ")
+        sanitized = sanitized.replace(Regex("\\b\\u0645\\u0627\\u0630\\b"), "\u0645\u0627\u0630\u0627")
         sanitized = sanitized.replace(Regex("\\b\\u0647\\u0630\\u0647\\u064A\\b"), "\u0647\u0630\u0647 \u0647\u064A")
         sanitized = sanitized.replace(Regex("\\b\\u0627\\u0644\\u062A\\u064A\\u062C\\u0628\\b"), "\u0627\u0644\u062A\u064A \u064A\u062C\u0628")
         sanitized = sanitized.replace(Regex("\\b\\u0627\\u0644\\u0630\\u064A\\u064A\\u062C\\u0628\\b"), "\u0627\u0644\u0630\u064A \u064A\u062C\u0628")
