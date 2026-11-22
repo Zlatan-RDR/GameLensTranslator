@@ -68,10 +68,12 @@ class TranslationOverlayService : Service() {
         const val ACTION_STOP = "com.zlatan.gamelens.ACTION_STOP"
         const val ACTION_CALIBRATE = "com.zlatan.gamelens.ACTION_CALIBRATE"
         const val ACTION_UPDATE_PROJECTION = "com.zlatan.gamelens.ACTION_UPDATE_PROJECTION"
+        const val ACTION_UPDATE_FONT_SIZE = "com.zlatan.gamelens.ACTION_UPDATE_FONT_SIZE"
         const val ACTION_TEST_OVERLAY = "com.zlatan.gamelens.ACTION_TEST_OVERLAY"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_AUTO_START_AUDIO = "extra_auto_start_audio"
+        const val EXTRA_FONT_SIZE_SP = "extra_font_size_sp"
 
         private const val NOTIFICATION_CHANNEL_ID = "gamelens_translation_channel"
         private const val NOTIFICATION_ID = 1001
@@ -299,6 +301,10 @@ class TranslationOverlayService : Service() {
             }
             ACTION_CALIBRATE -> {
                 startVisualCalibration()
+            }
+            ACTION_UPDATE_FONT_SIZE -> {
+                val fontSize = intent.getFloatExtra(EXTRA_FONT_SIZE_SP, 18f)
+                seamlessOverlayRenderer?.updateFontSize(fontSize)
             }
             ACTION_UPDATE_PROJECTION -> {
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)

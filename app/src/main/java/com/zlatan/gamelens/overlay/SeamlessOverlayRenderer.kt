@@ -90,13 +90,16 @@ class SeamlessOverlayRenderer(private val context: Context) {
         }
         containerParams = params
 
+        val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+        val initialFontSize = prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, 18f)
+
         // Centered bottom cinematic subtitle bar for live game audio transcription
         val subView = TextView(context).apply {
             textDirection = View.TEXT_DIRECTION_RTL
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, initialFontSize)
             typeface = Typeface.DEFAULT_BOLD
             includeFontPadding = false
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
@@ -386,6 +389,8 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
             val calRect = CalibrationOverlay.getCalibratedRect(prefs)
+            val fontSizeSp = prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, 18f)
+            sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSizeSp)
 
             val metrics = context.resources.displayMetrics
             val screenW = metrics.widthPixels
@@ -461,9 +466,16 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
             sub.text = arabicText
             sub.visibility = View.VISIBLE
+            com.zlatan.gamelens.diag.SubtitleHistoryManager.addEntry("", arabicText)
             mainHandler.removeCallbacks(hideSubtitleRunnable)
             val holdMs = (4200L + arabicText.length * 65L).coerceIn(5000L, 10000L)
             mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
+        }
+    }
+
+    fun updateFontSize(fontSizeSp: Float) {
+        mainHandler.post {
+            subtitleView?.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSizeSp)
         }
     }
 

@@ -96,15 +96,17 @@ class GameAudioTranslator(
     private var vad: Vad? = null
     private var pendingEnglishBuffer: String = ""
     private var lastSegmentEndTimestampMs: Long = 0L
-    private val preSpeechRingBuffer = PreSpeechRingBuffer(5760)
+    private var lastMatchedPatchTargetNormalized: String = ""
+    private var lastMatchedPatchTimestampMs: Long = 0L
+    private val preSpeechRingBuffer = PreSpeechRingBuffer(8000)
     private var preSpeechSnapshot: FloatArray? = null
     private var wasSpeechDetected: Boolean = false
 
     /**
-     * Circular ring buffer holding the last 5,760 audio samples (360ms at 16kHz) during idle periods.
+     * Circular ring buffer holding the last 8,000 audio samples (500ms at 16kHz) during idle periods.
      * When VAD triggers speech onset, this buffer is prepended to the speech segment to eliminate onset clipping.
      */
-    private class PreSpeechRingBuffer(val capacity: Int = 5760) {
+    private class PreSpeechRingBuffer(val capacity: Int = 8000) {
         private val buffer = FloatArray(capacity)
         private var writeIndex = 0
         private var count = 0
@@ -211,9 +213,9 @@ class GameAudioTranslator(
                 if (vadFile != null) {
                     val sileroConfig = SileroVadModelConfig(
                         model = vadFile.absolutePath,
-                        threshold = 0.50f,
+                        threshold = 0.40f,
                         minSilenceDuration = 0.44f,
-                        minSpeechDuration = 0.25f,
+                        minSpeechDuration = 0.18f,
                         windowSize = 512,
                         maxSpeechDuration = 8.0f
                     )
@@ -309,7 +311,7 @@ class GameAudioTranslator(
                             wasSpeechDetected = true
                         } else if (!isSpeech) {
                             wasSpeechDetected = false
-                            // Maintain rolling 360ms pre-speech audio buffer while idle
+                            // Maintain rolling 500ms pre-speech audio buffer while idle
                             preSpeechRingBuffer.write(floatSamples)
                         }
 
@@ -318,7 +320,7 @@ class GameAudioTranslator(
                             activeVad.pop()
                             val samples = segment.samples
                             if (samples.isNotEmpty()) {
-                                // Prepend 360ms pre-speech audio to recover onset syllables
+                                // Prepend 500ms pre-speech audio to recover onset syllables
                                 val preSamples = preSpeechSnapshot
                                 preSpeechSnapshot = null // consumed for this utterance
 
@@ -370,6 +372,24 @@ class GameAudioTranslator(
         val currentText = translationManager.normalizeAsrTranscript(normalizedRaw).trim()
         if (currentText.isBlank()) return
 
+        // 0. Suppress Post-Patch Tail Fragments:
+        // If a new short utterance (<= 4 words) arrives within 2800ms of a patch match
+        // and its last word matches the suffix of lastMatchedPatchTargetNormalized (e.g. "vanish"), discard it.
+        if (lastMatchedPatchTargetNormalized.isNotEmpty() && (nowMs - lastMatchedPatchTimestampMs) <= 2800L) {
+            val words = currentText.split(Regex("\\s+")).filter { it.isNotBlank() }
+            if (words.size <= 4) {
+                val cleanLastWord = words.last().lowercase().replace(Regex("[^a-z0-9]"), "")
+                val targetWords = lastMatchedPatchTargetNormalized.split(Regex("\\s+")).filter { it.isNotBlank() }
+                val targetLastWord = targetWords.lastOrNull() ?: ""
+                if (cleanLastWord.isNotEmpty() && (cleanLastWord == targetLastWord || lastMatchedPatchTargetNormalized.endsWith(cleanLastWord))) {
+                    DiagnosticLogger.log("ASR Tail Echo Discarded (${nowMs - lastMatchedPatchTimestampMs}ms, word='$cleanLastWord'): \"$currentText\"")
+                    pendingEnglishBuffer = ""
+                    lastSegmentEndTimestampMs = nowMs
+                    return
+                }
+            }
+        }
+
         val gapMs = if (lastSegmentEndTimestampMs > 0L) nowMs - lastSegmentEndTimestampMs else Long.MAX_VALUE
 
         val shouldStitch = pendingEnglishBuffer.isNotEmpty() && (
@@ -401,6 +421,8 @@ class GameAudioTranslator(
         val patchMatch = com.zlatan.gamelens.patch.PatchManager.findAsrMatch(mergedEnglish)
         val finalArabic = if (patchMatch != null) {
             val (correctedEn, patchArabic) = patchMatch
+            lastMatchedPatchTargetNormalized = com.zlatan.gamelens.patch.PatchManager.normalizeText(correctedEn)
+            lastMatchedPatchTimestampMs = nowMs
             DiagnosticLogger.log("ASR Patch Snap: \"$mergedEnglish\" -> \"$correctedEn\" = \"$patchArabic\"")
             patchArabic
         } else {
@@ -410,6 +432,7 @@ class GameAudioTranslator(
 
         if (finalArabic.isNotBlank() && !finalArabic.equals(mergedEnglish, ignoreCase = true)) {
             DiagnosticLogger.log("ASR Subtitle: \"$finalArabic\"")
+            com.zlatan.gamelens.diag.SubtitleHistoryManager.addEntry(mergedEnglish, finalArabic)
             onSubtitleReady(finalArabic)
         }
     }
@@ -459,6 +482,8 @@ class GameAudioTranslator(
 
         pendingEnglishBuffer = ""
         lastSegmentEndTimestampMs = 0L
+        lastMatchedPatchTargetNormalized = ""
+        lastMatchedPatchTimestampMs = 0L
         preSpeechRingBuffer.clear()
         preSpeechSnapshot = null
         wasSpeechDetected = false

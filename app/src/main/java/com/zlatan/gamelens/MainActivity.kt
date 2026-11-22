@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -28,6 +29,7 @@ import com.zlatan.gamelens.audio.GameAudioTranslator
 import com.zlatan.gamelens.databinding.ActivityMainBinding
 import com.zlatan.gamelens.db.TranslationCacheManager
 import com.zlatan.gamelens.diag.DiagnosticLogger
+import com.zlatan.gamelens.diag.SubtitleHistoryManager
 import com.zlatan.gamelens.glossary.GlossaryManager
 import com.zlatan.gamelens.overlay.CalibrationOverlay
 import com.zlatan.gamelens.patch.PatchManager
@@ -50,6 +52,8 @@ class MainActivity : AppCompatActivity() {
         const val KEY_API_ENDPOINT = "key_api_endpoint"
         const val KEY_GAME_AUDIO_ENABLED = "key_game_audio_enabled"
         const val KEY_OVERLAY_RENDER_MODE = "overlay_render_mode"
+        const val KEY_SUBTITLE_FONT_SIZE_SP = "key_subtitle_font_size_sp"
+        const val DEFAULT_FONT_SIZE_SP = 18f
         const val MODE_OPAQUE_COVER = "opaque_cover"
         const val MODE_OFFSET_ABOVE = "offset_above"
 
@@ -207,6 +211,7 @@ class MainActivity : AppCompatActivity() {
         setupListeners()
         requestNotificationPermissionIfNeeded()
         observeDiagnosticLogs()
+        observeSubtitleHistory()
         observeModelStatus()
         observeModelDownloadState()
         observePatchStatus()
@@ -218,6 +223,7 @@ class MainActivity : AppCompatActivity() {
         isAppInForeground = true
         updatePermissionStates()
         refreshDiagnosticLogs()
+        refreshSubtitleHistory()
         translationManager.checkModelState()
         updateAudioModelStatus()
     }
@@ -437,6 +443,20 @@ class MainActivity : AppCompatActivity() {
         binding.tvDiagnosticLogs.text = DiagnosticLogger.getFormattedLogs()
     }
 
+    private fun observeSubtitleHistory() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                SubtitleHistoryManager.historyFlow.collect {
+                    refreshSubtitleHistory()
+                }
+            }
+        }
+    }
+
+    private fun refreshSubtitleHistory() {
+        binding.tvSubtitleHistory.text = SubtitleHistoryManager.getFormattedHistory()
+    }
+
     private fun loadSettings() {
         val mode = prefs.getString(KEY_TRANSLATION_MODE, MODE_OFFLINE)
         if (mode == MODE_CLOUD) {
@@ -458,6 +478,10 @@ class MainActivity : AppCompatActivity() {
         } else {
             binding.rbOpaqueCover.isChecked = true
         }
+
+        val fontSizeSp = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
+        binding.sliderFontSize.progress = (fontSizeSp - 14f).toInt().coerceIn(0, 10)
+        binding.tvFontSizeValue.text = "${fontSizeSp.toInt()} sp"
     }
 
     private fun setupListeners() {
@@ -633,6 +657,37 @@ class MainActivity : AppCompatActivity() {
             } else {
                 initiateServiceStart()
             }
+        }
+
+        binding.sliderFontSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val fontSize = 14f + progress
+                binding.tvFontSizeValue.text = "${fontSize.toInt()} sp"
+                if (fromUser) {
+                    prefs.edit().putFloat(KEY_SUBTITLE_FONT_SIZE_SP, fontSize).apply()
+                    if (isServiceRunning) {
+                        val intent = Intent(this@MainActivity, TranslationOverlayService::class.java).apply {
+                            action = TranslationOverlayService.ACTION_UPDATE_FONT_SIZE
+                            putExtra(TranslationOverlayService.EXTRA_FONT_SIZE_SP, fontSize)
+                        }
+                        startService(intent)
+                    }
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        binding.btnCopySubtitleHistory.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("GameLens Subtitles", SubtitleHistoryManager.getFormattedHistory()))
+            Toast.makeText(this, "تم نسخ سجل الحوارات المترجمة", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnClearSubtitleHistory.setOnClickListener {
+            SubtitleHistoryManager.clear()
+            refreshSubtitleHistory()
+            Toast.makeText(this, "تم مسح سجل الحوارات", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnCopyLog.setOnClickListener {

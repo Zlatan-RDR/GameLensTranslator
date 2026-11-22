@@ -261,6 +261,9 @@ class TranslationManager(
         var processed = rawText.trim()
         if (processed.isEmpty()) return ""
 
+        // 0. Clean Controller & Button Prompts (OPEN ✕, PUT DOWN ○, L1-R3, LB/RB, Press X, Tap Enter)
+        processed = normalizeControllerPrompts(processed)
+
         // 1. Repair broken hyphenation across line breaks: "AVAI- LABLE" -> "AVAILABLE"
         processed = processed.replace(Regex("([a-zA-Z]{2,})-\\s+([a-zA-Z]{2,})"), "$1$2")
 
@@ -308,18 +311,37 @@ class TranslationManager(
     }
 
     /**
-     * Phonetic ASR Error Repair for common Zipformer phonetic slips.
+     * Phonetic ASR Error Repair for common Zipformer phonetic slips and controller prompts.
      * Snaps misrecognized terms to canon names and phrases before PatchManager or ML Kit.
      */
     fun normalizeAsrTranscript(englishText: String): String {
         if (englishText.isBlank()) return ""
         var sanitized = englishText.trim()
+        sanitized = sanitized.replace(Regex("(?i)\\bmesman\\b"), "man")
         sanitized = sanitized.replace(Regex("(?i)\\bforty servant\\b"), "47")
         sanitized = sanitized.replace(Regex("(?i)\\bbenjamin trous\\b"), "Benjamin Travis")
         sanitized = sanitized.replace(Regex("(?i)\\bdiana burne\\b"), "Diana Burnwood")
         sanitized = sanitized.replace(Regex("(?i)\\bjohnnie has been wired\\b"), "the money has been wired")
         sanitized = sanitized.replace(Regex("(?i)\\btrees and\\b"), "treasonous")
-        return sanitized
+        return normalizeControllerPrompts(sanitized)
+    }
+
+    /**
+     * Normalizes common controller & button prompts cleanly so symbols and triggers are preserved without garbling.
+     * Handles PlayStation (✕, ○, △, □), Xbox (LB, RB, LT, RT), L1-R3, Press X, and Tap Enter.
+     */
+    fun normalizeControllerPrompts(text: String): String {
+        if (text.isBlank()) return ""
+        var s = text.trim()
+        // Standardize button shapes
+        s = s.replace(Regex("(?i)\\bOPEN\\s+[x✕✖⨯]\\b"), "OPEN ✕")
+        s = s.replace(Regex("(?i)\\bPUT\\s+DOWN\\s+[o○O]\\b"), "PUT DOWN ○")
+        s = s.replace(Regex("(?i)\\bPRESS\\s+[x✕✖⨯]\\b"), "Press X")
+        s = s.replace(Regex("(?i)\\bTAP\\s+ENTER\\b"), "Tap Enter")
+        // Triggers and Bumpers: L1-R3, LB/RB, LT/RT
+        s = s.replace(Regex("(?i)\\b([LR])\\s*([123])\\b"), "$1$2")
+        s = s.replace(Regex("(?i)\\b([LR])\\s*([BT])\\b"), "$1$2")
+        return s
     }
 
     /**

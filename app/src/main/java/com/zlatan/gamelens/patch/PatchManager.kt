@@ -80,6 +80,8 @@ object PatchManager {
     }
 
     private const val PERSISTED_PATCH_FILENAME = "active_patch.json"
+    private const val BACKUP_PATCH_FILENAME = "active_patch.json.bak"
+    private const val TMP_PATCH_FILENAME = "active_patch.json.tmp"
     private const val FLUSH_THROTTLE_MS = 2000L
 
     // Session Logger: logs unique completed (English -> Arabic) pairs
@@ -525,7 +527,56 @@ object PatchManager {
             return Pair(rawAsrText, exactMatch)
         }
 
-        // 2. Fuzzy Phonetic & Levenshtein Snapping
+        // 2. Whispered Dialogue Suffix / Partial-Prefix Matching (>= 3 words matching trailing 60%+ of patch key)
+        val uWords = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (uWords.size >= 3) {
+            var bestSuffixPair: Pair<String, String>? = null
+            var bestSuffixScore = 0.0f
+
+            synchronized(rawEntries) {
+                for ((en, ar) in rawEntries) {
+                    val pNorm = normalizeText(en)
+                    val pWords = pNorm.split(Regex("\\s+")).filter { it.isNotBlank() }
+                    if (pWords.size < uWords.size) continue
+
+                    val coverageRatio = uWords.size.toFloat() / pWords.size.toFloat()
+                    val isCandidateRatio = coverageRatio >= 0.48f || (uWords.size >= 3 && pWords.size <= 7)
+                    if (!isCandidateRatio) continue
+
+                    if (pNorm.endsWith(normalized) || pNorm.endsWith(" $normalized")) {
+                        val score = 0.90f + (coverageRatio * 0.10f)
+                        if (score > bestSuffixScore) {
+                            bestSuffixScore = score
+                            bestSuffixPair = Pair(en, ar)
+                            if (score >= 0.98f) break
+                        }
+                    } else {
+                        val trailingSlice = pWords.takeLast(uWords.size).joinToString(" ")
+                        val sim = calculateSimilarity(normalized, trailingSlice)
+                        if (sim >= 0.72f && sim > bestSuffixScore) {
+                            bestSuffixScore = sim
+                            bestSuffixPair = Pair(en, ar)
+                        } else if (uWords.size >= 4) {
+                            val remainder = uWords.drop(1).joinToString(" ")
+                            if (pNorm.endsWith(remainder) || pNorm.endsWith(" $remainder")) {
+                                val remScore = 0.85f + ((uWords.size - 1).toFloat() / pWords.size.toFloat() * 0.10f)
+                                if (remScore > bestSuffixScore) {
+                                    bestSuffixScore = remScore
+                                    bestSuffixPair = Pair(en, ar)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (bestSuffixPair != null) {
+                DiagnosticLogger.log("Patch Suffix Snap ($bestSuffixScore): \"$rawAsrText\" -> \"${bestSuffixPair.first}\"")
+                return bestSuffixPair
+            }
+        }
+
+        // 3. Fuzzy Phonetic & Levenshtein Snapping
         if (normalized.length >= 4) {
             var bestPair: Pair<String, String>? = null
             var bestScore = 0.0f
@@ -1137,35 +1188,88 @@ object PatchManager {
     }
 
     private fun persistActivePatch(context: Context, patchName: String, details: String = "") {
-        try {
-            val file = File(context.filesDir, PERSISTED_PATCH_FILENAME)
-            val json = JSONObject()
-            json.put("__meta_patch_name__", patchName)
-            if (details.isNotBlank()) {
-                json.put("__meta_patch_details__", details)
+        sessionScope.launch(Dispatchers.IO) {
+            try {
+                val finalFile = File(context.filesDir, PERSISTED_PATCH_FILENAME)
+                val backupFile = File(context.filesDir, BACKUP_PATCH_FILENAME)
+                val tmpFile = File(context.filesDir, TMP_PATCH_FILENAME)
+
+                val json = JSONObject()
+                json.put("__meta_patch_name__", patchName)
+                if (details.isNotBlank()) {
+                    json.put("__meta_patch_details__", details)
+                }
+                val entriesObj = JSONObject()
+                for ((k, v) in patchMap) {
+                    entriesObj.put(k, v)
+                }
+                json.put("entries", entriesObj)
+
+                // 1. Atomic write to temporary file
+                FileOutputStream(tmpFile).use { fos ->
+                    fos.write(json.toString().toByteArray(Charsets.UTF_8))
+                    fos.flush()
+                    try {
+                        fos.fd.sync()
+                    } catch (_: Exception) {}
+                }
+
+                // 2. Backup existing file before replacement
+                if (finalFile.exists()) {
+                    try {
+                        finalFile.copyTo(backupFile, overwrite = true)
+                    } catch (_: Exception) {}
+                }
+
+                // 3. Atomic rename .tmp -> final
+                if (!tmpFile.renameTo(finalFile)) {
+                    tmpFile.copyTo(finalFile, overwrite = true)
+                    tmpFile.delete()
+                }
+                DiagnosticLogger.log("PatchManager: Atomically persisted active patch '$patchName'")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed atomically persisting active patch: ${e.message}")
             }
-            val entriesObj = JSONObject()
-            for ((k, v) in patchMap) {
-                entriesObj.put(k, v)
-            }
-            json.put("entries", entriesObj)
-            FileOutputStream(file).use { fos ->
-                fos.write(json.toString().toByteArray(Charsets.UTF_8))
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed persisting active patch: ${e.message}")
         }
     }
 
-    fun init(context: Context): Int {
-        return loadPersistedActivePatch(context)
+    /**
+     * Non-blocking startup: loads and indexes patch entries asynchronously on Dispatchers.IO.
+     * TranslationOverlayService and GameAudioTranslator start in 0ms without blocking on disk I/O.
+     */
+    fun init(context: Context, onLoaded: ((Int) -> Unit)? = null) {
+        sessionScope.launch(Dispatchers.IO) {
+            val count = loadPersistedActivePatch(context)
+            onLoaded?.invoke(count)
+        }
     }
 
     fun loadPersistedActivePatch(context: Context): Int {
         try {
-            val file = File(context.filesDir, PERSISTED_PATCH_FILENAME)
-            if (!file.exists()) return 0
-            val content = file.readText(Charsets.UTF_8)
+            val finalFile = File(context.filesDir, PERSISTED_PATCH_FILENAME)
+            val backupFile = File(context.filesDir, BACKUP_PATCH_FILENAME)
+
+            val fileToLoad = when {
+                finalFile.exists() && finalFile.length() > 0 -> finalFile
+                backupFile.exists() && backupFile.length() > 0 -> {
+                    DiagnosticLogger.log("PatchManager: Primary patch file missing/empty, recovering from backup")
+                    backupFile
+                }
+                else -> return 0
+            }
+
+            var content: String
+            try {
+                content = fileToLoad.readText(Charsets.UTF_8)
+            } catch (e: Exception) {
+                if (fileToLoad == finalFile && backupFile.exists() && backupFile.length() > 0) {
+                    DiagnosticLogger.log("PatchManager: Failed reading primary patch, falling back to backup")
+                    content = backupFile.readText(Charsets.UTF_8)
+                } else {
+                    throw e
+                }
+            }
+
             val json = JSONObject(content)
             val patchName = json.optString("__meta_patch_name__", "active_patch.json")
             val details = json.optString("__meta_patch_details__", "")
@@ -1186,7 +1290,8 @@ object PatchManager {
                 val warnMsg = "PatchManager.init: Found unparsed JSON quote artifacts in active_patch.json. Purging corrupt cache."
                 Log.w(TAG, warnMsg)
                 DiagnosticLogger.log(warnMsg)
-                file.delete()
+                finalFile.delete()
+                backupFile.delete()
                 clearPatch(context)
                 return 0
             }
@@ -1233,6 +1338,12 @@ object PatchManager {
         if (context != null) {
             try {
                 File(context.filesDir, PERSISTED_PATCH_FILENAME).delete()
+            } catch (_: Exception) {}
+            try {
+                File(context.filesDir, BACKUP_PATCH_FILENAME).delete()
+            } catch (_: Exception) {}
+            try {
+                File(context.filesDir, TMP_PATCH_FILENAME).delete()
             } catch (_: Exception) {}
         }
     }

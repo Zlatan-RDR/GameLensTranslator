@@ -629,6 +629,45 @@
                         android:textColor="@color/text_primary" />
                 </RadioGroup>
 
+                <!-- Subtitle Font Size Slider (14sp - 24sp) -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginTop="10dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="حجم خط الترجمة (Subtitle Font Size)"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/tvFontSizeValue"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="18 sp"
+                            android:textColor="@color/accent"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <SeekBar
+                        android:id="@+id/sliderFontSize"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:max="10"
+                        android:progress="4"
+                        android:layout_marginTop="4dp" />
+                </LinearLayout>
+
                 <!-- Preset Quick Buttons & Calibration Launcher -->
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -704,6 +743,90 @@
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
+        <!-- Clean Translated Dialogue History Card -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/cardSubtitleHistory"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardBackgroundColor="@color/surface_card"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="2dp"
+            app:layout_constraintTop_toBottomOf="@id/cardCalibration"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="سجل الحوارات المترجمة (Subtitle History)"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnCopySubtitleHistory"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:minWidth="48dp"
+                        android:minHeight="36dp"
+                        android:text="نسخ"
+                        android:textColor="@color/accent"
+                        android:textSize="12sp"
+                        app:backgroundTint="@android:color/transparent"
+                        app:elevation="0dp"
+                        app:strokeWidth="0dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnClearSubtitleHistory"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:minWidth="48dp"
+                        android:minHeight="36dp"
+                        android:text="مسح"
+                        android:textColor="@color/status_inactive"
+                        android:textSize="12sp"
+                        app:backgroundTint="@android:color/transparent"
+                        app:elevation="0dp"
+                        app:strokeWidth="0dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp" />
+                </LinearLayout>
+
+                <androidx.core.widget.NestedScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="140dp"
+                    android:layout_marginTop="8dp"
+                    android:background="#1A000000"
+                    android:padding="8dp">
+
+                    <TextView
+                        android:id="@+id/tvSubtitleHistory"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="لا توجد حوارات مترجمة مسجلة بعد"
+                        android:textColor="@color/text_primary"
+                        android:textSize="12sp"
+                        android:lineSpacingExtra="4dp" />
+                </androidx.core.widget.NestedScrollView>
+            </LinearLayout>
+        </androidx.cardview.widget.CardView>
+
         <!-- Diagnostic Live Logs Card -->
         <androidx.cardview.widget.CardView
             android:id="@+id/cardDiagnostics"
@@ -713,7 +836,7 @@
             app:cardBackgroundColor="@color/surface_card"
             app:cardCornerRadius="12dp"
             app:cardElevation="2dp"
-            app:layout_constraintTop_toBottomOf="@id/cardCalibration"
+            app:layout_constraintTop_toBottomOf="@id/cardSubtitleHistory"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
 
