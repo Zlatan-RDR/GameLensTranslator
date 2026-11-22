@@ -370,12 +370,12 @@ class SeamlessOverlayRenderer(private val context: Context) {
     }
 
     /**
-     * Renders speech translations in the zero-flicker bottom cinematic subtitle bar.
-     * Supports Opaque Cover Mode (100% solid dark 0xFF06080D over bottom subtitle zone 76%-94% screen height)
+     * Renders speech or OCR translations in the zero-flicker bottom cinematic subtitle bar.
+     * Supports Opaque Cover Mode (100% solid dark 0xFF05070B over calibrated subtitle zone)
      * and Offset Above Mode (translucent bar positioned cleanly above bottom zone).
-     * Auto-hides after 2.0 seconds of silence so old lines clear promptly between scenes.
+     * Auto-hides dynamically based on reading speed so old lines clear promptly between scenes.
      */
-    fun renderSubtitle(arabicText: String) {
+    fun renderSubtitle(arabicText: String, englishText: String = "") {
         mainHandler.post {
             if (!isContainerAttached || overlayContainer == null) {
                 initOverlayContainer()
@@ -416,7 +416,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
                     }
                 }
 
-                // 100% solid opaque dark (0xFF05070B, alpha = 255) positioned directly over bottom subtitle zone (76% to 94% screen height)
+                // 100% solid opaque dark (0xFF05070B, alpha = 255) positioned directly over calibrated subtitle zone
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     setColor(Color.argb(255, 5, 7, 11)) // 0xFF05070B
@@ -428,11 +428,11 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.background?.alpha = 255
                 sub.setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
 
-                val opaqueTop = (0.76f * screenH).toInt()
-                val opaqueBottom = (0.94f * screenH).toInt()
-                val opaqueH = (opaqueBottom - opaqueTop).coerceAtLeast((64 * density).toInt())
-                val opaqueW = (0.92f * screenW).toInt()
-                val opaqueLeft = ((screenW - opaqueW) / 2).coerceAtLeast(0)
+                val opaqueTop = (calRect.top * screenH).toInt()
+                val opaqueBottom = (calRect.bottom * screenH).toInt()
+                val opaqueH = (opaqueBottom - opaqueTop).coerceAtLeast((56 * density).toInt())
+                val opaqueW = ((calRect.right - calRect.left) * screenW).toInt().coerceAtLeast((100 * density).toInt())
+                val opaqueLeft = (calRect.left * screenW).toInt()
 
                 val layoutParams = FrameLayout.LayoutParams(opaqueW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     gravity = Gravity.TOP or Gravity.START
@@ -466,7 +466,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
             sub.text = arabicText
             sub.visibility = View.VISIBLE
-            com.zlatan.gamelens.diag.SubtitleHistoryManager.addEntry("", arabicText)
+            com.zlatan.gamelens.diag.SubtitleHistoryManager.addEntry(englishText, arabicText)
             mainHandler.removeCallbacks(hideSubtitleRunnable)
             val wordCount = arabicText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
             val charBasedMs = 900L + (arabicText.length * 62L)
@@ -475,6 +475,8 @@ class SeamlessOverlayRenderer(private val context: Context) {
             mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
         }
     }
+
+    fun isSubtitleVisible(): Boolean = (subtitleView?.visibility == View.VISIBLE) || _hasPinnedCards
 
     fun updateFontSize(fontSizeSp: Float) {
         mainHandler.post {

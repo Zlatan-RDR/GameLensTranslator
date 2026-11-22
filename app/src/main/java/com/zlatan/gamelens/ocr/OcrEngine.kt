@@ -251,6 +251,66 @@ class OcrEngine {
         return ratio >= 0.60
     }
 
+    /**
+     * Rapidly recognizes text from a cropped ROI or MORT-filtered bitmap.
+     * Extracts all valid lines, filters HUD prompts and noise, and sorts lines top-to-bottom.
+     */
+    suspend fun recognizeRoi(bitmap: Bitmap): List<String> = suspendCancellableCoroutine { continuation ->
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
+            continuation.resume(emptyList())
+            return@suspendCancellableCoroutine
+        }
+
+        val argbBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
+            try {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (_: Exception) {
+                bitmap
+            }
+        } else {
+            bitmap
+        }
+
+        try {
+            val inputImage = InputImage.fromBitmap(argbBitmap, 0)
+            recognizer.process(inputImage)
+                .addOnSuccessListener { visionText ->
+                    val lines = visionText.textBlocks
+                        .flatMap { it.lines }
+                        .filter { line ->
+                            val text = line.text.trim()
+                            !isNoiseOrSymbol(text) &&
+                            !isHudPrompt(text) &&
+                            !isAllCapsNonDialogue(text) &&
+                            !OcrTextCleaner.isNoiseOrPrompt(text)
+                        }
+                        .sortedBy { it.boundingBox?.top ?: 0 }
+                        .map { it.text.trim() }
+
+                    val validLines = if (lines.isNotEmpty() && !passesEnglishTokenRatioFilter(lines.joinToString(" "))) {
+                        emptyList()
+                    } else {
+                        lines
+                    }
+
+                    if (continuation.isActive) {
+                        continuation.resume(validLines)
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "ML Kit recognizeRoi error: ${e.message}", e)
+                    if (continuation.isActive) {
+                        continuation.resume(emptyList())
+                    }
+                }
+        } catch (t: Throwable) {
+            Log.e(TAG, "ML Kit recognizeRoi exception: ${t.message}", t)
+            if (continuation.isActive) {
+                continuation.resume(emptyList())
+            }
+        }
+    }
+
     fun close() {
         try {
             recognizer.close()

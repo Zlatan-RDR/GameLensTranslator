@@ -144,7 +144,10 @@ class TranslationOverlayService : Service() {
     private var screenCaptureManager: ScreenCaptureManager? = null
     private var gameAudioTranslator: GameAudioTranslator? = null
     private val frameDiffEngine = FrameDiffEngine()
+    private val fastPixelDiffGate = com.zlatan.gamelens.ocr.FastPixelDiffGate()
     private val ocrEngine = OcrEngine()
+    private var lastOcrTimestamp: Long = 0L
+    private var lastDisplayedEnglishText: String = ""
 
     private lateinit var cacheManager: TranslationCacheManager
     private lateinit var glossaryManager: GlossaryManager
@@ -419,7 +422,7 @@ class TranslationOverlayService : Service() {
 
             // Initialize Internal Game Audio Translation (Sherpa-ONNX + AudioPlaybackCapture)
             val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-            val isAudioEnabled = prefs.getBoolean("audio_translation_enabled", true) && prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, true)
+            val isAudioEnabled = prefs.getBoolean("audio_translation_enabled", false) && prefs.getBoolean(MainActivity.KEY_GAME_AUDIO_ENABLED, false)
             if (isAudioEnabled && GameAudioTranslator.isAsrModelInstalled(this)) {
                 startAudioTranslation()
             } else {
@@ -441,12 +444,11 @@ class TranslationOverlayService : Service() {
     private fun startCaptureLoop() {
         captureJob?.cancel()
         captureJob = serviceScope.launch {
-            Log.d(TAG, "Visual Subtitle OCR Pipeline active")
-            DiagnosticLogger.log("Pipeline loop started")
+            Log.d(TAG, "Precision ROI OCR Pipeline active")
+            DiagnosticLogger.log("Precision ROI OCR loop started (140ms)")
             while (isActive) {
                 val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
                 val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
-                val intervalMs = if (isOpaqueCover) 320L else 100L
 
                 try {
                     processFramePipeline(isOpaqueCover)
@@ -454,7 +456,7 @@ class TranslationOverlayService : Service() {
                     Log.e(TAG, "Error in Pipeline: ${t.message}", t)
                     DiagnosticLogger.log("Pipeline error: ${t.javaClass.simpleName} - ${t.message}")
                 }
-                delay(intervalMs)
+                delay(140L)
             }
         }
     }
@@ -479,9 +481,21 @@ class TranslationOverlayService : Service() {
     }
 
     private suspend fun processFramePipeline(isOpaqueCover: Boolean) {
-        // When MainActivity is in foreground, auto-pause OCR and clear overlays to prevent self-reading
+        val (screenW, screenH, dpi) = getRealScreenDimensions()
+
+        // 1. Auto-pause in Portrait or when GameLens is in the foreground
+        if (screenH > screenW) {
+            if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
+                seamlessOverlayRenderer?.clear()
+                lastDisplayedEnglishText = ""
+            }
+            return
+        }
         if (com.zlatan.gamelens.MainActivity.isAppInForeground) {
-            seamlessOverlayRenderer?.clearAllOverlays()
+            if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
+                seamlessOverlayRenderer?.clear()
+                lastDisplayedEnglishText = ""
+            }
             return
         }
 
@@ -492,122 +506,115 @@ class TranslationOverlayService : Service() {
 
         val captureMgr = screenCaptureManager ?: return
 
-        // 0. Synchronize capture dimensions with active display orientation
-        val (screenW, screenH, dpi) = getRealScreenDimensions()
+        // 2. Synchronize capture dimensions with active display orientation
         val (curW, curH) = captureMgr.getDimensions()
         if (screenW != curW || screenH != curH) {
             captureMgr.updateDimensions(screenW, screenH, dpi)
             clampBubbleWithinScreen(screenW, screenH)
+            seamlessOverlayRenderer?.updateScreenDimensions()
         }
 
-        // 1. Unoccluded capture (100ms non-hiding for Offset Above, 320ms with 20ms invisible pulse for Opaque Cover)
-        val fullBitmap: Bitmap? = captureFrameForOcr(isOpaqueCover)
-        if (fullBitmap == null) return
-
-        val bubbleBounds = getBubbleBounds()
-
-        // 2. Fast Frame Diffing: skip unchanged frames, ignoring floating bubble area
-        val shouldForce = forceInstantPass
-        forceInstantPass = false
-        val hasChanged = if (shouldForce) true else frameDiffEngine.hasFrameChanged(fullBitmap, bubbleBounds)
-        if (!hasChanged) {
-            return
-        }
-
-        // 3. Restrict OCR strictly to Calibrated Reading Box (defaults to Bottom Subtitles: RectF(0.08f, 0.68f, 0.94f, 0.95f))
+        // 3. Stage 1: Strict Calibrated ROI Crop directly from ImageReader buffer
         val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
 
-        val cropX = (calRect.left * fullBitmap.width).toInt().coerceIn(0, fullBitmap.width - 1)
-        val cropY = (calRect.top * fullBitmap.height).toInt().coerceIn(0, fullBitmap.height - 1)
-        val cropW = (calRect.width() * fullBitmap.width).toInt().coerceIn(1, fullBitmap.width - cropX)
-        val cropH = (calRect.height() * fullBitmap.height).toInt().coerceIn(1, fullBitmap.height - cropY)
-
-        val rawCropped = Bitmap.createBitmap(fullBitmap, cropX, cropY, cropW, cropH)
-
-        // 4. Fast ColorMatrix Contrast Boost (contrast = 2.1f, brightness = -35f) & 1.5x Bilinear Upscale if height < 260px
-        val (enhancedBitmap, scaleFactor) = ocrEngine.preprocessBitmapForOcr(rawCropped)
-        if (enhancedBitmap !== rawCropped && !rawCropped.isRecycled) {
-            rawCropped.recycle()
-        }
-
-        // 5. Fast On-Device ML Kit OCR Recognition mapped directly to clamped full-screen display space
-        val detectedBlocks = try {
-            ocrEngine.recognizeText(
-                bitmap = enhancedBitmap,
-                excludedBounds = bubbleBounds,
-                cropLeft = cropX,
-                cropTop = cropY,
-                scaleFactor = scaleFactor,
-                screenWidth = screenW,
-                screenHeight = screenH
-            )
-        } finally {
-            if (!enhancedBitmap.isRecycled) {
-                enhancedBitmap.recycle()
+        // For Opaque Cover mode, if the solid black bar is currently visible, hide it for a 20ms pulse to read under it
+        val croppedRoi: Bitmap? = if (isOpaqueCover && seamlessOverlayRenderer?.isSubtitleVisible() == true) {
+            withContext(Dispatchers.Main) {
+                seamlessOverlayRenderer?.setInvisibleForCapture()
             }
+            delay(20L)
+            val b = captureMgr.acquireCroppedRoi(calRect)
+            withContext(Dispatchers.Main) {
+                seamlessOverlayRenderer?.restoreVisibilityAfterCapture()
+            }
+            b
+        } else {
+            captureMgr.acquireCroppedRoi(calRect)
         }
 
-        // 6. Extract all valid lines, filter out HUD prompts and all-caps textures, sort top-to-bottom
-        val allLines = detectedBlocks.flatMap { it.lines }
-            .filter { !ocrEngine.isNoiseOrSymbol(it.text) && !ocrEngine.isHudPrompt(it.text) && !ocrEngine.isAllCapsNonDialogue(it.text) }
-            .sortedBy { it.boundingBox.top }
+        if (croppedRoi == null) return
 
-        if (allLines.isEmpty()) {
+        // 4. Stage 2: Fast Pixel-Diff Gate (~1.5ms) - skip unchanged frames unless subtitle is showing and clear-check (420ms) is due
+        val isOverlayShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
+        val now = android.os.SystemClock.uptimeMillis()
+        val timeSinceLastOcr = now - lastOcrTimestamp
+        val forceClearCheck = isOverlayShowing && (timeSinceLastOcr >= 420L)
+
+        val hasChanged = fastPixelDiffGate.hasChanged(croppedRoi)
+        if (!hasChanged && !forceClearCheck && !forceInstantPass) {
+            if (!croppedRoi.isRecycled) croppedRoi.recycle()
+            return
+        }
+        forceInstantPass = false
+        lastOcrTimestamp = now
+
+        // 5. Stage 3: MORT Subtitle Luminance Isolation Mask with Raw-Crop Fallback
+        val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(croppedRoi)
+        var lines = if (mortBitmap != null) {
+            val res = ocrEngine.recognizeRoi(mortBitmap)
+            if (!mortBitmap.isRecycled) mortBitmap.recycle()
+            res
+        } else emptyList()
+
+        if (lines.isEmpty()) {
+            // Fallback once to raw cropped ROI
+            lines = ocrEngine.recognizeRoi(croppedRoi)
+        }
+
+        if (!croppedRoi.isRecycled) {
+            croppedRoi.recycle()
+        }
+
+        // 6. Stage 4: Spatial Line Grouping, HUD Filtering & Empty Checks
+        if (lines.isEmpty()) {
             consecutiveEmptyOcrPasses++
             if (consecutiveEmptyOcrPasses >= 2) {
-                latestDetectedBlocks = emptyList()
-                lastDisplayedNormalizedText = ""
                 seamlessOverlayRenderer?.clear()
+                lastDisplayedEnglishText = ""
             }
             return
         }
 
-        // 7. Multi-Line Paragraph Merging: combine lines into single coherent English paragraph
-        val mergedEnglish = allLines.joinToString(" ") { it.text.trim() }
-        if (mergedEnglish.isBlank()) return
-
-        // 8. Jitter Gate: Levenshtein distance <= 1 skips translation and redraw (0ms, zero flicker)
-        val normalized = normalizeForJitterGate(mergedEnglish)
-        if (lastDisplayedNormalizedText.isNotEmpty() && calculateLevenshteinDistance(normalized, lastDisplayedNormalizedText) <= 1) {
-            consecutiveEmptyOcrPasses = 0
+        val mergedEnglish = lines.joinToString(" ") { it.trim() }
+        if (mergedEnglish.isBlank() || com.zlatan.gamelens.ocr.OcrTextCleaner.isNoiseOrPrompt(mergedEnglish)) {
+            consecutiveEmptyOcrPasses++
+            if (consecutiveEmptyOcrPasses >= 2) {
+                seamlessOverlayRenderer?.clear()
+                lastDisplayedEnglishText = ""
+            }
             return
         }
 
-        // 9. Union Bounding Box spanning all merged lines (+10dp padding applied in renderer)
-        val unionBox = Rect(allLines.first().boundingBox)
-        for (line in allLines) {
-            unionBox.union(line.boundingBox)
-        }
-
-        // 10. Non-blocking Asynchronous Translation through Glossary, Cache & Translation Engine
-        val translated = withContext(Dispatchers.IO) {
-            translationManager.translate(mergedEnglish)
-        }
-
-        if (translated.isBlank() || translated.trim().equals(mergedEnglish.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(translated)) {
-            return
-        }
-
-        // Reset empty passes counter and update last displayed text
+        // Subtitle detected: reset empty counter
         consecutiveEmptyOcrPasses = 0
-        lastDisplayedNormalizedText = normalized
 
-        val mergedBlock = OcrBlock(
-            text = mergedEnglish,
-            boundingBox = unionBox,
-            lines = allLines
-        ).apply {
-            translatedText = translated
-            colorScheme = EdgeColorSampler.sampleEdgeColors(fullBitmap, unionBox)
+        // Jitter Gate: skip if >= 88% similar to currently displayed text (0ms, zero flicker)
+        if (lastDisplayedEnglishText.isNotEmpty() && com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(mergedEnglish, lastDisplayedEnglishText, 0.88f)) {
+            return
         }
 
-        latestDetectedBlocks = listOf(mergedBlock)
+        // 7. Normalization, Patch Matching (0ms snap) and Translation
+        val promptNormalized = TranslationManager.normalizeControllerPrompts(mergedEnglish)
+        val patchMatch = PatchManager.lookup(promptNormalized)
+        val arabicTranslation = if (patchMatch != null) {
+            patchMatch.arabic
+        } else {
+            withContext(Dispatchers.IO) {
+                translationManager.translate(promptNormalized)
+            }
+        }
 
-        // 11. Render overlay
-        seamlessOverlayRenderer?.renderTranslations(listOf(mergedBlock), screenW, screenH, fullBitmap.width, fullBitmap.height)
+        if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(promptNormalized.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
+            return
+        }
+
+        lastDisplayedEnglishText = mergedEnglish
+
+        // 8. Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
+        seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)
         pulseHeartbeat()
-        DiagnosticLogger.log("Rendered merged subtitle: \"$mergedEnglish\" -> \"$translated\"")
+        DiagnosticLogger.log("Precision OCR: \"$promptNormalized\" -> \"$arabicTranslation\"")
     }
 
     private fun normalizeForJitterGate(text: String): String {

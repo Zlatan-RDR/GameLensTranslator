@@ -41,7 +41,7 @@ class CalibrationOverlay(
 
         val PRESET_FULL_SCREEN = RectF(0f, 0f, 1f, 1f)
         val PRESET_CENTER_DIALOGS = RectF(0.12f, 0.32f, 0.88f, 0.68f)
-        val PRESET_BOTTOM_SUBTITLES = RectF(0.14f, 0.77f, 0.86f, 0.94f)
+        val PRESET_BOTTOM_SUBTITLES = RectF(0.10f, 0.72f, 0.90f, 0.96f)
 
         fun getCalibratedRect(prefs: SharedPreferences): RectF {
             val isEnabled = prefs.getBoolean(PREFS_KEY_CALIBRATION_ENABLED, true)
@@ -72,7 +72,7 @@ class CalibrationOverlay(
     private var rootContainer: FrameLayout? = null
     private var isAttached = false
 
-    private val boxRect = RectF(0.10f, 0.65f, 0.90f, 0.92f) // Default bottom subtitles
+    private val boxRect = RectF(0.10f, 0.72f, 0.90f, 0.96f) // Default bottom subtitles
 
     fun show() {
         if (isAttached) return

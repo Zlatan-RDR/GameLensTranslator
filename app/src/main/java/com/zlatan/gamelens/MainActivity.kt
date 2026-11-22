@@ -374,7 +374,7 @@ class MainActivity : AppCompatActivity() {
                             binding.tvAsrDownloadProgress.visibility = View.GONE
                             updateAudioModelStatus()
                             Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح! يمكنك تفعيله من المفتاح أدناه.", Toast.LENGTH_SHORT).show()
-                            binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, true)
+                            binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
                             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
                                 != PackageManager.PERMISSION_GRANTED
                             ) {
@@ -470,7 +470,7 @@ class MainActivity : AppCompatActivity() {
         binding.etApiKey.setText(prefs.getString(KEY_API_KEY, ""))
         binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions"))
 
-        binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, true)
+        binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
 
         val coverMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OPAQUE_COVER)
         if (coverMode == MODE_OFFSET_ABOVE) {

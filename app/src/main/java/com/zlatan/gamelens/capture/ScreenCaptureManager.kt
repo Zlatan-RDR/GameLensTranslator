@@ -3,6 +3,7 @@ package com.zlatan.gamelens.capture
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.Image
@@ -130,6 +131,85 @@ class ScreenCaptureManager(
         } catch (t: Throwable) {
             Log.e(TAG, "Error updating capture dimensions: ${t.message}", t)
             DiagnosticLogger.log("Capture update error: ${t.javaClass.simpleName} - ${t.message}")
+        }
+    }
+
+    /**
+     * Grabs a cropped sub-region (ROI) directly from the ImageReader without allocating
+     * the full-screen (1080x2400) Bitmap, cutting memory allocations by >80% and reducing latency.
+     */
+    @Synchronized
+    fun acquireCroppedRoi(calRect: RectF): Bitmap? {
+        val reader = imageReader ?: return null
+        val image: Image = try {
+            reader.acquireLatestImage() ?: return null
+        } catch (t: Throwable) {
+            DiagnosticLogger.log("acquireCroppedRoi error: ${t.javaClass.simpleName} - ${t.message}")
+            return null
+        }
+
+        return try {
+            val imgW = image.width
+            val imgH = image.height
+            val planes = image.planes
+            if (planes.isEmpty()) return null
+
+            val plane = planes[0]
+            val buffer: ByteBuffer = plane.buffer
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+
+            val cropX = (calRect.left * imgW).toInt().coerceIn(0, imgW - 1)
+            val cropY = (calRect.top * imgH).toInt().coerceIn(0, imgH - 1)
+            val cropW = (calRect.width() * imgW).toInt().coerceIn(1, imgW - cropX)
+            val cropH = (calRect.height() * imgH).toInt().coerceIn(1, imgH - cropY)
+
+            if (cropW <= 0 || cropH <= 0) return null
+
+            if (pixelStride == 4) {
+                val rowBytes = cropW * 4
+                val croppedBuffer = ByteBuffer.allocateDirect(rowBytes * cropH)
+                val bufferCap = buffer.capacity()
+
+                for (y in cropY until (cropY + cropH)) {
+                    val rowOffset = y * rowStride + cropX * 4
+                    if (rowOffset + rowBytes <= bufferCap) {
+                        buffer.position(rowOffset)
+                        buffer.limit(rowOffset + rowBytes)
+                        croppedBuffer.put(buffer)
+                    }
+                }
+                croppedBuffer.rewind()
+                val roiBitmap = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
+                roiBitmap.copyPixelsFromBuffer(croppedBuffer)
+                roiBitmap
+            } else {
+                // Non-standard pixelStride fallback
+                val rowPadding = rowStride - pixelStride * imgW
+                val bufferWidth = imgW + (rowPadding / pixelStride)
+                val requiredBytes = bufferWidth * imgH * 4
+                val safeBuffer = if (buffer.remaining() >= requiredBytes) {
+                    buffer.position(0)
+                    buffer
+                } else {
+                    val padded = ByteBuffer.allocateDirect(requiredBytes)
+                    buffer.position(0)
+                    padded.put(buffer)
+                    padded.position(0)
+                    padded
+                }
+                val tempBitmap = Bitmap.createBitmap(bufferWidth, imgH, Bitmap.Config.ARGB_8888)
+                tempBitmap.copyPixelsFromBuffer(safeBuffer)
+                Bitmap.createBitmap(tempBitmap, cropX, cropY, cropW, cropH)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error acquiring cropped ROI: ${t.message}", t)
+            DiagnosticLogger.log("acquireCroppedRoi error: ${t.javaClass.simpleName} - ${t.message}")
+            null
+        } finally {
+            try {
+                image.close()
+            } catch (_: Throwable) {}
         }
     }
 
