@@ -95,6 +95,12 @@ object PatchManager {
     private var lastFlushTimeMs: Long = 0L
     private var pendingFlushJob: kotlinx.coroutines.Job? = null
 
+    // Duplicate-Span Guard (suppresses redundant translations within 5000ms)
+    @Volatile
+    private var lastMatchedPatchKey: String = ""
+    @Volatile
+    private var lastMatchedPatchTimestamp: Long = 0L
+
     fun stripGameMarkup(text: String): String {
         return text
             .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), " ")
@@ -520,16 +526,79 @@ object PatchManager {
         if (patchMap.isEmpty()) return null
         val normalized = normalizeText(rawAsrText)
         if (normalized.isBlank()) return null
+        val nowMs = System.currentTimeMillis()
 
         // 1. Instant 0ms Exact Hash Lookup
         val exactMatch = patchMap[normalized]
         if (exactMatch != null) {
+            if (lastMatchedPatchKey.equals(normalized, ignoreCase = true) && (nowMs - lastMatchedPatchTimestamp) <= 5000L) {
+                DiagnosticLogger.log("Patch Duplicate-Span Guard (exact): \"$rawAsrText\" within ${nowMs - lastMatchedPatchTimestamp}ms suppressed")
+                return Pair(rawAsrText, "")
+            }
+            lastMatchedPatchKey = normalized
+            lastMatchedPatchTimestamp = nowMs
             return Pair(rawAsrText, exactMatch)
         }
 
-        // 2. Whispered Dialogue Suffix / Partial-Prefix Matching (>= 3 words matching trailing 60%+ of patch key)
         val uWords = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
-        if (uWords.size >= 3) {
+        val uCount = uWords.size
+
+        // 2. Prefix & Substring-Containment Contiguous-Span Matching (>= 75% similarity for >= 4-word spans)
+        if (uCount >= 4) {
+            var bestSpanPair: Pair<String, String>? = null
+            var bestSpanScore = 0.0f
+
+            synchronized(rawEntries) {
+                for ((en, ar) in rawEntries) {
+                    val pNorm = normalizeText(en)
+                    val pWords = pNorm.split(Regex("\\s+")).filter { it.isNotBlank() }
+                    val pCount = pWords.size
+
+                    // Case A: Decoded utterance (>= 4 words) matches >= 75% of a contiguous span in a longer patch key
+                    if (pCount >= uCount) {
+                        val maxOffset = pCount - uCount
+                        for (offset in 0..maxOffset) {
+                            val span = pWords.subList(offset, offset + uCount).joinToString(" ")
+                            val sim = calculateSimilarity(normalized, span)
+                            if (sim >= 0.75f && sim > bestSpanScore) {
+                                bestSpanScore = sim
+                                bestSpanPair = Pair(en, ar)
+                                if (sim >= 0.95f) break
+                            }
+                        }
+                    }
+                    // Case B: Longer decoded utterance contains a patch key (>= 5 words) with >= 75% similarity
+                    else if (pCount >= 5 && uCount > pCount) {
+                        val maxOffset = uCount - pCount
+                        for (offset in 0..maxOffset) {
+                            val span = uWords.subList(offset, offset + pCount).joinToString(" ")
+                            val sim = calculateSimilarity(pNorm, span)
+                            if (sim >= 0.75f && sim > bestSpanScore) {
+                                bestSpanScore = sim
+                                bestSpanPair = Pair(en, ar)
+                                if (sim >= 0.95f) break
+                            }
+                        }
+                    }
+                    if (bestSpanScore >= 0.95f) break
+                }
+            }
+
+            if (bestSpanPair != null) {
+                val matchedKey = bestSpanPair.first
+                if (lastMatchedPatchKey.equals(matchedKey, ignoreCase = true) && (nowMs - lastMatchedPatchTimestamp) <= 5000L) {
+                    DiagnosticLogger.log("Patch Duplicate-Span Guard (span): \"$rawAsrText\" within ${nowMs - lastMatchedPatchTimestamp}ms suppressed for \"$matchedKey\"")
+                    return Pair(matchedKey, "")
+                }
+                lastMatchedPatchKey = matchedKey
+                lastMatchedPatchTimestamp = nowMs
+                DiagnosticLogger.log("Patch Span Snap ($bestSpanScore): \"$rawAsrText\" -> \"$matchedKey\"")
+                return bestSpanPair
+            }
+        }
+
+        // 3. Whispered Dialogue Suffix / Partial-Prefix Matching (>= 3 words matching trailing 60%+ of patch key)
+        if (uCount >= 3) {
             var bestSuffixPair: Pair<String, String>? = null
             var bestSuffixScore = 0.0f
 
@@ -571,12 +640,19 @@ object PatchManager {
             }
 
             if (bestSuffixPair != null) {
-                DiagnosticLogger.log("Patch Suffix Snap ($bestSuffixScore): \"$rawAsrText\" -> \"${bestSuffixPair.first}\"")
+                val matchedKey = bestSuffixPair.first
+                if (lastMatchedPatchKey.equals(matchedKey, ignoreCase = true) && (nowMs - lastMatchedPatchTimestamp) <= 5000L) {
+                    DiagnosticLogger.log("Patch Duplicate-Span Guard (suffix): \"$rawAsrText\" within ${nowMs - lastMatchedPatchTimestamp}ms suppressed for \"$matchedKey\"")
+                    return Pair(matchedKey, "")
+                }
+                lastMatchedPatchKey = matchedKey
+                lastMatchedPatchTimestamp = nowMs
+                DiagnosticLogger.log("Patch Suffix Snap ($bestSuffixScore): \"$rawAsrText\" -> \"$matchedKey\"")
                 return bestSuffixPair
             }
         }
 
-        // 3. Fuzzy Phonetic & Levenshtein Snapping
+        // 4. Fuzzy Phonetic & Levenshtein Snapping
         if (normalized.length >= 4) {
             var bestPair: Pair<String, String>? = null
             var bestScore = 0.0f
@@ -592,7 +668,14 @@ object PatchManager {
                 }
             }
             if (bestPair != null) {
-                DiagnosticLogger.log("Patch ASR Snap ($bestScore): \"$rawAsrText\" -> \"${bestPair.first}\"")
+                val matchedKey = bestPair.first
+                if (lastMatchedPatchKey.equals(matchedKey, ignoreCase = true) && (nowMs - lastMatchedPatchTimestamp) <= 5000L) {
+                    DiagnosticLogger.log("Patch Duplicate-Span Guard (fuzzy): \"$rawAsrText\" within ${nowMs - lastMatchedPatchTimestamp}ms suppressed for \"$matchedKey\"")
+                    return Pair(matchedKey, "")
+                }
+                lastMatchedPatchKey = matchedKey
+                lastMatchedPatchTimestamp = nowMs
+                DiagnosticLogger.log("Patch ASR Snap ($bestScore): \"$rawAsrText\" -> \"$matchedKey\"")
                 return bestPair
             }
         }
@@ -1334,6 +1417,8 @@ object PatchManager {
         _activePatchNameFlow.value = null
         _patchCountFlow.value = 0
         _patchDetailsFlow.value = null
+        lastMatchedPatchKey = ""
+        lastMatchedPatchTimestamp = 0L
         clearPendingEnglishFile()
         if (context != null) {
             try {

@@ -98,46 +98,6 @@ class GameAudioTranslator(
     private var lastSegmentEndTimestampMs: Long = 0L
     private var lastMatchedPatchTargetNormalized: String = ""
     private var lastMatchedPatchTimestampMs: Long = 0L
-    private val preSpeechRingBuffer = PreSpeechRingBuffer(8000)
-    private var preSpeechSnapshot: FloatArray? = null
-    private var wasSpeechDetected: Boolean = false
-
-    /**
-     * Circular ring buffer holding the last 8,000 audio samples (500ms at 16kHz) during idle periods.
-     * When VAD triggers speech onset, this buffer is prepended to the speech segment to eliminate onset clipping.
-     */
-    private class PreSpeechRingBuffer(val capacity: Int = 8000) {
-        private val buffer = FloatArray(capacity)
-        private var writeIndex = 0
-        private var count = 0
-
-        fun write(samples: FloatArray) {
-            for (i in samples.indices) {
-                buffer[writeIndex] = samples[i]
-                writeIndex = (writeIndex + 1) % capacity
-                if (count < capacity) count++
-            }
-        }
-
-        fun toArray(): FloatArray {
-            val result = FloatArray(count)
-            if (count < capacity) {
-                System.arraycopy(buffer, 0, result, 0, count)
-            } else {
-                val tailLength = capacity - writeIndex
-                System.arraycopy(buffer, writeIndex, result, 0, tailLength)
-                if (writeIndex > 0) {
-                    System.arraycopy(buffer, 0, result, tailLength, writeIndex)
-                }
-            }
-            return result
-        }
-
-        fun clear() {
-            writeIndex = 0
-            count = 0
-        }
-    }
 
     @Volatile
     private var isRunning = false
@@ -213,8 +173,8 @@ class GameAudioTranslator(
                 if (vadFile != null) {
                     val sileroConfig = SileroVadModelConfig(
                         model = vadFile.absolutePath,
-                        threshold = 0.40f,
-                        minSilenceDuration = 0.44f,
+                        threshold = 0.44f,
+                        minSilenceDuration = 0.28f,
                         minSpeechDuration = 0.18f,
                         windowSize = 512,
                         maxSpeechDuration = 8.0f
@@ -305,14 +265,12 @@ class GameAudioTranslator(
                         activeVad.acceptWaveform(floatSamples)
                         val isSpeech = activeVad.isSpeechDetected()
 
-                        // Detect transition from idle (false) to speech onset (true)
-                        if (!wasSpeechDetected && isSpeech) {
-                            preSpeechSnapshot = preSpeechRingBuffer.toArray()
-                            wasSpeechDetected = true
-                        } else if (!isSpeech) {
-                            wasSpeechDetected = false
-                            // Maintain rolling 500ms pre-speech audio buffer while idle
-                            preSpeechRingBuffer.write(floatSamples)
+                        // Incremental live decoding while speaking without rendering partial UI text
+                        if (isSpeech) {
+                            st.acceptWaveform(floatSamples, sampleRate = SAMPLE_RATE)
+                            while (rec.isReady(st)) {
+                                rec.decode(st)
+                            }
                         }
 
                         while (!activeVad.empty()) {
@@ -320,24 +278,9 @@ class GameAudioTranslator(
                             activeVad.pop()
                             val samples = segment.samples
                             if (samples.isNotEmpty()) {
-                                // Prepend 500ms pre-speech audio to recover onset syllables
-                                val preSamples = preSpeechSnapshot
-                                preSpeechSnapshot = null // consumed for this utterance
-
-                                val onsetRestoredSamples = if (preSamples != null && preSamples.isNotEmpty()) {
-                                    val merged = FloatArray(preSamples.size + samples.size)
-                                    System.arraycopy(preSamples, 0, merged, 0, preSamples.size)
-                                    System.arraycopy(samples, 0, merged, preSamples.size, samples.size)
-                                    merged
-                                } else {
-                                    samples
-                                }
-
-                                // 0.4s trailing silence padding (6400 floats @ 16kHz) to flush Zipformer final state
-                                val paddedSamples = FloatArray(onsetRestoredSamples.size + 6400)
-                                System.arraycopy(onsetRestoredSamples, 0, paddedSamples, 0, onsetRestoredSamples.size)
-
-                                st.acceptWaveform(paddedSamples, sampleRate = SAMPLE_RATE)
+                                // Compact 0.25s trailing silence tail (4000 floats @ 16kHz) to flush Zipformer final state
+                                val trailingSilence = FloatArray(4000)
+                                st.acceptWaveform(trailingSilence, sampleRate = SAMPLE_RATE)
                                 st.inputFinished()
                                 while (rec.isReady(st)) {
                                     rec.decode(st)
@@ -346,9 +289,11 @@ class GameAudioTranslator(
                                 rec.reset(st)
 
                                 if (text.isNotBlank()) {
-                                    val durationMs = (onsetRestoredSamples.size * 1000L) / SAMPLE_RATE
+                                    val durationMs = (samples.size * 1000L) / SAMPLE_RATE
                                     flushAndTranslate(text, durationMs)
                                 }
+                            } else {
+                                rec.reset(st)
                             }
                         }
                     }
@@ -421,6 +366,11 @@ class GameAudioTranslator(
         val patchMatch = com.zlatan.gamelens.patch.PatchManager.findAsrMatch(mergedEnglish)
         val finalArabic = if (patchMatch != null) {
             val (correctedEn, patchArabic) = patchMatch
+            if (patchArabic.isBlank()) {
+                DiagnosticLogger.log("ASR Duplicate Patch Span Suppressed: \"$mergedEnglish\" for \"$correctedEn\"")
+                pendingEnglishBuffer = ""
+                return
+            }
             lastMatchedPatchTargetNormalized = com.zlatan.gamelens.patch.PatchManager.normalizeText(correctedEn)
             lastMatchedPatchTimestampMs = nowMs
             DiagnosticLogger.log("ASR Patch Snap: \"$mergedEnglish\" -> \"$correctedEn\" = \"$patchArabic\"")
@@ -484,9 +434,6 @@ class GameAudioTranslator(
         lastSegmentEndTimestampMs = 0L
         lastMatchedPatchTargetNormalized = ""
         lastMatchedPatchTimestampMs = 0L
-        preSpeechRingBuffer.clear()
-        preSpeechSnapshot = null
-        wasSpeechDetected = false
 
         audioScope.cancel()
         DiagnosticLogger.log("GameAudio: Stopped and released")
