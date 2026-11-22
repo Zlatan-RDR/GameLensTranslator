@@ -46,6 +46,7 @@ import com.zlatan.gamelens.ocr.OcrBlock
 import com.zlatan.gamelens.ocr.OcrEngine
 import com.zlatan.gamelens.overlay.EdgeColorSampler
 import com.zlatan.gamelens.overlay.SeamlessOverlayRenderer
+import com.zlatan.gamelens.patch.PatchManager
 import com.zlatan.gamelens.translation.TranslationConfig
 import com.zlatan.gamelens.translation.TranslationManager
 import com.zlatan.gamelens.translation.TranslationMode
@@ -595,10 +596,10 @@ class TranslationOverlayService : Service() {
         }
 
         // 7. Normalization, Patch Matching (0ms snap) and Translation
-        val promptNormalized = TranslationManager.normalizeControllerPrompts(mergedEnglish)
+        val promptNormalized = translationManager.normalizeControllerPrompts(mergedEnglish)
         val patchMatch = PatchManager.lookup(promptNormalized)
         val arabicTranslation = if (patchMatch != null) {
-            patchMatch.arabic
+            patchMatch
         } else {
             withContext(Dispatchers.IO) {
                 translationManager.translate(promptNormalized)
