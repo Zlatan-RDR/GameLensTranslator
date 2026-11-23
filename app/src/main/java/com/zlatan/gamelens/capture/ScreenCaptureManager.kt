@@ -25,12 +25,29 @@ class ScreenCaptureManager(
     companion object {
         private const val TAG = "ScreenCaptureManager"
         private const val VIRTUAL_DISPLAY_NAME = "GameLensCaptureDisplay"
+
+        // 16 sample points across upper-right / right-half: x in 60%..92%, y in 10%..85%
+        private val RIGHT_HALF_PROBE_X = floatArrayOf(0.65f, 0.74f, 0.83f, 0.92f)
+        private val RIGHT_HALF_PROBE_Y = floatArrayOf(0.15f, 0.38f, 0.62f, 0.85f)
+
+        // 12 sample points across upper-left: x in 8%..42%, y in 10%..60%
+        private val TOP_LEFT_PROBE_X = floatArrayOf(0.12f, 0.26f, 0.40f)
+        private val TOP_LEFT_PROBE_Y = floatArrayOf(0.15f, 0.30f, 0.45f, 0.60f)
+
+        // 12 sample points across bottom-left strip: x in 8%..42%, y in 86%..97%
+        private val BOT_LEFT_PROBE_X = floatArrayOf(0.12f, 0.26f, 0.40f)
+        private val BOT_LEFT_PROBE_Y = floatArrayOf(0.88f, 0.91f, 0.94f, 0.97f)
     }
 
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
     private val backgroundHandler = Handler(Looper.getMainLooper())
     private var hasLoggedRoiSuccess = false
+    private var pendingResizeRunnable: Runnable? = null
+    private var lastLetterboxHealTimestamp: Long = 0L
+    private var letterboxHealCount: Int = 0
+    private var hasLoggedGeomAfterRebind: Boolean = false
+    private var lastRebindReason: String = "init"
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -42,7 +59,12 @@ class ScreenCaptureManager(
             Log.d(TAG, "MediaProjection onCapturedContentResize: ${width}x${height}")
             DiagnosticLogger.log("MediaProjection resize: ${width}x${height}")
             if (width > 0 && height > 0) {
-                updateDimensions(width, height, screenDensityDpi)
+                pendingResizeRunnable?.let { backgroundHandler.removeCallbacks(it) }
+                val runnable = Runnable {
+                    forceRebindVirtualDisplay(width, height, "onCapturedContentResize")
+                }
+                pendingResizeRunnable = runnable
+                backgroundHandler.postDelayed(runnable, 180L)
             }
         }
 
@@ -96,43 +118,163 @@ class ScreenCaptureManager(
     }
 
     /**
+     * Force-rebinds the VirtualDisplay projection matrix without re-creating it,
+     * complying strictly with Android 15/16 MediaProjection lifecycle rules.
+     * Busts SurfaceFlinger/DisplayManagerService cached projection matrices via dimension/DPI nudging.
+     */
+    @Synchronized
+    fun forceRebindVirtualDisplay(targetW: Int, targetH: Int, reason: String) {
+        if (targetW <= 0 || targetH <= 0) return
+        Log.i(TAG, "forceRebindVirtualDisplay: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH} @ ${screenDensityDpi}dpi (reason: $reason)")
+        DiagnosticLogger.log("VirtualDisplay rebind [$reason]: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH}")
+
+        this.screenWidth = targetW
+        this.screenHeight = targetH
+        hasLoggedRoiSuccess = false
+        hasLoggedGeomAfterRebind = false
+        lastRebindReason = reason
+        clearFullScreenCache()
+
+        try {
+            val vd = virtualDisplay
+            if (vd == null) {
+                setupVirtualDisplay()
+                return
+            }
+
+            // 1. Detach old surface first
+            vd.surface = null
+
+            // 2. Invalidate DisplayManagerService / SurfaceFlinger projection cache via real dimension/DPI nudge
+            val nudgeW = (targetW - 2).coerceAtLeast(16)
+            val nudgeDpi = (screenDensityDpi - 1).coerceAtLeast(120)
+            vd.resize(nudgeW, targetH, nudgeDpi)
+            vd.resize(targetW, targetH, screenDensityDpi)
+
+            // 3. Close old ImageReader, create a fresh ImageReader, and attach surface
+            val oldReader = imageReader
+            val newReader = ImageReader.newInstance(
+                targetW,
+                targetH,
+                PixelFormat.RGBA_8888,
+                2
+            )
+            imageReader = newReader
+            vd.surface = newReader.surface
+
+            try {
+                oldReader?.close()
+            } catch (_: Throwable) {}
+
+            Log.i(TAG, "VirtualDisplay rebind completed successfully ($reason)")
+            DiagnosticLogger.log("VirtualDisplay rebind success: ${targetW}x${targetH} ($reason)")
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error during forceRebindVirtualDisplay: ${t.message}", t)
+            DiagnosticLogger.log("VirtualDisplay rebind error: ${t.javaClass.simpleName} - ${t.message}")
+        }
+    }
+
+    /**
      * Resizes the existing VirtualDisplay on rotation without re-creating it,
      * complying strictly with Android 15/16 MediaProjection lifecycle rules.
      */
     @Synchronized
     fun updateDimensions(newWidth: Int, newHeight: Int, newDpi: Int) {
         if (newWidth <= 0 || newHeight <= 0) return
-        if (screenWidth == newWidth && screenHeight == newHeight && screenDensityDpi == newDpi) return
-
-        Log.d(TAG, "Updating capture dimensions: ${screenWidth}x${screenHeight} -> ${newWidth}x${newHeight} @ ${newDpi}dpi")
-        DiagnosticLogger.log("Capture resize: ${screenWidth}x${screenHeight} -> ${newWidth}x${newHeight}")
-        this.screenWidth = newWidth
-        this.screenHeight = newHeight
         this.screenDensityDpi = newDpi
-        hasLoggedRoiSuccess = false
+        if (screenWidth != newWidth || screenHeight != newHeight) {
+            forceRebindVirtualDisplay(newWidth, newHeight, "updateDimensions")
+        }
+    }
 
-        try {
-            val oldReader = imageReader
-            val newReader = ImageReader.newInstance(
-                newWidth,
-                newHeight,
-                PixelFormat.RGBA_8888,
-                2
-            )
-            imageReader = newReader
+    data class FrameProbeResult(
+        val isStuckLetterbox: Boolean,
+        val rightHalfNonBlackPct: Int,
+        val topLeftNonBlackPct: Int,
+        val botLeftNonBlackPct: Int
+    )
 
-            virtualDisplay?.let { vd ->
-                vd.resize(newWidth, newHeight, newDpi)
-                vd.surface = newReader.surface
-                Log.d(TAG, "VirtualDisplay resized and surface switched to new ImageReader successfully")
-            } ?: run {
-                setupVirtualDisplay()
+    private fun probeFrameGeometry(
+        buffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        rowStride: Int,
+        pixelStride: Int,
+        bufLimit: Int
+    ): FrameProbeResult {
+        if (width <= height) {
+            return FrameProbeResult(isStuckLetterbox = false, 100, 100, 100)
+        }
+
+        var rightNonBlack = 0
+        var rightTotal = 0
+        for (fx in RIGHT_HALF_PROBE_X) {
+            val px = (fx * width).toInt().coerceIn(0, width - 1)
+            for (fy in RIGHT_HALF_PROBE_Y) {
+                val py = (fy * height).toInt().coerceIn(0, height - 1)
+                val offset = py * rowStride + px * pixelStride
+                if (offset >= 0 && offset + 3 < bufLimit) {
+                    val r = buffer.get(offset).toInt() and 0xFF
+                    val g = buffer.get(offset + 1).toInt() and 0xFF
+                    val b = buffer.get(offset + 2).toInt() and 0xFF
+                    if (r > 0 || g > 0 || b > 0) rightNonBlack++
+                    rightTotal++
+                }
             }
+        }
 
-            oldReader?.close()
-        } catch (t: Throwable) {
-            Log.e(TAG, "Error updating capture dimensions: ${t.message}", t)
-            DiagnosticLogger.log("Capture update error: ${t.javaClass.simpleName} - ${t.message}")
+        var tlNonBlack = 0
+        var tlTotal = 0
+        for (fx in TOP_LEFT_PROBE_X) {
+            val px = (fx * width).toInt().coerceIn(0, width - 1)
+            for (fy in TOP_LEFT_PROBE_Y) {
+                val py = (fy * height).toInt().coerceIn(0, height - 1)
+                val offset = py * rowStride + px * pixelStride
+                if (offset >= 0 && offset + 3 < bufLimit) {
+                    val r = buffer.get(offset).toInt() and 0xFF
+                    val g = buffer.get(offset + 1).toInt() and 0xFF
+                    val b = buffer.get(offset + 2).toInt() and 0xFF
+                    if (r > 0 || g > 0 || b > 0) tlNonBlack++
+                    tlTotal++
+                }
+            }
+        }
+
+        var blNonBlack = 0
+        var blTotal = 0
+        for (fx in BOT_LEFT_PROBE_X) {
+            val px = (fx * width).toInt().coerceIn(0, width - 1)
+            for (fy in BOT_LEFT_PROBE_Y) {
+                val py = (fy * height).toInt().coerceIn(0, height - 1)
+                val offset = py * rowStride + px * pixelStride
+                if (offset >= 0 && offset + 3 < bufLimit) {
+                    val r = buffer.get(offset).toInt() and 0xFF
+                    val g = buffer.get(offset + 1).toInt() and 0xFF
+                    val b = buffer.get(offset + 2).toInt() and 0xFF
+                    if (r + g + b > 30) blNonBlack++
+                    blTotal++
+                }
+            }
+        }
+
+        val rPct = if (rightTotal > 0) (rightNonBlack * 100) / rightTotal else 0
+        val tlPct = if (tlTotal > 0) (tlNonBlack * 100) / tlTotal else 0
+        val blPct = if (blTotal > 0) (blNonBlack * 100) / blTotal else 0
+
+        // Stuck portrait-letterbox condition: 100% of right half is black (rPct == 0),
+        // 100% of top left is black (tlPct == 0), and bottom left has content (blPct > 0)
+        val isStuck = (rPct == 0 && tlPct == 0 && blPct > 0)
+        return FrameProbeResult(isStuck, rPct, tlPct, blPct)
+    }
+
+    private fun triggerLetterboxSelfHeal(width: Int, height: Int) {
+        val nowMs = android.os.SystemClock.uptimeMillis()
+        if (nowMs - lastLetterboxHealTimestamp >= 1500L && letterboxHealCount < 5) {
+            letterboxHealCount++
+            lastLetterboxHealTimestamp = nowMs
+            backgroundHandler.post {
+                forceRebindVirtualDisplay(width, height, "self-heal-letterbox (attempt $letterboxHealCount/5)")
+            }
         }
     }
 
@@ -187,6 +329,20 @@ class ScreenCaptureManager(
             val pixelStride = plane.pixelStride
             val rowStride = plane.rowStride
             val bufLimit = buffer.limit()
+
+            if (imgW > imgH) {
+                val probe = probeFrameGeometry(buffer, imgW, imgH, rowStride, pixelStride, bufLimit)
+                if (probe.isStuckLetterbox) {
+                    DiagnosticLogger.log("ScreenCapture: Detected stuck portrait-letterbox frame (${imgW}x${imgH}) — forcing VirtualDisplay rebind")
+                    Log.w(TAG, "ScreenCapture: Detected stuck portrait-letterbox frame (${imgW}x${imgH}) — forcing VirtualDisplay rebind")
+                    triggerLetterboxSelfHeal(imgW, imgH)
+                    return null
+                }
+                if (!hasLoggedGeomAfterRebind) {
+                    hasLoggedGeomAfterRebind = true
+                    DiagnosticLogger.log("FrameGeom [rebind-${lastRebindReason}]: img=${imgW}x${imgH}, rightHalfNonBlack=${probe.rightHalfNonBlackPct}%, topLeftNonBlack=${probe.topLeftNonBlackPct}%, botLeftNonBlack=${probe.botLeftNonBlackPct}%")
+                }
+            }
 
             val rowBytes = cropW * pixelStride
             val dest = ByteArray(rowBytes * cropH)
@@ -290,6 +446,17 @@ class ScreenCaptureManager(
             val pixelStride = plane.pixelStride
             val rowStride = plane.rowStride
             val bufLimit = buffer.limit()
+
+            if (imgW > imgH) {
+                val probe = probeFrameGeometry(buffer, imgW, imgH, rowStride, pixelStride, bufLimit)
+                DiagnosticLogger.log("FrameGeom [MenuScan]: img=${imgW}x${imgH}, rightHalfNonBlack=${probe.rightHalfNonBlackPct}%, topLeftNonBlack=${probe.topLeftNonBlackPct}%, botLeftNonBlack=${probe.botLeftNonBlackPct}%")
+                if (probe.isStuckLetterbox) {
+                    DiagnosticLogger.log("ScreenCapture: Detected stuck portrait-letterbox frame in MenuScan (${imgW}x${imgH}) — forcing VirtualDisplay rebind")
+                    Log.w(TAG, "ScreenCapture: Detected stuck portrait-letterbox frame in MenuScan (${imgW}x${imgH}) — forcing VirtualDisplay rebind")
+                    triggerLetterboxSelfHeal(imgW, imgH)
+                    return null
+                }
+            }
 
             val rowBytes = imgW * pixelStride
             val dest = ByteArray(rowBytes * imgH)
@@ -400,6 +567,8 @@ class ScreenCaptureManager(
     @Synchronized
     fun release() {
         try {
+            pendingResizeRunnable?.let { backgroundHandler.removeCallbacks(it) }
+            pendingResizeRunnable = null
             mediaProjection.unregisterCallback(projectionCallback)
         } catch (_: Throwable) {}
         try {
