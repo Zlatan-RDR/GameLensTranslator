@@ -42,19 +42,24 @@ class OcrEngine {
             "PRODUCED BY", "DIRECTED BY", "DESIGNER", "PROGRAMMER", "MUSIC BY", "WRITTEN BY"
         )
 
+        private val EXCLUDED_INTERJECTIONS = setOf("nooo", "shhh", "ahhh", "hmm", "mmm", "ahh")
+
         fun stripBackgroundTextureGarbage(text: String): String {
             if (text.isBlank()) return ""
             val tokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
             val cleanTokens = tokens.filterNot { token ->
-                val clean = token.trimEnd('.', ',', '!', '?', ';', ':', '"', '\'')
-                // 3+ identical consecutive letters (e.g. sss, SsS)
-                val has3Identical = Regex("(?i)([a-z])\\1{2,}").containsMatchIn(clean)
-                // Letter+digit+letter corruption (e.g. s8t8, tet8a)
-                val hasLetterDigitLetter = Regex("(?i)[a-z]+\\d+[a-z]+").containsMatchIn(clean)
-                // Dot-glued nonsense tokens with 3+ repeated characters (e.g. sss.sste, sss.s8t8) excluding decimal numbers
-                val isDotGluedGarbage = Regex("(?i)[a-z]{2,}\\.[a-z0-9]{3,}").matches(clean) &&
-                        Regex("(?i)([a-z0-9])\\1{2,}").containsMatchIn(clean)
-                has3Identical || hasLetterDigitLetter || isDotGluedGarbage
+                val clean = token.trimEnd('.', ',', '!', '?', ';', ':', '"', '\'').lowercase(java.util.Locale.US)
+                if (EXCLUDED_INTERJECTIONS.contains(clean)) return@filterNot false
+                // Obvious non-English barcode tokens: 3+ identical letters run (e.g. sss, sss.sste) or alphanumeric glitch (e.g. s8t8, tet8a)
+                val isBarcodeRun = Regex("^[a-z]*([a-z])\\1{2,}[a-z0-9.]*$", RegexOption.IGNORE_CASE).matches(clean)
+                val isAlphanumericGlitch = Regex("^[a-z]+\\d+[a-z0-9]*$", RegexOption.IGNORE_CASE).matches(clean)
+                isBarcodeRun || isAlphanumericGlitch
+            }
+            if (cleanTokens.isEmpty() && tokens.isNotEmpty()) {
+                val hasLetters = text.any { it.isLetter() }
+                if (hasLetters) {
+                    return text
+                }
             }
             return cleanTokens.joinToString(" ")
         }
@@ -705,15 +710,21 @@ class OcrEngine {
                                 !strippedJoined.endsWith(".") && !strippedJoined.endsWith("!") &&
                                 PatchManager.lookup(strippedJoined) == null
 
-                        if (totalLetters < 2 ||
-                            (realWords.size < 2 && PatchManager.lookup(strippedJoined) == null) ||
-                            isSingleWordHudFragment ||
-                            isBannerPopup ||
-                            !passesEnglishTokenRatioFilter(strippedJoined) ||
-                            OcrTextCleaner.isGarbledDocumentNoise(strippedJoined) ||
-                            OcrTextCleaner.isDiacriticSelfOcrGarble(strippedJoined) ||
-                            isCreditOrTitleLine(strippedJoined)
-                        ) {
+                        val dropReason = when {
+                            totalLetters < 2 -> "totalLetters < 2 ($totalLetters)"
+                            (realWords.isEmpty() && PatchManager.lookup(strippedJoined) == null) -> "realWords.isEmpty()"
+                            isSingleWordHudFragment -> "single-word-hud ($strippedJoined)"
+                            isBannerPopup -> "banner-popup ($strippedJoined)"
+                            !passesEnglishTokenRatioFilter(strippedJoined) -> "english-token-ratio < 60% ($strippedJoined)"
+                            OcrTextCleaner.isGarbledDocumentNoise(strippedJoined) -> "garbled-doc ($strippedJoined)"
+                            OcrTextCleaner.isDiacriticSelfOcrGarble(strippedJoined) -> "diacritic-garble ($strippedJoined)"
+                            isCreditOrTitleLine(strippedJoined) -> "credit-or-title ($strippedJoined)"
+                            else -> null
+                        }
+
+                        if (dropReason != null) {
+                            Log.d(TAG, "OCR dropped in recognizeRoi [$dropReason]: \"$strippedJoined\"")
+                            DiagnosticLogger.log("OCR dropped in recognizeRoi [$dropReason]: \"$strippedJoined\"")
                             emptyList()
                         } else {
                             lines

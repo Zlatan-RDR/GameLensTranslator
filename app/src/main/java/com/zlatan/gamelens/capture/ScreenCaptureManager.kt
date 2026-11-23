@@ -223,41 +223,67 @@ class ScreenCaptureManager(
 
     private var lastCapturedFullScreenBitmap: Bitmap? = null
 
+    @Volatile
+    private var isMenuModalVisible: Boolean = false
+
+    @Volatile
+    private var lastModalDismissedTimeMs: Long = 0L
+
+    fun setMenuModalVisible(visible: Boolean) {
+        isMenuModalVisible = visible
+        if (!visible) {
+            lastModalDismissedTimeMs = android.os.SystemClock.uptimeMillis()
+        }
+        clearFullScreenCache()
+    }
+
+    @Synchronized
+    fun clearFullScreenCache() {
+        lastCapturedFullScreenBitmap = null
+    }
+
+    private fun isModalScrimActive(): Boolean {
+        if (isMenuModalVisible) return true
+        val elapsed = android.os.SystemClock.uptimeMillis() - lastModalDismissedTimeMs
+        return elapsed in 0L..400L
+    }
+
     /**
      * Bounds-Safe Full-Screen Capture with Static-Frame Cache.
      * Uses row-by-row Adreno safe buffer copying (identical to acquireCroppedRoi)
-     * with up to 3 retries (50ms apart) if acquireLatestImage() returns null on a static paused screen,
-     * falling back to the cached full-screen frame if reader returns null.
+     * with up to 4 retries (60ms apart) if acquireLatestImage() returns null on a static paused screen,
+     * falling back to the cached full-screen frame only when no modal scrim is active.
      */
     @Synchronized
     fun acquireFullScreenBitmap(): Bitmap? {
-        val reader = imageReader ?: return lastCapturedFullScreenBitmap
+        val reader = imageReader ?: return if (isModalScrimActive()) null else lastCapturedFullScreenBitmap
         var image: Image? = null
-        for (attempt in 1..3) {
+        for (attempt in 1..4) {
             try {
                 image = reader.acquireLatestImage()
                 if (image != null) break
             } catch (t: Throwable) {
                 DiagnosticLogger.log("acquireFullScreenImage attempt $attempt error: ${t.javaClass.simpleName} - ${t.message}")
             }
-            if (attempt < 3) {
+            if (attempt < 4) {
                 try {
-                    Thread.sleep(50L)
+                    Thread.sleep(60L)
                 } catch (_: InterruptedException) {}
             }
         }
 
         if (image == null) {
-            Log.d(TAG, "acquireFullScreenBitmap: ImageReader returned null, using cached frame (cached=${lastCapturedFullScreenBitmap != null})")
-            DiagnosticLogger.log("acquireFullScreen: ImageReader null, using cached frame (cached=${lastCapturedFullScreenBitmap != null})")
-            return lastCapturedFullScreenBitmap
+            val fallback = if (isModalScrimActive()) null else lastCapturedFullScreenBitmap
+            Log.d(TAG, "acquireFullScreenBitmap: ImageReader returned null, using cached frame (cached=${fallback != null})")
+            DiagnosticLogger.log("acquireFullScreen: ImageReader null, using cached frame (cached=${fallback != null}, scrimActive=${isModalScrimActive()})")
+            return fallback
         }
 
         return try {
             val imgW = image.width
             val imgH = image.height
             val planes = image.planes
-            if (planes.isEmpty()) return lastCapturedFullScreenBitmap
+            if (planes.isEmpty()) return if (isModalScrimActive()) null else lastCapturedFullScreenBitmap
 
             val plane = planes[0]
             val buffer: ByteBuffer = plane.buffer
@@ -280,12 +306,16 @@ class ScreenCaptureManager(
             val fullBitmap = Bitmap.createBitmap(imgW, imgH, Bitmap.Config.ARGB_8888)
             fullBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
 
-            lastCapturedFullScreenBitmap = fullBitmap
+            if (!isModalScrimActive()) {
+                lastCapturedFullScreenBitmap = fullBitmap
+            } else {
+                lastCapturedFullScreenBitmap = null
+            }
             fullBitmap
         } catch (t: Throwable) {
             Log.e(TAG, "Error acquiring full-screen bitmap: ${t.message}", t)
             DiagnosticLogger.log("acquireFullScreenBitmap error: ${t.javaClass.simpleName} - ${t.message}")
-            lastCapturedFullScreenBitmap
+            if (isModalScrimActive()) null else lastCapturedFullScreenBitmap
         } finally {
             try {
                 image.close()

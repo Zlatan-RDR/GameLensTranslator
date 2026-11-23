@@ -205,6 +205,7 @@ class TranslationOverlayService : Service() {
             seamlessOverlayRenderer = SeamlessOverlayRenderer(this)
             seamlessOverlayRenderer?.onMenuModalDismissed = {
                 isMenuModalVisible = false
+                screenCaptureManager?.setMenuModalVisible(false)
                 isMenuScanInProgress = false
                 mainHandler.post {
                     updateBubbleVisualState()
@@ -654,10 +655,10 @@ class TranslationOverlayService : Service() {
             croppedRoi.recycle()
         }
 
-        // Hard Quality Floor (0.70f): Unconditionally discard if bestScore < 0.70f (never queue for confirmation)
-        if (bestScore < 0.70f) {
+        // Hard Quality Floor (0.55f): Unconditionally discard if bestScore < 0.55f (never queue for confirmation)
+        if (bestScore < 0.55f) {
             if (lines.isNotEmpty()) {
-                val dropMsg = "OCR skipped [low-quality-floor q=%.2f < 0.70]: \"${lines.joinToString(" ")}\"".format(java.util.Locale.US, bestScore)
+                val dropMsg = "OCR skipped [low-quality-floor q=%.2f < 0.55]: \"${lines.joinToString(" ")}\"".format(java.util.Locale.US, bestScore)
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
             }
@@ -721,7 +722,9 @@ class TranslationOverlayService : Service() {
         // Prefix/subset overwrite guard: ignore new OCR strings that are shorter subsets/prefixes (>= 75% token overlap) of the currently displayed sentence within 5000ms
         if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 5000L)) {
             if (com.zlatan.gamelens.ocr.OcrTextCleaner.isShorterSubsetOrPrefix(mergedEnglish, lastDisplayedEnglishText)) {
-                Log.d(TAG, "OCR skipped [shorter-subset]: \"$mergedEnglish\" (subset of: \"$lastDisplayedEnglishText\")")
+                val dropMsg = "OCR skipped [shorter-subset]: \"$mergedEnglish\" (subset of: \"$lastDisplayedEnglishText\")"
+                Log.d(TAG, dropMsg)
+                DiagnosticLogger.log(dropMsg)
                 return
             }
         }
@@ -732,7 +735,9 @@ class TranslationOverlayService : Service() {
             if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CREDIT_POLLUTION &&
                 PatchManager.lookup(mergedEnglish) == null
             ) {
-                Log.d(TAG, "OCR skipped [credit-polluted-superset]: \"$mergedEnglish\" (polluted re-read of: \"$lastDisplayedEnglishText\")")
+                val dropMsg = "OCR skipped [credit-polluted-superset]: \"$mergedEnglish\" (polluted re-read of: \"$lastDisplayedEnglishText\")"
+                Log.d(TAG, dropMsg)
+                DiagnosticLogger.log(dropMsg)
                 return
             }
 
@@ -830,7 +835,9 @@ class TranslationOverlayService : Service() {
         val arabicTranslation = if (patchMatch != null) rawArabic else translationManager.repairGluedArabicWords(rawArabic)
 
         if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(promptNormalized.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
-            Log.d(TAG, "OCR skipped [empty-or-non-arabic]: \"$promptNormalized\" -> \"$arabicTranslation\"")
+            val dropMsg = "OCR skipped [empty-or-non-arabic]: \"$promptNormalized\" -> \"$arabicTranslation\""
+            Log.d(TAG, dropMsg)
+            DiagnosticLogger.log(dropMsg)
             return
         }
 
@@ -1010,6 +1017,7 @@ class TranslationOverlayService : Service() {
         if (isMenuModalVisible || seamlessOverlayRenderer?.hasPinnedMenuCards() == true) {
             seamlessOverlayRenderer?.clearMenuCards()
             isMenuModalVisible = false
+            screenCaptureManager?.setMenuModalVisible(false)
             showToast("تم إخفاء ترجمة القائمة والعودة للعب")
             updateBubbleVisualState()
         } else {
@@ -1121,7 +1129,8 @@ class TranslationOverlayService : Service() {
                     bubbleView?.visibility = View.INVISIBLE
                     seamlessOverlayRenderer?.setInvisibleForCapture()
                 }
-                delay(80L)
+                captureMgr.clearFullScreenCache()
+                delay(120L)
 
                 val fullBitmap = captureMgr.acquireFullScreenBitmap()
 
@@ -1143,6 +1152,9 @@ class TranslationOverlayService : Service() {
                 // Dedicated Full-Screen Menu / Popup OCR Mode (no ROI cropping, preserves headers)
                 val detectedBlocks = ocrEngine.recognizeFullScreenMenu(fullBitmap)
                 DiagnosticLogger.log("MenuScan: captured ${fullBitmap.width}x${fullBitmap.height}, detected blocks=${detectedBlocks.size}")
+                detectedBlocks.forEachIndexed { i, b ->
+                    DiagnosticLogger.log("MenuBlock #$i: ${b.text.take(100).replace("\n", " ")}")
+                }
 
                 if (detectedBlocks.isEmpty()) {
                     DiagnosticLogger.log("MenuScan: No text blocks detected on screen")
@@ -1180,6 +1192,7 @@ class TranslationOverlayService : Service() {
                 }
 
                 isMenuModalVisible = true
+                screenCaptureManager?.setMenuModalVisible(true)
                 isMenuScanInProgress = false
 
                 // Render professional RTL Arabic modal card with explicit close button
