@@ -30,6 +30,7 @@ class ScreenCaptureManager(
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
     private val backgroundHandler = Handler(Looper.getMainLooper())
+    private var hasLoggedRoiSuccess = false
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -108,6 +109,7 @@ class ScreenCaptureManager(
         this.screenWidth = newWidth
         this.screenHeight = newHeight
         this.screenDensityDpi = newDpi
+        hasLoggedRoiSuccess = false
 
         try {
             val oldReader = imageReader
@@ -137,6 +139,7 @@ class ScreenCaptureManager(
     /**
      * Grabs a cropped sub-region (ROI) directly from the ImageReader without allocating
      * the full-screen (1080x2400) Bitmap, cutting memory allocations by >80% and reducing latency.
+     * Bounds-safe against Qualcomm Adreno buffer limits and unmutated buffer states.
      */
     @Synchronized
     fun acquireCroppedRoi(calRect: RectF): Bitmap? {
@@ -154,54 +157,49 @@ class ScreenCaptureManager(
             val planes = image.planes
             if (planes.isEmpty()) return null
 
+            val clampedLeft = calRect.left.coerceIn(0f, 1f)
+            val clampedTop = calRect.top.coerceIn(0f, 1f)
+            val clampedRight = calRect.right.coerceIn(clampedLeft, 1f)
+            val clampedBottom = calRect.bottom.coerceIn(clampedTop, 1f)
+
+            val cropLeft = (clampedLeft * imgW).toInt().coerceIn(0, imgW - 1)
+            val cropTop = (clampedTop * imgH).toInt().coerceIn(0, imgH - 1)
+            val cropRight = (clampedRight * imgW).toInt().coerceIn(cropLeft + 1, imgW)
+            val cropBottom = (clampedBottom * imgH).toInt().coerceIn(cropTop + 1, imgH)
+
+            val cropW = cropRight - cropLeft
+            val cropH = cropBottom - cropTop
+
+            if (cropW <= 0 || cropH <= 0) return null
+
             val plane = planes[0]
             val buffer: ByteBuffer = plane.buffer
             val pixelStride = plane.pixelStride
             val rowStride = plane.rowStride
+            val bufLimit = buffer.limit()
 
-            val cropX = (calRect.left * imgW).toInt().coerceIn(0, imgW - 1)
-            val cropY = (calRect.top * imgH).toInt().coerceIn(0, imgH - 1)
-            val cropW = (calRect.width() * imgW).toInt().coerceIn(1, imgW - cropX)
-            val cropH = (calRect.height() * imgH).toInt().coerceIn(1, imgH - cropY)
+            val rowBytes = cropW * pixelStride
+            val dest = ByteArray(rowBytes * cropH)
 
-            if (cropW <= 0 || cropH <= 0) return null
-
-            if (pixelStride == 4) {
-                val rowBytes = cropW * 4
-                val croppedBuffer = ByteBuffer.allocateDirect(rowBytes * cropH)
-                val bufferCap = buffer.capacity()
-
-                for (y in cropY until (cropY + cropH)) {
-                    val rowOffset = y * rowStride + cropX * 4
-                    if (rowOffset + rowBytes <= bufferCap) {
-                        buffer.position(rowOffset)
-                        buffer.limit(rowOffset + rowBytes)
-                        croppedBuffer.put(buffer)
-                    }
+            for (row in 0 until cropH) {
+                val srcOffset = (cropTop + row) * rowStride + cropLeft * pixelStride
+                if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) {
+                    break
                 }
-                croppedBuffer.rewind()
-                val roiBitmap = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
-                roiBitmap.copyPixelsFromBuffer(croppedBuffer)
-                roiBitmap
-            } else {
-                // Non-standard pixelStride fallback
-                val rowPadding = rowStride - pixelStride * imgW
-                val bufferWidth = imgW + (rowPadding / pixelStride)
-                val requiredBytes = bufferWidth * imgH * 4
-                val safeBuffer = if (buffer.remaining() >= requiredBytes) {
-                    buffer.position(0)
-                    buffer
-                } else {
-                    val padded = ByteBuffer.allocateDirect(requiredBytes)
-                    buffer.position(0)
-                    padded.put(buffer)
-                    padded.position(0)
-                    padded
-                }
-                val tempBitmap = Bitmap.createBitmap(bufferWidth, imgH, Bitmap.Config.ARGB_8888)
-                tempBitmap.copyPixelsFromBuffer(safeBuffer)
-                Bitmap.createBitmap(tempBitmap, cropX, cropY, cropW, cropH)
+                buffer.position(srcOffset)
+                buffer.get(dest, row * rowBytes, rowBytes)
             }
+
+            val roiBitmap = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
+            roiBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
+
+            if (!hasLoggedRoiSuccess) {
+                hasLoggedRoiSuccess = true
+                Log.i(TAG, "acquireCroppedRoi ready: img=${imgW}x${imgH}, crop=${cropW}x${cropH}, rowStride=$rowStride, limit=$bufLimit")
+                DiagnosticLogger.log("acquireCroppedRoi ready: img=${imgW}x${imgH}, crop=${cropW}x${cropH}, rowStride=$rowStride, limit=$bufLimit")
+            }
+
+            roiBitmap
         } catch (t: Throwable) {
             Log.e(TAG, "Error acquiring cropped ROI: ${t.message}", t)
             DiagnosticLogger.log("acquireCroppedRoi error: ${t.javaClass.simpleName} - ${t.message}")
