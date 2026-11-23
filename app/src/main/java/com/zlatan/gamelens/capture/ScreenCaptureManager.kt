@@ -11,6 +11,7 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import java.nio.ByteBuffer
@@ -49,6 +50,13 @@ class ScreenCaptureManager(
     private var hasLoggedGeomAfterRebind: Boolean = false
     private var lastRebindReason: String = "init"
 
+    @Volatile
+    private var isReleased: Boolean = false
+    private var suppressResizeCallbackUntilMs: Long = 0L
+    private var lastReboundWidth: Int = 0
+    private var lastReboundHeight: Int = 0
+    private var lastReboundTimestampMs: Long = 0L
+
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
             Log.d(TAG, "MediaProjection onStop invoked by system")
@@ -56,16 +64,31 @@ class ScreenCaptureManager(
         }
 
         override fun onCapturedContentResize(width: Int, height: Int) {
+            if (isReleased) return
             Log.d(TAG, "MediaProjection onCapturedContentResize: ${width}x${height}")
             DiagnosticLogger.log("MediaProjection resize: ${width}x${height}")
-            if (width > 0 && height > 0) {
-                pendingResizeRunnable?.let { backgroundHandler.removeCallbacks(it) }
-                val runnable = Runnable {
+            if (width <= 0 || height <= 0) return
+
+            val now = SystemClock.elapsedRealtime()
+            if (width == screenWidth && height == screenHeight) {
+                if (now < suppressResizeCallbackUntilMs) {
+                    Log.d(TAG, "Ignoring self-echo onCapturedContentResize: ${width}x${height}")
+                    return
+                }
+                if (width == lastReboundWidth && height == lastReboundHeight && (now - lastReboundTimestampMs < 5000L)) {
+                    Log.d(TAG, "Ignoring duplicate onCapturedContentResize within 5000ms: ${width}x${height}")
+                    return
+                }
+            }
+
+            pendingResizeRunnable?.let { backgroundHandler.removeCallbacks(it) }
+            val runnable = Runnable {
+                if (!isReleased) {
                     forceRebindVirtualDisplay(width, height, "onCapturedContentResize")
                 }
-                pendingResizeRunnable = runnable
-                backgroundHandler.postDelayed(runnable, 180L)
             }
+            pendingResizeRunnable = runnable
+            backgroundHandler.postDelayed(runnable, 180L)
         }
 
         override fun onCapturedContentVisibilityChanged(isVisible: Boolean) {
@@ -124,28 +147,32 @@ class ScreenCaptureManager(
      */
     @Synchronized
     fun forceRebindVirtualDisplay(targetW: Int, targetH: Int, reason: String) {
-        if (targetW <= 0 || targetH <= 0) return
+        if (isReleased || targetW <= 0 || targetH <= 0) return
+        val vd = virtualDisplay
+        if (vd == null) {
+            Log.w(TAG, "forceRebindVirtualDisplay aborted: VirtualDisplay is null or released (reason: $reason)")
+            return
+        }
+
         Log.i(TAG, "forceRebindVirtualDisplay: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH} @ ${screenDensityDpi}dpi (reason: $reason)")
         DiagnosticLogger.log("VirtualDisplay rebind [$reason]: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH}")
 
         this.screenWidth = targetW
         this.screenHeight = targetH
+        this.lastReboundWidth = targetW
+        this.lastReboundHeight = targetH
+        this.lastReboundTimestampMs = SystemClock.elapsedRealtime()
         hasLoggedRoiSuccess = false
         hasLoggedGeomAfterRebind = false
         lastRebindReason = reason
         clearFullScreenCache()
 
         try {
-            val vd = virtualDisplay
-            if (vd == null) {
-                setupVirtualDisplay()
-                return
-            }
-
             // 1. Detach old surface first
             vd.surface = null
 
             // 2. Invalidate DisplayManagerService / SurfaceFlinger projection cache via real dimension/DPI nudge
+            suppressResizeCallbackUntilMs = SystemClock.elapsedRealtime() + 800L
             val nudgeW = (targetW - 2).coerceAtLeast(16)
             val nudgeDpi = (screenDensityDpi - 1).coerceAtLeast(120)
             vd.resize(nudgeW, targetH, nudgeDpi)
@@ -268,12 +295,15 @@ class ScreenCaptureManager(
     }
 
     private fun triggerLetterboxSelfHeal(width: Int, height: Int) {
-        val nowMs = android.os.SystemClock.uptimeMillis()
+        if (isReleased) return
+        val nowMs = SystemClock.uptimeMillis()
         if (nowMs - lastLetterboxHealTimestamp >= 1500L && letterboxHealCount < 5) {
             letterboxHealCount++
             lastLetterboxHealTimestamp = nowMs
             backgroundHandler.post {
-                forceRebindVirtualDisplay(width, height, "self-heal-letterbox (attempt $letterboxHealCount/5)")
+                if (!isReleased) {
+                    forceRebindVirtualDisplay(width, height, "self-heal-letterbox (attempt $letterboxHealCount/5)")
+                }
             }
         }
     }
@@ -566,6 +596,7 @@ class ScreenCaptureManager(
 
     @Synchronized
     fun release() {
+        isReleased = true
         try {
             pendingResizeRunnable?.let { backgroundHandler.removeCallbacks(it) }
             pendingResizeRunnable = null

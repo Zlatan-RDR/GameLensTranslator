@@ -159,6 +159,7 @@ class TranslationManager(
 
     /**
      * Fast in-memory fuzzy search across recent LRU translation cache entries (>= 0.90 similarity).
+     * Strictly requires exact word count match and no differing alphabetic word of length >= 4 with Levenshtein distance > 1.
      */
     fun findFuzzyMemoryCacheMatch(text: String, threshold: Float = 0.90f): String? {
         val snapshot = fastMemoryCache.snapshot()

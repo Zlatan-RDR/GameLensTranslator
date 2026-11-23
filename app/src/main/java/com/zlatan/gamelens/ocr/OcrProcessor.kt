@@ -226,6 +226,15 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\bluck(\\d+)\\b"), "luck, $1")
         s = s.replace(Regex("(?i)\\busedthe\\b"), "used the")
         s = s.replace(Regex("(?i)\\bafterall\\b"), "After all")
+        s = s.replace(Regex("(?i)\\bel\\s+iminate\\b"), "eliminate")
+        s = s.replace(Regex("(?i)\\bthewitnesses\\b"), "the witnesses")
+        s = s.replace(Regex("(?i)\\bca\\s+lmly\\b"), "calmly")
+        s = s.replace(Regex("(?i)\\bSilverbal\\s+ler\\b"), "Silverballer")
+        s = s.replace(Regex("(?i)\\bofflimits\\b"), "off limits")
+        s = s.replace(Regex("(?i)\\byoursilenced\\b"), "your silenced")
+        s = s.replace(Regex("(?i)\\ballowedto\\b"), "allowed to")
+        s = s.replace(Regex("(?i)\\boninstinct\\b"), "on instinct")
+        s = s.replace(Regex("(?i)\\bpaintdry\\b"), "paint dry")
 
         // Remove stray underscores (e.g. cut off_ -> cut off)
         s = s.replace(Regex("_+"), " ")
@@ -508,6 +517,8 @@ object OcrTextCleaner {
 
     /**
      * Calculates token similarity between two strings to avoid re-translating jitter (>= threshold).
+     * Enforces exact word count match and rejects matches where any differing alphabetic word
+     * of length >= 4 has Levenshtein distance > 1.
      */
     fun isSimilar(s1: String, s2: String, threshold: Float = 0.88f): Boolean {
         if (s1.equals(s2, ignoreCase = true)) return true
@@ -516,6 +527,19 @@ object OcrTextCleaner {
         if (n1 == n2) return true
         if (n1.isEmpty() || n2.isEmpty()) return false
 
+        val w1 = n1.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val w2 = n2.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (w1.size != w2.size) return false
+
+        for (i in w1.indices) {
+            val word1 = w1[i]
+            val word2 = w2[i]
+            if (word1 != word2) {
+                val wordDist = levenshtein(word1, word2)
+                if (wordDist > 1) return false
+            }
+        }
+
         val maxLen = maxOf(n1.length, n2.length)
         if (maxLen == 0) return true
         val dist = levenshtein(n1, n2)
@@ -523,7 +547,7 @@ object OcrTextCleaner {
         return similarity >= threshold
     }
 
-    private fun levenshtein(s1: String, s2: String): Int {
+    fun levenshtein(s1: String, s2: String): Int {
         val len1 = s1.length
         val len2 = s2.length
         if (len1 == 0) return len2
