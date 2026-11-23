@@ -330,7 +330,7 @@ class TranslationManager(
         }
 
         // Deterministic Clean Kill handling: if input is standalone "Clean kill" or "Clean kill - ..."
-        val cleanKillPrefixMatch = Regex("(?i)^clean\\s+kill\\s*[-–—:]\\s*(.+)$").find(trimmed)
+        val cleanKillPrefixMatch = Regex("(?i)^clean\\s*kill\\s*[-–—:]\\s*(.+)$").find(trimmed)
         if (cleanKillPrefixMatch != null) {
             val remainder = cleanKillPrefixMatch.groupValues[1].trim()
             val translatedRemainder = translate(remainder, isFinal)
@@ -343,7 +343,7 @@ class TranslationManager(
             return@withContext result
         }
 
-        if (Regex("(?i)^clean\\s+kill[!.?]?$").matches(trimmed)) {
+        if (Regex("(?i)^clean\\s*kill[!.?]?$").matches(trimmed)) {
             val result = "قتل صامت"
             fastMemoryCache.put(trimmed, result)
             cacheManager.put(trimmed, result)

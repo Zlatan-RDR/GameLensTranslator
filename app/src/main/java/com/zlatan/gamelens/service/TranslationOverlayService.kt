@@ -177,7 +177,9 @@ class TranslationOverlayService : Service() {
 
     private var seamlessOverlayRenderer: SeamlessOverlayRenderer? = null
     private var latestDetectedBlocks: List<OcrBlock> = emptyList()
-    private var consecutiveEmptyOcrPasses: Int = 0
+    private var consecutiveEmptyRoiCount: Int = 0
+    private var lastSubtitleVisibleOnScreenMs: Long = 0L
+    private var lastResizeTimestampMs: Long = 0L
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -241,6 +243,7 @@ class TranslationOverlayService : Service() {
         screenCaptureManager?.updateDimensions(w, h, dpi)
         clampBubbleWithinScreen(w, h)
         seamlessOverlayRenderer?.updateScreenDimensions()
+        lastResizeTimestampMs = android.os.SystemClock.elapsedRealtime()
     }
 
     private fun clampBubbleWithinScreen(screenW: Int, screenH: Int) {
@@ -518,7 +521,8 @@ class TranslationOverlayService : Service() {
         val (screenW, screenH, dpi) = getRealScreenDimensions()
 
         // 1. Auto-pause in Portrait or when GameLens is in the foreground
-        if (screenH > screenW || com.zlatan.gamelens.MainActivity.isAppInForeground) {
+        val nowRealtime = android.os.SystemClock.elapsedRealtime()
+        if (screenH > screenW || (nowRealtime - lastResizeTimestampMs < 500L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
             if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
@@ -527,6 +531,7 @@ class TranslationOverlayService : Service() {
                 streamingStartTime = 0L
                 lastDisplayWasPatch = false
                 lastPatchEnglishText = ""
+                consecutiveEmptyRoiCount = 0
             }
             return
         }
@@ -544,9 +549,10 @@ class TranslationOverlayService : Service() {
             captureMgr.updateDimensions(screenW, screenH, dpi)
             clampBubbleWithinScreen(screenW, screenH)
             seamlessOverlayRenderer?.updateScreenDimensions()
+            lastResizeTimestampMs = android.os.SystemClock.elapsedRealtime()
         }
 
-        if (curH > curW) {
+        if (curH > curW || (android.os.SystemClock.elapsedRealtime() - lastResizeTimestampMs < 500L)) {
             seamlessOverlayRenderer?.clear()
             lastDisplayedEnglishText = ""
             candidateEnglishText = ""
@@ -554,6 +560,7 @@ class TranslationOverlayService : Service() {
             streamingStartTime = 0L
             lastDisplayWasPatch = false
             lastPatchEnglishText = ""
+            consecutiveEmptyRoiCount = 0
             return
         }
 
@@ -587,11 +594,11 @@ class TranslationOverlayService : Service() {
 
         if (croppedRoi == null) return
 
-        // 4. Stage 2: Settle-Then-Translate Pixel-Diff Gate (~1.5ms) & 560ms Heartbeat Scan
+        // 4. Stage 2: Settle-Then-Translate Pixel-Diff Gate (~1.5ms) & Heartbeat Scan
         val isOverlayShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
         val timeSinceLastOcr = now - lastOcrTimestamp
         val forceClearCheck = isOverlayShowing && (timeSinceLastOcr >= 420L)
-        val forceHeartbeat = timeSinceLastOcr >= 560L // Mandatory heartbeat scan every 560ms (4 ticks)
+        val forceHeartbeat = timeSinceLastOcr >= 560L || isOverlayShowing // Keep heartbeat active while a subtitle is displayed
 
         val delta = fastPixelDiffGate.computeDiffRatio(croppedRoi)
         if (isRoiSettling && !forceInstantPass) {
@@ -662,9 +669,9 @@ class TranslationOverlayService : Service() {
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
             }
-            consecutiveEmptyOcrPasses++
-            val isHoldActive = seamlessOverlayRenderer?.isHoldActive() == true
-            if (!isHoldActive && consecutiveEmptyOcrPasses >= 9) {
+            consecutiveEmptyRoiCount++
+            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
+            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 4 && (now - lastSubtitleVisibleOnScreenMs >= 750L)) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -696,9 +703,9 @@ class TranslationOverlayService : Service() {
                 Log.d(TAG, "OCR skipped [$dropReason]: \"$mergedRaw\"")
                 DiagnosticLogger.log("OCR skipped [$dropReason]: \"$mergedRaw\"")
             }
-            consecutiveEmptyOcrPasses++
-            val isHoldActive = seamlessOverlayRenderer?.isHoldActive() == true
-            if (!isHoldActive && consecutiveEmptyOcrPasses >= 9) {
+            consecutiveEmptyRoiCount++
+            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
+            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 4 && (now - lastSubtitleVisibleOnScreenMs >= 750L)) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -710,12 +717,15 @@ class TranslationOverlayService : Service() {
             return
         }
 
-        // Subtitle detected: reset empty counter
-        consecutiveEmptyOcrPasses = 0
+        // Subtitle detected: reset empty counter and update last visible timestamp
+        consecutiveEmptyRoiCount = 0
+        lastSubtitleVisibleOnScreenMs = now
 
         // Jitter Gate: skip if >= 88% similar to currently displayed text (0ms, zero flicker)
         if (lastDisplayedEnglishText.isNotEmpty() && com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(mergedEnglish, lastDisplayedEnglishText, 0.88f)) {
             Log.d(TAG, "OCR skipped [jitter/dedup]: \"$mergedEnglish\" (matches displayed: \"$lastDisplayedEnglishText\")")
+            consecutiveEmptyRoiCount = 0
+            lastSubtitleVisibleOnScreenMs = now
             return
         }
 
@@ -725,6 +735,8 @@ class TranslationOverlayService : Service() {
                 val dropMsg = "OCR skipped [shorter-subset]: \"$mergedEnglish\" (subset of: \"$lastDisplayedEnglishText\")"
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
+                consecutiveEmptyRoiCount = 0
+                lastSubtitleVisibleOnScreenMs = now
                 return
             }
         }
@@ -782,6 +794,8 @@ class TranslationOverlayService : Service() {
                         val dropMsg = "OCR dropped by Active Patch-Lock Guard (overlap=%.2f >= 0.55 with active patch \"$lastPatchEnglishText\")".format(java.util.Locale.US, overlap)
                         Log.d(TAG, dropMsg)
                         DiagnosticLogger.log(dropMsg)
+                        consecutiveEmptyRoiCount = 0
+                        lastSubtitleVisibleOnScreenMs = now
                         return
                     }
                 }
@@ -811,6 +825,8 @@ class TranslationOverlayService : Service() {
                 val dropMsg = "OCR skipped [pending-confirmation q=%.2f]: \"$promptNormalized\" (waiting 2nd frame <= 1000ms)".format(java.util.Locale.US, bestScore)
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
+                consecutiveEmptyRoiCount = 0
+                lastSubtitleVisibleOnScreenMs = now
                 return
             }
             // 2nd frame confirmed within 1000ms! Clear candidate and proceed to translate
@@ -818,9 +834,11 @@ class TranslationOverlayService : Service() {
             Log.d(TAG, "Low-confidence OCR confirmed on 2nd frame: \"$promptNormalized\"")
         }
 
-        // Final guard against orientation flip or foreground switch right before translation
+        // Final guard against orientation flip, capture resize cooldown, or foreground switch right before translation
         val (finalW, finalH, _) = getRealScreenDimensions()
-        if (finalH > finalW || com.zlatan.gamelens.MainActivity.isAppInForeground) {
+        val (finalCurW, finalCurH) = captureMgr.getDimensions()
+        val finalRealtime = android.os.SystemClock.elapsedRealtime()
+        if (finalH > finalW || finalCurH > finalCurW || (finalRealtime - lastResizeTimestampMs < 500L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
             return
         }
 
@@ -843,6 +861,8 @@ class TranslationOverlayService : Service() {
 
         lastDisplayedEnglishText = mergedEnglish
         lastSubtitleDisplayTimestamp = now
+        lastSubtitleVisibleOnScreenMs = now
+        consecutiveEmptyRoiCount = 0
         pendingStreamingText = ""
         streamingStartTime = 0L
 

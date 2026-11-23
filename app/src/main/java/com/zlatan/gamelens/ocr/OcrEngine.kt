@@ -664,13 +664,16 @@ class OcrEngine {
                                 return@filter false
                             }
 
-                            // 4. Reject Clipped Single-Word HUD Action Prompts & UI Fragments
+                            // 4. Reject Clipped Single-Word HUD Action Prompts & Unpunctuated Single-Word Garbage
                             val clusterTokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
                             if (clusterTokens.size == 1) {
                                 val word = clusterTokens[0]
                                 val coreLetters = word.filter { it.isLetter() }.lowercase(java.util.Locale.US)
+                                val hasTerminalPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?") ||
+                                        word.endsWith(".\"") || word.endsWith("!\"") || word.endsWith("?\"") ||
+                                        word.endsWith(".'") || word.endsWith("!'") || word.endsWith("?'")
                                 val isShortOrHud = coreLetters.length <= 4 || OcrTextCleaner.HUD_ACTION_STEMS.contains(coreLetters)
-                                if (isShortOrHud && PatchManager.lookup(text) == null) {
+                                if ((isShortOrHud || !hasTerminalPunctuation) && PatchManager.lookup(text) == null) {
                                     return@filter false
                                 }
                             }
@@ -707,6 +710,13 @@ class OcrEngine {
                             val isShortOrHud = coreLetters.length <= 4 || OcrTextCleaner.HUD_ACTION_STEMS.contains(coreLetters)
                             isShortOrHud && PatchManager.lookup(strippedJoined) == null
                         }
+                        val isUnpunctuatedSingleWord = joinedTokens.size == 1 && run {
+                            val word = joinedTokens[0]
+                            val hasTerminalPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?") ||
+                                    word.endsWith(".\"") || word.endsWith("!\"") || word.endsWith("?\"") ||
+                                    word.endsWith(".'") || word.endsWith("!'") || word.endsWith("?'")
+                            !hasTerminalPunctuation && PatchManager.lookup(strippedJoined) == null
+                        }
                         val isBannerPopup = Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(strippedJoined) &&
                                 !strippedJoined.endsWith(".") && !strippedJoined.endsWith("!") &&
                                 PatchManager.lookup(strippedJoined) == null
@@ -715,6 +725,7 @@ class OcrEngine {
                             totalLetters < 2 -> "totalLetters < 2 ($totalLetters)"
                             (realWords.isEmpty() && PatchManager.lookup(strippedJoined) == null) -> "realWords.isEmpty()"
                             isSingleWordHudFragment -> "single-word-hud ($strippedJoined)"
+                            isUnpunctuatedSingleWord -> "unpunctuated-single-word ($strippedJoined)"
                             isBannerPopup -> "banner-popup ($strippedJoined)"
                             !passesEnglishTokenRatioFilter(strippedJoined) -> "english-token-ratio < 60% ($strippedJoined)"
                             OcrTextCleaner.isGarbledDocumentNoise(strippedJoined) -> "garbled-doc ($strippedJoined)"

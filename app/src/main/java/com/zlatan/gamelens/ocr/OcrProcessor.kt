@@ -278,6 +278,11 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\bwi\\s+tnesses\\b"), "witnesses")
         s = s.replace(Regex("(?i)\\bdisgui\\s+se\\b"), "disguise")
         s = s.replace(Regex("(?i)\\bsllip\\b"), "slip")
+        s = s.replace(Regex("(?i)\\bunsi\\s+lenced\\b"), "unsilenced")
+        s = s.replace(Regex("(?i)\\balertyour\\b"), "alert your")
+        s = s.replace(Regex("(?i)\\basafe\\b"), "a safe")
+        s = s.replace(Regex("(?i)\\bmysole\\b"), "my sole")
+        s = s.replace(Regex("(?m)^Ithe\\b"), "The")
 
         // Mid-word casing & OCR character confusion fixes
         s = s.replace(Regex("(?i)\\bSiLverballer\\b"), "Silverballer")
