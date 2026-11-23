@@ -123,6 +123,11 @@ class TranslationManager(
         checkModelState()
     }
 
+    fun updateConfig(newConfig: TranslationConfig) {
+        this.config = newConfig
+        Log.d(TAG, "TranslationConfig updated: Mode=${config.mode}, Model=${config.modelName}")
+    }
+
     fun updateOnlineEnhanced(enabled: Boolean) {
         Log.d(TAG, "Online enhanced translation set to: $enabled")
     }
