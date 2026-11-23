@@ -407,12 +407,12 @@ class TranslationManager(
         val singleWordRepeatRegex = Regex("(\\b\\S+)(?:\\s*[/،,]\\s*\\1)+", RegexOption.IGNORE_CASE)
         sanitized = sanitized.replace(singleWordRepeatRegex, "$1")
 
-        // Collapse immediate 1-to-3 word consecutive duplicates without separators (e.g. "كلمة كلمة" -> "كلمة")
-        val consecutiveRepeatRegex = Regex("(\\S+(?:\\s+\\S+){0,2})\\s+\\1")
+        // Collapse immediate 1-to-3 word consecutive duplicates without separators on whole-word whitespace boundaries (e.g. "كلمة كلمة" -> "كلمة")
+        val consecutiveRepeatRegex = Regex("(^|\\s)(\\S+(?:\\s+\\S+){0,2})\\s+\\2(?=\\s|$)")
         var prevSanitized = ""
         while (prevSanitized != sanitized && consecutiveRepeatRegex.containsMatchIn(sanitized)) {
             prevSanitized = sanitized
-            sanitized = sanitized.replace(consecutiveRepeatRegex, "$1")
+            sanitized = sanitized.replace(consecutiveRepeatRegex, "$1$2")
         }
 
         return sanitized.trim()
@@ -499,7 +499,9 @@ class TranslationManager(
         sanitized = sanitized.replace(Regex("فيو\\s+من\\s+الأيام"), "يوماً ما")
         sanitized = sanitized.replace(Regex("في\\s+يوم\\s+من\\s+الايام"), "يوماً ما")
         sanitized = sanitized.replace(Regex("في\\s+يوم\\s+من\\s+الأيام"), "يوماً ما")
-        sanitized = sanitized.replace(Regex("(?<![\\u0627\\u0623\\u0625\\u0622])ستهداف"), "استهداف")
+        sanitized = sanitized.replace(Regex("([^\\s\\u0627\\u0623\\u0625\\u0622])\\s*ستهداف\\b"), "$1 استهداف")
+        sanitized = sanitized.replace(Regex("([\\u0600-\\u06FF]*\\u064B[\\u0627]?)\\s*ستهداف\\b"), "$1 استهداف")
+        sanitized = sanitized.replace(Regex("(?<![\\u0627\\u0623\\u0625\\u0622])ستهداف\\b"), "استهداف")
         sanitized = sanitized.replace(Regex("الأمو\\s+الحسابك"), "الأموال لحسابك")
         sanitized = sanitized.replace(Regex("الامو\\s+الحسابك"), "الأموال لحسابك")
         sanitized = sanitized.replace(Regex("الأموال\\s+الحسابك"), "الأموال لحسابك")
@@ -532,9 +534,10 @@ class TranslationManager(
         // 2. Insert space between non-connecting terminal letters and definite-article prefix or particles/pronouns
         val gluedPattern = Regex(
             "([\\u0627\\u0649\\u0629\\u0647\\u062F\\u0630\\u0631\\u0632\\u0648])" +
-            "(?=\\u0627\\u0644[\\u0600-\\u06FF]|(?:(?:\\u0647\\u064A|\\u0647\\u0648|\\u0647\\u0645|\\u064A\\u062C\\u0628|\\u0623\\u0646|\\u0623\\u0648|\\u0625\\u0644\\u0649|\\u0639\\u0644\\u0649|\\u0641\\u064A|\\u0645\\u0646|\\u0639\\u0646|\\u0645\\u0639|\\u0647\\u0630\\u0627|\\u0647\\u0630\\u0647|\\u0630\\u0644\\u0643)\\b))"
+            "(?=\\u0627\\u0644[\\u0600-\\u06FF]|(?:(?:\\u0647\\u064A|\\u0647\\u0648|\\u0647\\u0645|\\u064A\\u062C\\u0628|\\u0623\\u0646|\\u0623\\u0648|\\u0625\\u0644\\u0649|\\u0639\\u0644\\u0649|\\u0645\\u0646|\\u0639\\u0646|\\u0645\\u0639|\\u0647\\u0630\\u0627|\\u0647\\u0630\\u0647|\\u0630\\u0644\\u0643)\\b))"
         )
         sanitized = sanitized.replace(gluedPattern, "$1 ")
+        sanitized = sanitized.replace(Regex("\\bهد\\s+في(:|\\b)"), "هدفي$1")
 
         return sanitized.trim()
     }

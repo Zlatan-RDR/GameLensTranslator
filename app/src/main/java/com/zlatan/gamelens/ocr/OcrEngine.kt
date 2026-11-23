@@ -470,6 +470,17 @@ class OcrEngine {
                                 return@filter false
                             }
 
+                            // 4. Reject Lowercase Single-Word UI Fragments (e.g. "elable", "able") without ending punctuation
+                            val clusterTokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+                            if (clusterTokens.size == 1) {
+                                val word = clusterTokens[0]
+                                val startsWithLower = word.firstOrNull()?.isLowerCase() == true
+                                val hasEndingPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?")
+                                if (startsWithLower && !hasEndingPunctuation && PatchManager.lookup(text) == null) {
+                                    return@filter false
+                                }
+                            }
+
                             !isNoiseOrSymbol(text) &&
                             !isHudPrompt(text) &&
                             !isAllCapsNonDialogue(text) &&
@@ -484,7 +495,14 @@ class OcrEngine {
                         val joined = lines.joinToString(" ")
                         val normalizedJoined = OcrTextCleaner.normalizeOcrArtifacts(joined)
                         val totalLetters = normalizedJoined.count { it.isLetter() }
+                        val joinedTokens = normalizedJoined.split(Regex("\\s+")).filter { it.isNotBlank() }
+                        val isSingleWordLowerFragment = joinedTokens.size == 1 &&
+                                joinedTokens[0].firstOrNull()?.isLowerCase() == true &&
+                                !joinedTokens[0].endsWith(".") && !joinedTokens[0].endsWith("!") && !joinedTokens[0].endsWith("?") &&
+                                PatchManager.lookup(normalizedJoined) == null
+
                         if (totalLetters < 2 ||
+                            isSingleWordLowerFragment ||
                             !passesEnglishTokenRatioFilter(normalizedJoined) ||
                             OcrTextCleaner.isGarbledDocumentNoise(normalizedJoined) ||
                             OcrTextCleaner.isDiacriticSelfOcrGarble(normalizedJoined) ||
