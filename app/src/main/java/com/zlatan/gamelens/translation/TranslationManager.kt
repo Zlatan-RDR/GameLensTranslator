@@ -332,6 +332,14 @@ class TranslationManager(
         // 3. Pre-translation OCR repair & gaming term normalization
         val preprocessed = preprocessGamingText(trimmed)
 
+        val rawHadInterjection = Regex("(?i)\\b[ua]rgh!?\\b").containsMatchIn(trimmed)
+        if (preprocessed.isBlank() && rawHadInterjection) {
+            val result = "آه!"
+            fastMemoryCache.put(trimmed, result)
+            cacheManager.put(trimmed, result)
+            return@withContext result
+        }
+
         // 4. Translate via configured engine (with optional Online Enhanced fallback)
         val isOnlineEnhanced = context.getSharedPreferences(com.zlatan.gamelens.MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(com.zlatan.gamelens.MainActivity.KEY_ONLINE_TRANSLATE_ENHANCED, false)
@@ -369,7 +377,10 @@ class TranslationManager(
 
         // 6. Strip ML Kit neural repetition loops & repair glued words
         val deduplicated = deduplicateRepetitions(protectedReplaced)
-        val finalResult = repairGluedArabicWords(deduplicated)
+        var finalResult = repairGluedArabicWords(deduplicated)
+        if (rawHadInterjection && !finalResult.contains("آه")) {
+            finalResult = if (finalResult.isBlank()) "آه!" else "$finalResult آه!".trim()
+        }
 
         // 7. Save to Cache for subsequent 0ms hits
         fastMemoryCache.put(trimmed, finalResult)
@@ -415,9 +426,12 @@ class TranslationManager(
         processed = processed.replace(Regex("\\bHITBOX(ES)?\\b", RegexOption.IGNORE_CASE), "damage zone")
         processed = processed.replace(Regex("\\bCOOLDOWNS?\\b", RegexOption.IGNORE_CASE), "recharge duration")
 
-        // 4. Interjection normalization before machine translation
-        processed = processed.replace(Regex("\\b[Uu]rgh!?\\b"), "Ugh!")
-        processed = processed.replace(Regex("\\b[Aa]rgh!?\\b"), "Ah!")
+        // 4. Split camelCase menu terms before translation (PlayStyle -> Play Style) & handle gaming compounds
+        processed = processed.replace(Regex("([a-z])([A-Z])"), "$1 $2")
+        processed = processed.replace(Regex("(?i)\\bplaystyle\\b"), "play style")
+
+        // 5. Interjection normalization: strip standalone Urgh!/Argh! before ML Kit to prevent "هتاف اشمئزاز"
+        processed = processed.replace(Regex("(?i)\\b[ua]rgh!?\\b"), "").replace(Regex("\\s+"), " ").trim()
 
         return processed
     }
@@ -539,6 +553,8 @@ class TranslationManager(
         sanitized = sanitized.replace(Regex("(?i)\\bDiana\\s+Burn\\s*wood\\b"), "ديانا بيرنوود")
         sanitized = sanitized.replace(Regex("(?i)\\bBurnwood\\b"), "بيرنوود")
         sanitized = sanitized.replace("ديانا بيرن وود", "ديانا بيرنوود")
+        sanitized = sanitized.replace(Regex("(?i)\\bهتاف\\s+اشمئزاز\\b"), "آه")
+        sanitized = sanitized.replace("هتاف اشمئزاز", "آه")
         sanitized = sanitized.replace(Regex("(?i)\\b[ua]rgh\\b"), "آه")
         sanitized = sanitized.replace("ليسهلا", "ليس سهلاً")
 

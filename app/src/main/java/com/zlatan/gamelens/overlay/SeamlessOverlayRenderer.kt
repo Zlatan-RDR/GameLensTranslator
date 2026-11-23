@@ -40,6 +40,11 @@ class SeamlessOverlayRenderer(private val context: Context) {
     private var isContainerAttached = false
     private var isVisible = true
 
+    private var menuModalContainer: FrameLayout? = null
+    private var isMenuModalAttached = false
+    private var modalOpenedTimestamp = 0L
+    var onMenuModalDismissed: (() -> Unit)? = null
+
     private var subtitleView: TextView? = null
     private val hideSubtitleRunnable = Runnable {
         subtitleView?.visibility = View.GONE
@@ -289,8 +294,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
     }
 
     /**
-     * Renders full-screen menu / popup translations into a crisp, professional RTL Arabic modal card.
-     * Stays 100% static until dismissed via the explicit close button or background tap.
+     * Renders full-screen menu / popup translations into a crisp, professional RTL Arabic modal card
+     * attached as its OWN DEDICATED WindowManager root view completely isolated from the subtitle bar.
+     * Zero auto-dismiss, 100% solid opaque card (#FF0D111A), and a 450ms post-open touch guard.
      */
     fun renderFullScreenMenuModal(
         blocks: List<OcrEngine.MenuTextBlock>,
@@ -298,37 +304,35 @@ class SeamlessOverlayRenderer(private val context: Context) {
         screenH: Int = 0
     ) {
         mainHandler.post {
-            if (!isContainerAttached || overlayContainer == null) {
-                initOverlayContainer()
-            }
-            val container = overlayContainer ?: return@post
-            if (!isContainerAttached) return@post
-
-            clearOcrViews()
-
-            if (!isVisible || blocks.isEmpty()) {
-                _hasPinnedCards = false
+            if (blocks.isEmpty()) {
+                dismissMenuModal("empty-blocks")
                 return@post
             }
+
+            // Dismiss any existing modal view before building new one
+            dismissMenuModalInternal("re-render")
 
             val density = context.resources.displayMetrics.density
             val realW = if (screenW > 0) screenW else context.resources.displayMetrics.widthPixels
             val realH = if (screenH > 0) screenH else context.resources.displayMetrics.heightPixels
 
-            // 1. Full-screen scrim backdrop
-            val scrimView = View(context).apply {
-                setBackgroundColor(Color.parseColor("#8C000000"))
-                setOnClickListener {
-                    clearMenuCards()
-                }
-            }
-            val scrimParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            container.addView(scrimView, scrimParams)
+            modalOpenedTimestamp = SystemClock.uptimeMillis()
 
-            // 2. Central Modal Card
+            val modalRoot = FrameLayout(context).apply {
+                layoutDirection = View.LAYOUT_DIRECTION_LTR
+            }
+
+            // 1. Full-screen dimmed scrim backdrop (#CC000000)
+            val scrimView = View(context).apply {
+                setBackgroundColor(Color.parseColor("#CC000000"))
+                // Non-clickable to avoid accidental dismissal while reading/scrolling
+            }
+            modalRoot.addView(
+                scrimView,
+                FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+
+            // 2. Central Modal Card (100% solid opaque #FF0D111A, alpha = 1.0f)
             val cardW = (realW * 0.85f).toInt().coerceAtMost((680 * density).toInt()).coerceAtLeast((280 * density).toInt())
             val maxCardH = (realH * 0.82f).toInt()
 
@@ -338,12 +342,13 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 textDirection = View.TEXT_DIRECTION_RTL
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(Color.parseColor("#F20A0E17"))
+                    setColor(Color.argb(255, 13, 17, 26)) // 100% solid opaque #FF0D111A
                     cornerRadius = 16f * density
-                    setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#33FFFFFF"))
+                    setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
                 }
                 background = bg
-                setPadding((18 * density).toInt(), (14 * density).toInt(), (18 * density).toInt(), (14 * density).toInt())
+                alpha = 1.0f
+                setPadding((20 * density).toInt(), (16 * density).toInt(), (20 * density).toInt(), (16 * density).toInt())
             }
 
             // Top Header Row
@@ -356,7 +361,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val titleView = TextView(context).apply {
                 text = "ترجمة القائمة / الإرشادات"
                 setTextColor(Color.parseColor("#38BDF8"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
                 layoutDirection = View.LAYOUT_DIRECTION_RTL
@@ -367,21 +372,26 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
             val closeButton = TextView(context).apply {
                 text = "إغلاق ✕"
-                setTextColor(Color.parseColor("#E0F2FE"))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                setTextColor(Color.parseColor("#F8FAFC"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
                 typeface = Typeface.DEFAULT_BOLD
                 val btnBg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(Color.parseColor("#26FFFFFF"))
+                    setColor(Color.parseColor("#334155")) // Slate-700
                     cornerRadius = 8f * density
-                    setStroke((1f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+                    setStroke((1f * density).toInt().coerceAtLeast(1), Color.parseColor("#64748B"))
                 }
                 background = btnBg
-                setPadding((12 * density).toInt(), (6 * density).toInt(), (12 * density).toInt(), (6 * density).toInt())
+                setPadding((14 * density).toInt(), (7 * density).toInt(), (14 * density).toInt(), (7 * density).toInt())
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
-                    clearMenuCards()
+                    val elapsed = SystemClock.uptimeMillis() - modalOpenedTimestamp
+                    if (elapsed < 450L) {
+                        Log.d(TAG, "MenuScan: Close click ignored during 450ms post-open guard ($elapsed ms)")
+                        return@setOnClickListener
+                    }
+                    dismissMenuModal("close-button")
                 }
             }
             headerRow.addView(closeButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -389,10 +399,10 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
             // Header Divider
             val divider = View(context).apply {
-                setBackgroundColor(Color.parseColor("#1FFFFFFF"))
+                setBackgroundColor(Color.parseColor("#26FFFFFF"))
             }
             val dividerParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (1 * density).toInt().coerceAtLeast(1)).apply {
-                topMargin = (10 * density).toInt()
+                topMargin = (12 * density).toInt()
                 bottomMargin = (12 * density).toInt()
             }
             cardContainer.addView(divider, dividerParams)
@@ -425,12 +435,12 @@ class SeamlessOverlayRenderer(private val context: Context) {
                         setTextColor(Color.parseColor("#F59E0B")) // Warm amber accent for headings
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                         typeface = Typeface.DEFAULT_BOLD
-                        setPadding(0, (8 * density).toInt(), 0, (4 * density).toInt())
+                        setPadding(0, (10 * density).toInt(), 0, (4 * density).toInt())
                     } else {
                         setTextColor(Color.WHITE)
                         setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
                         setLineSpacing(5f * density, 1.25f)
-                        setPadding(0, (2 * density).toInt(), 0, (8 * density).toInt())
+                        setPadding(0, (3 * density).toInt(), 0, (8 * density).toInt())
                     }
                 }
                 contentLayout.addView(blockView)
@@ -453,8 +463,32 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 }
             }
 
-            container.addView(cardContainer, cardParams)
-            _hasPinnedCards = true
+            modalRoot.addView(cardContainer, cardParams)
+
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            val modalParams = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            )
+
+            try {
+                windowManager.addView(modalRoot, modalParams)
+                menuModalContainer = modalRoot
+                isMenuModalAttached = true
+                _hasPinnedCards = true
+                Log.d(TAG, "MenuScan: Dedicated modal window attached to WindowManager successfully")
+            } catch (t: Throwable) {
+                Log.e(TAG, "MenuScan: Failed to attach dedicated modal window: ${t.message}", t)
+            }
         }
     }
 
@@ -467,11 +501,32 @@ class SeamlessOverlayRenderer(private val context: Context) {
     fun getSubtitleHoldUntilMs(): Long = subtitleHoldUntilMs
     fun isHoldActive(): Boolean = SystemClock.elapsedRealtime() < subtitleHoldUntilMs
 
-    fun hasPinnedMenuCards(): Boolean = _hasPinnedCards
+    fun hasPinnedMenuCards(): Boolean = isMenuModalAttached || _hasPinnedCards
 
     fun clearMenuCards() {
+        dismissMenuModal("clear-menu-cards")
+    }
+
+    fun dismissMenuModal(trigger: String) {
         mainHandler.post {
-            clearOcrViews()
+            dismissMenuModalInternal(trigger)
+            onMenuModalDismissed?.invoke()
+        }
+    }
+
+    private fun dismissMenuModalInternal(trigger: String) {
+        val modal = menuModalContainer ?: return
+        try {
+            if (isMenuModalAttached) {
+                windowManager.removeView(modal)
+                isMenuModalAttached = false
+                Log.d(TAG, "MenuScan: Modal dismissed by [$trigger]")
+                com.zlatan.gamelens.diag.DiagnosticLogger.log("MenuScan: Modal dismissed by [$trigger]")
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error removing menu modal: ${t.message}", t)
+        } finally {
+            menuModalContainer = null
             _hasPinnedCards = false
         }
     }
@@ -635,10 +690,13 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.minimumHeight = opaqueH
                 sub.layoutParams = layoutParams
             } else {
-                // Offset Above Mode: position the Arabic subtitle bar cleanly above the calibrated bottom subtitle zone with zero overlap
+                // Offset Above Mode: anchor subtitle bar tightly 10dp above calRect.top
+                val gap10dp = (10 * density).toInt()
+                val maxBarW = (screenW * 0.78f).toInt()
+
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(Color.argb(255, 5, 7, 11)) // Solid opaque #FF05070B
+                    setColor(Color.argb(255, 13, 17, 26)) // 100% solid opaque #FF0D111A
                     cornerRadius = 10f * density
                     alpha = 255
                     setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
@@ -646,14 +704,14 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.background = bg
                 sub.alpha = 1.0f
                 sub.background?.alpha = 255
-                sub.setPadding((16 * density).toInt(), (8 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
+                sub.setPadding((18 * density).toInt(), (10 * density).toInt(), (18 * density).toInt(), (10 * density).toInt())
 
-                val targetTop = (zoneTop - zoneH - (8 * density).toInt()).coerceAtLeast(0)
-                val layoutParams = FrameLayout.LayoutParams(zoneW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    gravity = Gravity.TOP or Gravity.START
-                    leftMargin = zoneLeft
-                    topMargin = targetTop
+                val bottomAnchor = (screenH - zoneTop + gap10dp).coerceAtLeast(0)
+                val layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                    bottomMargin = bottomAnchor
                 }
+                sub.maxWidth = maxBarW
                 sub.minimumHeight = (28 * density).toInt()
                 sub.layoutParams = layoutParams
             }
@@ -714,6 +772,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
     fun release() {
         mainHandler.post {
+            dismissMenuModalInternal("service-stop")
             overlayContainer?.let { container ->
                 try {
                     container.removeAllViews()

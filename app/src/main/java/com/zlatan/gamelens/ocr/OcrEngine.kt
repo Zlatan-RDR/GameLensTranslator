@@ -202,6 +202,43 @@ class OcrEngine {
             }
 
             if (!matched || (addedPrefix.isEmpty() && addedSuffix.isEmpty())) {
+                // Check if high word recall (>= 65%) with non-matching extra tokens indicates credit/dossier pollution
+                val oldWords = oldTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+                val newWords = newTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+
+                if (oldWords.isNotEmpty() && newWords.isNotEmpty()) {
+                    val matchingCount = oldWords.count { ow -> newWords.contains(ow) }
+                    val wordRecall = matchingCount.toFloat() / oldWords.size.toFloat()
+
+                    if (wordRecall >= 0.65f) {
+                        val extraTokens = newWords.filter { nw -> !oldWords.contains(nw) }
+                        if (extraTokens.isNotEmpty()) {
+                            val extraString = extraTokens.joinToString(" ")
+                            val rawNewTokens = newTrim.split(Regex("\\s+")).filter { it.isNotBlank() }
+                            val rawExtraTokens = rawNewTokens.filter { nt ->
+                                val cleanNt = nt.lowercase(java.util.Locale.US).filter { it.isLetterOrDigit() }
+                                extraTokens.contains(cleanNt)
+                            }
+
+                            val hasCreditKeyword = CREDIT_KEYWORDS.any { kw -> newTrim.uppercase(java.util.Locale.US).contains(kw) }
+                            val hasAllCapsCredit = rawExtraTokens.any { token ->
+                                val letters = token.filter { it.isLetter() }
+                                letters.length >= 4 && (letters.count { it.isUpperCase() }.toFloat() / letters.length.toFloat()) >= 0.65f
+                            }
+                            val hasAlphanumericCorruption = rawExtraTokens.any { token ->
+                                val hasDigit = token.any { it.isDigit() }
+                                val hasLetter = token.any { it.isLetter() }
+                                hasDigit && hasLetter
+                            }
+                            val lowExtraQuality = scoreOcrQuality(extraString) < 0.75f
+
+                            if (hasCreditKeyword || hasAllCapsCredit || hasAlphanumericCorruption || (rawExtraTokens.size >= 2 && lowExtraQuality)) {
+                                return SupersetVerdict.CREDIT_POLLUTION
+                            }
+                        }
+                    }
+                }
+
                 return SupersetVerdict.NOT_SUPERSET
             }
 
@@ -726,10 +763,38 @@ class OcrEngine {
                         )
                     }
 
-                    // Sort blocks from top to bottom
+                    // Group and merge vertically adjacent blocks belonging to the same text card
+                    val mergedBlocks = mutableListOf<MenuTextBlock>()
                     val sorted = resultBlocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
+
+                    for (cur in sorted) {
+                        if (mergedBlocks.isEmpty()) {
+                            mergedBlocks.add(cur)
+                        } else {
+                            val prev = mergedBlocks.last()
+                            val verticalGap = cur.boundingBox.top - prev.boundingBox.bottom
+                            val prevHeight = prev.boundingBox.height()
+                            val horizontalOverlap = maxOf(0, minOf(prev.boundingBox.right, cur.boundingBox.right) - maxOf(prev.boundingBox.left, cur.boundingBox.left))
+                            val isSameCard = verticalGap in -5..(prevHeight * 1.5f).toInt() && horizontalOverlap > 20 && !prev.isHeader && !cur.isHeader
+
+                            if (isSameCard) {
+                                mergedBlocks.removeAt(mergedBlocks.size - 1)
+                                val unionBox = Rect(prev.boundingBox).apply { union(cur.boundingBox) }
+                                mergedBlocks.add(
+                                    MenuTextBlock(
+                                        text = "${prev.text} ${cur.text}",
+                                        boundingBox = unionBox,
+                                        isHeader = false
+                                    )
+                                )
+                            } else {
+                                mergedBlocks.add(cur)
+                            }
+                        }
+                    }
+
                     if (continuation.isActive) {
-                        continuation.resume(sorted)
+                        continuation.resume(mergedBlocks)
                     }
                 }
                 .addOnFailureListener { e ->

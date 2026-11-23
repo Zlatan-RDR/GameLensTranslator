@@ -54,7 +54,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -158,6 +161,16 @@ class TranslationOverlayService : Service() {
     private var isRoiSettling: Boolean = false
     private var roiSettleStartTime: Long = 0L
 
+    @Volatile
+    private var isMenuModalVisible: Boolean = false
+
+    @Volatile
+    private var isMenuScanInProgress: Boolean = false
+
+    private var lastPatchEnglishText: String = ""
+    private var lastDisplayWasPatch: Boolean = false
+    private var lastPatchDisplayTimestamp: Long = 0L
+
     private lateinit var cacheManager: TranslationCacheManager
     private lateinit var glossaryManager: GlossaryManager
     private lateinit var translationManager: TranslationManager
@@ -190,6 +203,13 @@ class TranslationOverlayService : Service() {
 
             // Initialize Seamless Full-Screen Overlay Renderer
             seamlessOverlayRenderer = SeamlessOverlayRenderer(this)
+            seamlessOverlayRenderer?.onMenuModalDismissed = {
+                isMenuModalVisible = false
+                isMenuScanInProgress = false
+                mainHandler.post {
+                    updateBubbleVisualState()
+                }
+            }
             Log.d(TAG, "TranslationOverlayService onCreate completed successfully.")
         } catch (e: Exception) {
             Log.e(TAG, "Fatal error in onCreate: ${e.message}", e)
@@ -490,6 +510,10 @@ class TranslationOverlayService : Service() {
     }
 
     private suspend fun processFramePipeline(isOpaqueCover: Boolean) {
+        if (isMenuModalVisible || isMenuScanInProgress) {
+            return
+        }
+
         val (screenW, screenH, dpi) = getRealScreenDimensions()
 
         // 1. Auto-pause in Portrait or when GameLens is in the foreground
@@ -500,6 +524,8 @@ class TranslationOverlayService : Service() {
                 candidateEnglishText = ""
                 pendingStreamingText = ""
                 streamingStartTime = 0L
+                lastDisplayWasPatch = false
+                lastPatchEnglishText = ""
             }
             return
         }
@@ -525,6 +551,8 @@ class TranslationOverlayService : Service() {
             candidateEnglishText = ""
             pendingStreamingText = ""
             streamingStartTime = 0L
+            lastDisplayWasPatch = false
+            lastPatchEnglishText = ""
             return
         }
 
@@ -641,6 +669,8 @@ class TranslationOverlayService : Service() {
                 candidateEnglishText = ""
                 pendingStreamingText = ""
                 streamingStartTime = 0L
+                lastDisplayWasPatch = false
+                lastPatchEnglishText = ""
             }
             return
         }
@@ -673,6 +703,8 @@ class TranslationOverlayService : Service() {
                 candidateEnglishText = ""
                 pendingStreamingText = ""
                 streamingStartTime = 0L
+                lastDisplayWasPatch = false
+                lastPatchEnglishText = ""
             }
             return
         }
@@ -733,6 +765,24 @@ class TranslationOverlayService : Service() {
         val promptNormalized = translationManager.normalizeControllerPrompts(mergedEnglish)
         val patchMatch = PatchManager.lookup(promptNormalized)
 
+        // Active Patch-Lock Guard: Lock active patch lines for 8000ms against corrupted non-patch re-reads
+        if (lastDisplayWasPatch && (now - lastPatchDisplayTimestamp < 8000L) && lastPatchEnglishText.isNotEmpty()) {
+            if (patchMatch == null) {
+                val patchWords = lastPatchEnglishText.lowercase(java.util.Locale.US).split(Regex("\\s+")).filter { it.length >= 3 }.toSet()
+                val incomingWords = promptNormalized.lowercase(java.util.Locale.US).split(Regex("\\s+")).filter { it.length >= 3 }.toSet()
+                if (patchWords.isNotEmpty() && incomingWords.isNotEmpty()) {
+                    val commonWords = patchWords.intersect(incomingWords)
+                    val overlap = commonWords.size.toFloat() / patchWords.size.toFloat()
+                    if (overlap >= 0.55f) {
+                        val dropMsg = "OCR dropped by Active Patch-Lock Guard (overlap=%.2f >= 0.55 with active patch \"$lastPatchEnglishText\")".format(java.util.Locale.US, overlap)
+                        Log.d(TAG, dropMsg)
+                        DiagnosticLogger.log(dropMsg)
+                        return
+                    }
+                }
+            }
+        }
+
         if (patchMatch != null) {
             // Patch matched: instant 0ms snap translation!
             candidateEnglishText = ""
@@ -788,6 +838,16 @@ class TranslationOverlayService : Service() {
         lastSubtitleDisplayTimestamp = now
         pendingStreamingText = ""
         streamingStartTime = 0L
+
+        if (patchMatch != null) {
+            lastPatchEnglishText = promptNormalized
+            lastDisplayWasPatch = true
+            lastPatchDisplayTimestamp = now
+        } else {
+            lastPatchEnglishText = ""
+            lastDisplayWasPatch = false
+            lastPatchDisplayTimestamp = 0L
+        }
 
         // 8. Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
         seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)
@@ -945,8 +1005,11 @@ class TranslationOverlayService : Service() {
     }
 
     private fun handleSingleTap() {
-        if (seamlessOverlayRenderer?.hasPinnedMenuCards() == true) {
+        if (isMenuScanInProgress) return
+
+        if (isMenuModalVisible || seamlessOverlayRenderer?.hasPinnedMenuCards() == true) {
             seamlessOverlayRenderer?.clearMenuCards()
+            isMenuModalVisible = false
             showToast("تم إخفاء ترجمة القائمة والعودة للعب")
             updateBubbleVisualState()
         } else {
@@ -1034,16 +1097,22 @@ class TranslationOverlayService : Service() {
     }
 
     private fun triggerZeroSelfReadMenuScan() {
+        if (isMenuScanInProgress) return
         if (mediaProjection == null || !isProjectionValid) {
             showToast("إذن التقاط الشاشة غير نشط، جاري التجديد...")
             requestProjectionReacquisition(autoStartAudio = false)
             return
         }
 
+        isMenuScanInProgress = true
+        updateBubbleVisualState()
+
         serviceScope.launch {
             try {
                 val captureMgr = screenCaptureManager ?: run {
                     showToast("خدمة التقاط الشاشة غير متصلة")
+                    isMenuScanInProgress = false
+                    updateBubbleVisualState()
                     return@launch
                 }
 
@@ -1064,6 +1133,8 @@ class TranslationOverlayService : Service() {
                 if (fullBitmap == null) {
                     DiagnosticLogger.log("MenuScan: acquireFullScreenBitmap returned null")
                     showToast("تعذر التقاط إطار الشاشة، يرجى المحاولة ثانية")
+                    isMenuScanInProgress = false
+                    updateBubbleVisualState()
                     return@launch
                 }
 
@@ -1076,15 +1147,20 @@ class TranslationOverlayService : Service() {
                 if (detectedBlocks.isEmpty()) {
                     DiagnosticLogger.log("MenuScan: No text blocks detected on screen")
                     showToast("لم يتم العثور على نصوص واضحة في القائمة")
+                    isMenuScanInProgress = false
                     updateBubbleVisualState()
                     return@launch
                 }
 
-                // Translate detected blocks preserving paragraph breaks and headers
+                // Parallel block translation (coroutineScope { blocks.map { async { ... } }.awaitAll() })
                 withContext(Dispatchers.IO) {
-                    for (block in detectedBlocks) {
-                        val translated = translationManager.translate(block.text)
-                        block.translatedText = translated
+                    coroutineScope {
+                        detectedBlocks.map { block ->
+                            async {
+                                val translated = translationManager.translate(block.text)
+                                block.translatedText = translated
+                            }
+                        }.awaitAll()
                     }
                 }
 
@@ -1098,9 +1174,13 @@ class TranslationOverlayService : Service() {
                 if (arabicBlocks.isEmpty()) {
                     DiagnosticLogger.log("MenuScan: Translation returned no Arabic text")
                     showToast("لم تتوفر ترجمة عربية لنصوص القائمة")
+                    isMenuScanInProgress = false
                     updateBubbleVisualState()
                     return@launch
                 }
+
+                isMenuModalVisible = true
+                isMenuScanInProgress = false
 
                 // Render professional RTL Arabic modal card with explicit close button
                 seamlessOverlayRenderer?.renderFullScreenMenuModal(
@@ -1112,12 +1192,14 @@ class TranslationOverlayService : Service() {
                 updateBubbleVisualState()
                 DiagnosticLogger.log("MenuScan: Rendered modal with ${arabicBlocks.size} blocks successfully")
             } catch (e: Exception) {
+                isMenuScanInProgress = false
                 Log.e(TAG, "Zero-Self-Read scan error: ${e.message}", e)
                 DiagnosticLogger.log("MenuScan error: ${e.javaClass.simpleName} - ${e.message}")
                 withContext(Dispatchers.Main) {
                     bubbleView?.visibility = View.VISIBLE
                     seamlessOverlayRenderer?.restoreVisibilityAfterCapture()
                     showToast("حدث خطأ أثناء مسح القائمة")
+                    updateBubbleVisualState()
                 }
             }
         }
@@ -1142,7 +1224,7 @@ class TranslationOverlayService : Service() {
     private fun updateBubbleVisualState() {
         mainHandler.post {
             val density = resources.displayMetrics.density
-            val hasPinned = seamlessOverlayRenderer?.hasPinnedMenuCards() == true
+            val hasPinned = isMenuModalVisible || seamlessOverlayRenderer?.hasPinnedMenuCards() == true
 
             val backgroundDrawable = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL

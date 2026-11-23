@@ -41,29 +41,25 @@ class CalibrationOverlay(
 
         val PRESET_FULL_SCREEN = RectF(0f, 0f, 1f, 1f)
         val PRESET_CENTER_DIALOGS = RectF(0.12f, 0.32f, 0.88f, 0.68f)
-        val PRESET_BOTTOM_SUBTITLES = RectF(0.10f, 0.65f, 0.90f, 0.95f)
+        val PRESET_BOTTOM_SUBTITLES = RectF(0.10f, 0.71f, 0.90f, 0.95f)
 
         fun getCalibratedRect(prefs: SharedPreferences): RectF {
             val isEnabled = prefs.getBoolean(PREFS_KEY_CALIBRATION_ENABLED, true)
             if (!isEnabled) {
                 return PRESET_BOTTOM_SUBTITLES
             }
-            val isMigrated = prefs.getBoolean("migrated_roi_v3", false)
+            val isMigrated071 = prefs.getBoolean("migrated_roi_071_v3", false)
+            if (!isMigrated071) {
+                prefs.edit().putBoolean("migrated_roi_071_v3", true).apply()
+                saveCalibration(prefs, PRESET_BOTTOM_SUBTITLES)
+                return PRESET_BOTTOM_SUBTITLES
+            }
             val l = prefs.getFloat(PREFS_KEY_CAL_LEFT, PRESET_BOTTOM_SUBTITLES.left)
             val t = prefs.getFloat(PREFS_KEY_CAL_TOP, PRESET_BOTTOM_SUBTITLES.top)
             val r = prefs.getFloat(PREFS_KEY_CAL_RIGHT, PRESET_BOTTOM_SUBTITLES.right)
             val b = prefs.getFloat(PREFS_KEY_CAL_BOTTOM, PRESET_BOTTOM_SUBTITLES.bottom)
             val height = b - t
             val width = r - l
-
-            // Auto-migrate legacy 0.72f boxes once to 0.65f for complete 3-line dialogue capture
-            if (!isMigrated) {
-                prefs.edit().putBoolean("migrated_roi_v3", true).apply()
-                if (t >= 0.70f || height !in 0.15f..0.35f) {
-                    saveCalibration(prefs, PRESET_BOTTOM_SUBTITLES)
-                    return PRESET_BOTTOM_SUBTITLES
-                }
-            }
 
             // Auto-migrate oversized legacy saved boxes (> 40% screen height or invalid bounds)
             if (height > 0.40f || height <= 0.04f || width <= 0.10f || l < 0f || r > 1f || t < 0f || b > 1f) {
@@ -90,7 +86,7 @@ class CalibrationOverlay(
     private var rootContainer: FrameLayout? = null
     private var isAttached = false
 
-    private val boxRect = RectF(0.10f, 0.65f, 0.90f, 0.95f) // Default bottom subtitles
+    private val boxRect = RectF(0.10f, 0.71f, 0.90f, 0.95f) // Default bottom subtitles
 
     fun show() {
         if (isAttached) return
