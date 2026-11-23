@@ -151,6 +151,8 @@ class TranslationOverlayService : Service() {
     private var lastDisplayedEnglishText: String = ""
     private var candidateEnglishText: String = ""
     private var candidateTimestamp: Long = 0L
+    private var pendingStreamingText: String = ""
+    private var streamingStartTime: Long = 0L
     private var lastSubtitleDisplayTimestamp: Long = 0L
     private var lastOpaquePollTimestamp: Long = 0L
     private var isRoiSettling: Boolean = false
@@ -496,6 +498,8 @@ class TranslationOverlayService : Service() {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
+                pendingStreamingText = ""
+                streamingStartTime = 0L
             }
             return
         }
@@ -519,6 +523,8 @@ class TranslationOverlayService : Service() {
             seamlessOverlayRenderer?.clear()
             lastDisplayedEnglishText = ""
             candidateEnglishText = ""
+            pendingStreamingText = ""
+            streamingStartTime = 0L
             return
         }
 
@@ -631,6 +637,8 @@ class TranslationOverlayService : Service() {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
+                pendingStreamingText = ""
+                streamingStartTime = 0L
             }
             return
         }
@@ -664,6 +672,8 @@ class TranslationOverlayService : Service() {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
+                pendingStreamingText = ""
+                streamingStartTime = 0L
             }
             return
         }
@@ -685,13 +695,38 @@ class TranslationOverlayService : Service() {
             }
         }
 
-        // Clean-Superset Overwrite Guard: discard new non-patch strings within 6000ms that contain >= 80% of currently displayed sentence words (credit-polluted re-reads like "Exactly. Good luck 47.RROBERTRow")
+        // Clean-Superset Overwrite Guard & Delta-Aware Progressive Auto-Typewriter
         if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 6000L)) {
-            if (com.zlatan.gamelens.ocr.OcrTextCleaner.isCreditPollutedSuperset(mergedEnglish, lastDisplayedEnglishText) &&
+            val verdict = com.zlatan.gamelens.ocr.OcrEngine.classifySupersetExpansion(lastDisplayedEnglishText, mergedEnglish)
+            if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CREDIT_POLLUTION &&
                 PatchManager.lookup(mergedEnglish) == null
             ) {
                 Log.d(TAG, "OCR skipped [credit-polluted-superset]: \"$mergedEnglish\" (polluted re-read of: \"$lastDisplayedEnglishText\")")
                 return
+            }
+
+            if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION) {
+                val hasEndingPunctuation = mergedEnglish.endsWith(".") || mergedEnglish.endsWith("!") || mergedEnglish.endsWith("?") ||
+                        mergedEnglish.endsWith(".\"") || mergedEnglish.endsWith("!\"") || mergedEnglish.endsWith("?\"")
+
+                if (!hasEndingPunctuation) {
+                    if (pendingStreamingText != mergedEnglish) {
+                        pendingStreamingText = mergedEnglish
+                        streamingStartTime = now
+                        forceInstantPass = true
+                        Log.d(TAG, "OCR streaming progressive expansion debounced (1-cycle wait): \"$mergedEnglish\"")
+                        return
+                    } else {
+                        val streamElapsed = now - streamingStartTime
+                        if (streamElapsed < 650L) {
+                            forceInstantPass = true
+                            Log.d(TAG, "OCR streaming progressive expansion debounced (wait=${streamElapsed}ms < 650ms): \"$mergedEnglish\"")
+                            return
+                        }
+                    }
+                }
+                pendingStreamingText = ""
+                streamingStartTime = 0L
             }
         }
 
@@ -752,6 +787,8 @@ class TranslationOverlayService : Service() {
 
         lastDisplayedEnglishText = mergedEnglish
         lastSubtitleDisplayTimestamp = now
+        pendingStreamingText = ""
+        streamingStartTime = 0L
 
         // 8. Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
         seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)

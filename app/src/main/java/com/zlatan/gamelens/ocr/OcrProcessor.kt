@@ -236,7 +236,23 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\bgotta\\b"), "got to")
         s = s.replace(Regex("(?i)\\bkinda\\b"), "kind of")
 
+        // Split common OCR-glued gameplay pairs
+        s = s.replace(Regex("(?i)\\btryto\\b"), "try to")
+        s = s.replace(Regex("(?i)\\btoenter\\b"), "to enter")
+        s = s.replace(Regex("(?i)\\bwilltry\\b"), "will try")
+        s = s.replace(Regex("(?i)\\byouto\\b"), "you to")
+        s = s.replace(Regex("(?i)\\bclosecombat\\b"), "close combat")
+        s = s.replace(Regex("(?i)\\bit'sthe\\b"), "it's the")
+        s = s.replace(Regex("(?i)\\banyt\\s+ime\\b"), "anytime")
+        s = s.replace(Regex("(?i)\\bcli\\s+ent\\b"), "client")
+
         // Mid-word casing & OCR character confusion fixes
+        s = s.replace(Regex("(?i)\\bkilL\\b"), "kill")
+        s = s.replace(Regex("(?i)\\byOu\\b"), "you")
+        s = s.replace(Regex("(?i)\\bSOon\\b"), "soon")
+        s = s.replace(Regex("(?i)\\blLike\\b"), "like")
+        s = s.replace(Regex("(?i)\\bfinalLy\\b"), "finally")
+        s = s.replace(Regex("(?i)\\bI'lL\\b"), "I'll")
         s = s.replace(Regex("(?i)\\bwilL\\b"), "will")
         s = s.replace(Regex("(?i)\\bWOuLd\\b"), "would")
         s = s.replace(Regex("(?i)\\bcoMmunication\\b"), "communication")
@@ -245,6 +261,25 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\bdeaLt\\b"), "dealt")
         s = s.replace(Regex("(?i)\\beXposed\\b"), "exposed")
         s = s.replace(Regex("(?i)\\bW[ìi]red\\b"), "wired")
+
+        // Generic mid-word stray uppercase normalization in mostly lowercase words
+        val wordTokens = s.split(Regex("\\s+")).filter { it.isNotBlank() }
+        s = wordTokens.joinToString(" ") { token ->
+            val letters = token.filter { it.isLetter() }
+            if (letters.length >= 3 && !token.all { it.isLetter() && it.isUpperCase() }) {
+                if (token.first().isLowerCase() && token.any { it.isUpperCase() }) {
+                    token.lowercase(Locale.US)
+                } else if (letters.length >= 3 && letters[0].isUpperCase() && letters[1].isUpperCase() && letters.drop(2).all { it.isLowerCase() }) {
+                    letters[0].uppercase(Locale.US) + token.drop(1).lowercase(Locale.US)
+                } else if (token.contains("'") && token.equals("i'll", ignoreCase = true)) {
+                    "I'll"
+                } else {
+                    token
+                }
+            } else {
+                token
+            }
+        }
 
         s = s.replace(Regex("\\s+"), " ")
 

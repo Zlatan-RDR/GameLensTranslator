@@ -20,13 +20,36 @@ object SubtitleHistoryManager {
     data class HistoryEntry(
         val timestamp: String,
         val source: String,
-        val arabic: String
+        val arabic: String,
+        var recordTimeMs: Long = System.currentTimeMillis()
     )
 
     private val entries = ConcurrentLinkedDeque<HistoryEntry>()
 
     private val _historyFlow = MutableStateFlow<List<HistoryEntry>>(emptyList())
     val historyFlow: StateFlow<List<HistoryEntry>> = _historyFlow.asStateFlow()
+
+    @Synchronized
+    fun recordOrUpgradeStreaming(source: String, arabic: String) {
+        val cleanAr = arabic.trim()
+        val cleanSrc = source.trim()
+        if (cleanAr.isBlank()) return
+
+        val now = System.currentTimeMillis()
+        val last = entries.peekLast()
+        if (last != null && (now - last.recordTimeMs <= 6000L)) {
+            val verdict = com.zlatan.gamelens.ocr.OcrEngine.classifySupersetExpansion(last.source, cleanSrc)
+            if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION) {
+                entries.pollLast()
+                val updated = HistoryEntry(last.timestamp, cleanSrc, cleanAr, now)
+                entries.add(updated)
+                _historyFlow.value = entries.toList()
+                return
+            }
+        }
+
+        addEntry(cleanSrc, cleanAr)
+    }
 
     @Synchronized
     fun addEntry(source: String, arabic: String) {

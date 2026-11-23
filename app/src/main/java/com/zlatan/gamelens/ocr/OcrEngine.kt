@@ -17,6 +17,12 @@ import kotlin.coroutines.resume
 
 class OcrEngine {
 
+    enum class SupersetVerdict {
+        NOT_SUPERSET,
+        CLEAN_PROGRESSIVE_EXPANSION,
+        CREDIT_POLLUTION
+    }
+
     companion object {
         private const val TAG = "OcrEngine"
         private const val MIN_CONFIDENCE_THRESHOLD = 0.78f
@@ -28,6 +34,205 @@ class OcrEngine {
         private val CREDIT_KEYWORDS = setOf(
             "PRODUCED BY", "DIRECTED BY", "DESIGNER", "PROGRAMMER", "MUSIC BY", "WRITTEN BY"
         )
+
+        fun uppercaseRatio(text: String): Float {
+            val letters = text.filter { it.isLetter() }
+            if (letters.isEmpty()) return 0.0f
+            return letters.count { it.isUpperCase() }.toFloat() / letters.length.toFloat()
+        }
+
+        private fun isAllCapsShoutedDialogue(text: String): Boolean {
+            val trimmed = text.trim()
+            return (trimmed.endsWith("!") || trimmed.endsWith("!\"")) &&
+                    trimmed.length in 2..15 &&
+                    trimmed.all { it.isLetter() || it.isWhitespace() || it == '!' || it == '\'' || it == '"' }
+        }
+
+        fun isCreditOrTitleLine(text: String): Boolean {
+            val upper = text.uppercase(java.util.Locale.US)
+            for (kw in CREDIT_KEYWORDS) {
+                if (upper.contains(kw)) return true
+            }
+            val letters = text.filter { it.isLetter() }
+            if (letters.length >= 4) {
+                val upperCount = letters.count { it.isUpperCase() }
+                val upperRatio = upperCount.toFloat() / letters.length.toFloat()
+                if (upperRatio >= 0.75f && PatchManager.lookup(text.trim()) == null) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        /**
+         * Fast (<1ms) heuristic scoring of OCR text cleanliness.
+         * Rewards valid English words and penalizes detached letters, mid-word caps, underscores, and diacritics.
+         */
+        fun scoreOcrQuality(text: String): Float {
+            val trimmed = text.trim()
+            if (trimmed.isEmpty()) return 0.0f
+            val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+            if (tokens.isEmpty()) return 0.0f
+
+            var score = 1.0f
+
+            // Penalize underscores (e.g. cut off_)
+            if (trimmed.contains("_")) score -= 0.25f
+
+            // Penalize European diacritics
+            val diacriticCount = trimmed.count { it in OcrTextCleaner.EUROPEAN_DIACRITICS }
+            score -= (diacriticCount * 0.20f)
+
+            // Evaluate tokens
+            var validEnglishTokens = 0
+            var detachedSingleLetters = 0
+            var erraticCapitals = 0
+
+            for (token in tokens) {
+                val letters = token.filter { it.isLetter() }
+                if (letters.isEmpty()) continue
+
+                if (letters.length == 1) {
+                    if (!letters.equals("a", ignoreCase = true) && !letters.equals("i", ignoreCase = true)) {
+                        detachedSingleLetters++
+                    }
+                }
+
+                // Check erratic mid-word uppercase (e.g. "DESsiGNER", "accOunt", "deaLt")
+                if (letters.length >= 3) {
+                    val hasInnerUpper = letters.drop(1).dropLast(1).any { it.isUpperCase() } && letters.any { it.isLowerCase() }
+                    if (hasInnerUpper) {
+                        erraticCapitals++
+                    }
+                }
+
+                if (letters.length >= 3) {
+                    val hasVowel = letters.any { it in "aeiouyAEIOUY" }
+                    val hasConsonant = letters.any { it in "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ" }
+                    if (hasVowel && hasConsonant) {
+                        validEnglishTokens++
+                    }
+                } else if (letters.isNotEmpty() && SHORT_VALID_WORDS.contains(letters.lowercase(java.util.Locale.US))) {
+                    validEnglishTokens++
+                }
+            }
+
+            val tokenCount = tokens.size.toFloat()
+            score -= (detachedSingleLetters.toFloat() / tokenCount) * 0.40f
+            score -= (erraticCapitals.toFloat() / tokenCount) * 0.35f
+
+            val englishRatio = validEnglishTokens.toFloat() / tokenCount
+            score *= englishRatio.coerceIn(0.1f, 1.0f)
+
+            return score.coerceIn(0.0f, 1.0f)
+        }
+
+        fun classifySupersetExpansion(oldText: String, newText: String): SupersetVerdict {
+            val oldTrim = oldText.trim()
+            val newTrim = newText.trim()
+            if (oldTrim.isBlank() || newTrim.isBlank() || oldTrim.equals(newTrim, ignoreCase = true)) {
+                return SupersetVerdict.NOT_SUPERSET
+            }
+            if (newTrim.length <= oldTrim.length) {
+                return SupersetVerdict.NOT_SUPERSET
+            }
+
+            // 1. Terminal glued punctuation check: e.g. "Exactly. Good luck 47.RROBERTRow"
+            // Punctuation immediately followed by >=2 letters with no whitespace is an OCR gluing artifact / credit pollution
+            if (Regex("[.!?][A-Za-z]{2,}").containsMatchIn(newTrim)) {
+                return SupersetVerdict.CREDIT_POLLUTION
+            }
+
+            // 2. Identify added prefix and added suffix
+            var addedPrefix = ""
+            var addedSuffix = ""
+            var matched = false
+
+            var idx = newTrim.indexOf(oldTrim, ignoreCase = true)
+            var matchLen = oldTrim.length
+
+            if (idx < 0) {
+                val oldTrimmedPunct = oldTrim.trimEnd('.', '!', '?', ',', ';', ':', '"', '\'', ' ')
+                if (oldTrimmedPunct.length >= 3) {
+                    idx = newTrim.indexOf(oldTrimmedPunct, ignoreCase = true)
+                    if (idx >= 0) {
+                        matchLen = oldTrimmedPunct.length
+                    }
+                }
+            }
+
+            if (idx >= 0) {
+                addedPrefix = newTrim.substring(0, idx).trim()
+                addedSuffix = newTrim.substring(idx + matchLen).trim()
+                matched = true
+            } else {
+                // Token-level sliding window match
+                val cWords = oldTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+                val nWords = newTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+                if (cWords.size >= 2 && nWords.size > cWords.size) {
+                    val windowSize = cWords.size
+                    var bestWindow = -1
+                    for (i in 0..(nWords.size - windowSize)) {
+                        var matches = 0
+                        for (j in 0 until windowSize) {
+                            if (nWords[i + j] == cWords[j]) {
+                                matches++
+                            }
+                        }
+                        if (matches == windowSize || (cWords.size >= 4 && matches.toFloat() / cWords.size >= 0.80f)) {
+                            bestWindow = i
+                            break
+                        }
+                    }
+                    if (bestWindow >= 0) {
+                        matched = true
+                        val preWords = nWords.take(bestWindow)
+                        val postWords = nWords.drop(bestWindow + windowSize)
+                        if (preWords.isNotEmpty()) addedPrefix = preWords.joinToString(" ")
+                        if (postWords.isNotEmpty()) addedSuffix = postWords.joinToString(" ")
+                    }
+                }
+            }
+
+            if (!matched || (addedPrefix.isEmpty() && addedSuffix.isEmpty())) {
+                return SupersetVerdict.NOT_SUPERSET
+            }
+
+            // 3. Left-edge pollution guards: newly introduced prefixes
+            if (addedPrefix.isNotEmpty()) {
+                val prefixTokens = addedPrefix.split(Regex("\\s+")).filter { it.isNotBlank() }
+                val oldStartsWithCapital = oldTrim.firstOrNull()?.isUpperCase() == true
+                if (uppercaseRatio(addedPrefix) >= 0.45f ||
+                    scoreOcrQuality(addedPrefix) < 0.75f ||
+                    (oldStartsWithCapital && prefixTokens.size <= 3) ||
+                    isCreditOrTitleLine(addedPrefix)
+                ) {
+                    return SupersetVerdict.CREDIT_POLLUTION
+                }
+            }
+
+            // 4. Right-edge delta quality audit
+            if (addedSuffix.isNotEmpty()) {
+                if (scoreOcrQuality(addedSuffix) < 0.72f) {
+                    return SupersetVerdict.CREDIT_POLLUTION
+                }
+                val suffixLetters = addedSuffix.filter { it.isLetter() }
+                if (suffixLetters.length >= 4) {
+                    val upRatio = uppercaseRatio(addedSuffix)
+                    val isShouted = isAllCapsShoutedDialogue(addedSuffix)
+                    if (upRatio >= 0.55f && !isShouted) {
+                        return SupersetVerdict.CREDIT_POLLUTION
+                    }
+                }
+            }
+
+            // 5. Total text quality audit
+            if (scoreOcrQuality(newTrim) < 0.70f) {
+                return SupersetVerdict.CREDIT_POLLUTION
+            }
+
+            return SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION
+        }
     }
 
     private data class ElementCluster(
@@ -37,91 +242,9 @@ class OcrEngine {
         val isCentered: Boolean
     )
 
-    fun isCreditOrTitleLine(text: String): Boolean {
-        val upper = text.uppercase(java.util.Locale.US)
-        for (kw in CREDIT_KEYWORDS) {
-            if (upper.contains(kw)) return true
-        }
-        val letters = text.filter { it.isLetter() }
-        if (letters.length >= 4) {
-            val upperCount = letters.count { it.isUpperCase() }
-            val upperRatio = upperCount.toFloat() / letters.length.toFloat()
-            if (upperRatio >= 0.75f && PatchManager.lookup(text.trim()) == null) {
-                return true
-            }
-        }
-        return false
-    }
+    fun isCreditOrTitleLine(text: String): Boolean = Companion.isCreditOrTitleLine(text)
 
-    private fun isMostlyUpper(text: String): Boolean {
-        val letters = text.filter { it.isLetter() }
-        if (letters.isEmpty()) return false
-        val upperCount = letters.count { it.isUpperCase() }
-        return (upperCount.toFloat() / letters.length.toFloat()) >= 0.60f
-    }
-
-    /**
-     * Fast (<1ms) heuristic scoring of OCR text cleanliness.
-     * Rewards valid English words and penalizes detached letters, mid-word caps, underscores, and diacritics.
-     */
-    fun scoreOcrQuality(text: String): Float {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return 0.0f
-        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
-        if (tokens.isEmpty()) return 0.0f
-
-        var score = 1.0f
-
-        // Penalize underscores (e.g. cut off_)
-        if (trimmed.contains("_")) score -= 0.25f
-
-        // Penalize European diacritics
-        val diacriticCount = trimmed.count { it in OcrTextCleaner.EUROPEAN_DIACRITICS }
-        score -= (diacriticCount * 0.20f)
-
-        // Evaluate tokens
-        var validEnglishTokens = 0
-        var detachedSingleLetters = 0
-        var erraticCapitals = 0
-
-        for (token in tokens) {
-            val letters = token.filter { it.isLetter() }
-            if (letters.isEmpty()) continue
-
-            if (letters.length == 1) {
-                if (!letters.equals("a", ignoreCase = true) && !letters.equals("i", ignoreCase = true)) {
-                    detachedSingleLetters++
-                }
-            }
-
-            // Check erratic mid-word uppercase (e.g. "DESsiGNER", "accOunt", "deaLt")
-            if (letters.length >= 3) {
-                val hasInnerUpper = letters.drop(1).dropLast(1).any { it.isUpperCase() } && letters.any { it.isLowerCase() }
-                if (hasInnerUpper) {
-                    erraticCapitals++
-                }
-            }
-
-            if (letters.length >= 3) {
-                val hasVowel = letters.any { it in "aeiouyAEIOUY" }
-                val hasConsonant = letters.any { it in "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ" }
-                if (hasVowel && hasConsonant) {
-                    validEnglishTokens++
-                }
-            } else if (letters.isNotEmpty() && SHORT_VALID_WORDS.contains(letters.lowercase(java.util.Locale.US))) {
-                validEnglishTokens++
-            }
-        }
-
-        val tokenCount = tokens.size.toFloat()
-        score -= (detachedSingleLetters.toFloat() / tokenCount) * 0.40f
-        score -= (erraticCapitals.toFloat() / tokenCount) * 0.35f
-
-        val englishRatio = validEnglishTokens.toFloat() / tokenCount
-        score *= englishRatio.coerceIn(0.1f, 1.0f)
-
-        return score.coerceIn(0.0f, 1.0f)
-    }
+    fun scoreOcrQuality(text: String): Float = Companion.scoreOcrQuality(text)
 
     private val recognizer: TextRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
@@ -470,13 +593,13 @@ class OcrEngine {
                                 return@filter false
                             }
 
-                            // 4. Reject Lowercase Single-Word UI Fragments (e.g. "elable", "able") without ending punctuation
+                            // 4. Reject Clipped Single-Word HUD Action Prompts & UI Fragments without terminal sentence punctuation
                             val clusterTokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
                             if (clusterTokens.size == 1) {
                                 val word = clusterTokens[0]
-                                val startsWithLower = word.firstOrNull()?.isLowerCase() == true
-                                val hasEndingPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?")
-                                if (startsWithLower && !hasEndingPunctuation && PatchManager.lookup(text) == null) {
+                                val hasEndingPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?") ||
+                                        word.endsWith(".\"") || word.endsWith("!\"") || word.endsWith("?\"")
+                                if (!hasEndingPunctuation && PatchManager.lookup(text) == null) {
                                     return@filter false
                                 }
                             }
@@ -496,13 +619,15 @@ class OcrEngine {
                         val normalizedJoined = OcrTextCleaner.normalizeOcrArtifacts(joined)
                         val totalLetters = normalizedJoined.count { it.isLetter() }
                         val joinedTokens = normalizedJoined.split(Regex("\\s+")).filter { it.isNotBlank() }
-                        val isSingleWordLowerFragment = joinedTokens.size == 1 &&
-                                joinedTokens[0].firstOrNull()?.isLowerCase() == true &&
-                                !joinedTokens[0].endsWith(".") && !joinedTokens[0].endsWith("!") && !joinedTokens[0].endsWith("?") &&
-                                PatchManager.lookup(normalizedJoined) == null
+                        val isSingleWordHudFragment = joinedTokens.size == 1 && run {
+                            val word = joinedTokens[0]
+                            val hasEndingPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?") ||
+                                    word.endsWith(".\"") || word.endsWith("!\"") || word.endsWith("?\"")
+                            !hasEndingPunctuation && PatchManager.lookup(normalizedJoined) == null
+                        }
 
                         if (totalLetters < 2 ||
-                            isSingleWordLowerFragment ||
+                            isSingleWordHudFragment ||
                             !passesEnglishTokenRatioFilter(normalizedJoined) ||
                             OcrTextCleaner.isGarbledDocumentNoise(normalizedJoined) ||
                             OcrTextCleaner.isDiacriticSelfOcrGarble(normalizedJoined) ||

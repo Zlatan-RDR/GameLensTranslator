@@ -467,7 +467,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
             sub.text = arabicText
             sub.visibility = View.VISIBLE
-            com.zlatan.gamelens.diag.SubtitleHistoryManager.addEntry(englishText, arabicText)
+            com.zlatan.gamelens.diag.SubtitleHistoryManager.recordOrUpgradeStreaming(englishText, arabicText)
             mainHandler.removeCallbacks(hideSubtitleRunnable)
             val wordCount = arabicText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
             val charBasedMs = 900L + (arabicText.length * 62L)
