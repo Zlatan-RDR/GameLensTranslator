@@ -534,9 +534,11 @@ class TranslationOverlayService : Service() {
         val now = android.os.SystemClock.uptimeMillis()
 
         // In Offset Above mode, never hide overlay during capture (0% flicker, 0% self-OCR, instant 140ms capture).
-        // In Opaque Cover mode, if subtitle is visible, poll at most every 1200ms: hide, wait 65ms, drain 1 stale frame, capture, restore.
-        val croppedRoi: Bitmap? = if (isOpaqueCover && seamlessOverlayRenderer?.isSubtitleVisible() == true) {
-            if (now - lastOpaquePollTimestamp < 1200L) {
+        // In Opaque Cover mode, if subtitle is visible, poll at most every 2500ms (and never hide while reading hold is active):
+        val isSubtitleVis = seamlessOverlayRenderer?.isSubtitleVisible() == true
+        val holdActive = seamlessOverlayRenderer?.isHoldActive() == true
+        val croppedRoi: Bitmap? = if (isOpaqueCover && isSubtitleVis) {
+            if (now - lastOpaquePollTimestamp < 2500L || holdActive) {
                 return
             }
             lastOpaquePollTimestamp = now
@@ -632,8 +634,8 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log(dropMsg)
             }
             consecutiveEmptyOcrPasses++
-            val timeSinceDisplay = now - lastSubtitleDisplayTimestamp
-            if (timeSinceDisplay >= 2200L && consecutiveEmptyOcrPasses >= 9) {
+            val isHoldActive = seamlessOverlayRenderer?.isHoldActive() == true
+            if (!isHoldActive && consecutiveEmptyOcrPasses >= 9) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -664,11 +666,8 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log("OCR skipped [$dropReason]: \"$mergedRaw\"")
             }
             consecutiveEmptyOcrPasses++
-            val timeSinceDisplay = now - lastSubtitleDisplayTimestamp
-            // Dynamic Reading-Speed Hold Duration:
-            // Do not prematurely hide displayed subtitles after 280ms if minimum reading time hasn't elapsed.
-            // Only hide after 1200ms of continuous empty passes (9 passes * 140ms = 1260ms) once minimum 2200ms has passed.
-            if (timeSinceDisplay >= 2200L && consecutiveEmptyOcrPasses >= 9) {
+            val isHoldActive = seamlessOverlayRenderer?.isHoldActive() == true
+            if (!isHoldActive && consecutiveEmptyOcrPasses >= 9) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -1040,7 +1039,7 @@ class TranslationOverlayService : Service() {
             requestProjectionReacquisition(autoStartAudio = false)
             return
         }
-        showToast("جاري مسح وترجمة القوائم (Zero Self-Read)...")
+
         serviceScope.launch {
             try {
                 val captureMgr = screenCaptureManager ?: run {
@@ -1048,51 +1047,40 @@ class TranslationOverlayService : Service() {
                     return@launch
                 }
 
-                // Clean frame capture: hide overlay synchronously, wait 35ms, acquire clean frame, restore visibility
-                val fullBitmap = captureFrameForOcr()
+                // Zero-Interference Capture: Hide bubble and overlay cleanly without pre-capture Toast
+                withContext(Dispatchers.Main) {
+                    bubbleView?.visibility = View.INVISIBLE
+                    seamlessOverlayRenderer?.setInvisibleForCapture()
+                }
+                delay(80L)
+
+                val fullBitmap = captureMgr.acquireFullScreenBitmap()
+
+                withContext(Dispatchers.Main) {
+                    bubbleView?.visibility = View.VISIBLE
+                    seamlessOverlayRenderer?.restoreVisibilityAfterCapture()
+                }
 
                 if (fullBitmap == null) {
+                    DiagnosticLogger.log("MenuScan: acquireFullScreenBitmap returned null")
                     showToast("تعذر التقاط إطار الشاشة، يرجى المحاولة ثانية")
                     return@launch
                 }
 
-                val bubbleBounds = getBubbleBounds()
-
-                // 5. Restrict OCR strictly to Calibrated Reading Box if configured
-                val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-                val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
-
-                val cropX = (calRect.left * fullBitmap.width).toInt().coerceIn(0, fullBitmap.width - 1)
-                val cropY = (calRect.top * fullBitmap.height).toInt().coerceIn(0, fullBitmap.height - 1)
-                val cropW = (calRect.width() * fullBitmap.width).toInt().coerceIn(1, fullBitmap.width - cropX)
-                val cropH = (calRect.height() * fullBitmap.height).toInt().coerceIn(1, fullBitmap.height - cropY)
-
-                val isCropped = (cropW < fullBitmap.width || cropH < fullBitmap.height)
-                val ocrBitmap = if (isCropped) {
-                    Bitmap.createBitmap(fullBitmap, cropX, cropY, cropW, cropH)
-                } else {
-                    fullBitmap
-                }
-
                 val (screenW, screenH, _) = getRealScreenDimensions()
 
-                // ML Kit OCR with confidence >= 0.78 & English token linguistic filter (>= 60%)
-                val detectedBlocks = ocrEngine.recognizeText(
-                    bitmap = ocrBitmap,
-                    excludedBounds = bubbleBounds,
-                    cropLeft = if (isCropped) cropX else 0,
-                    cropTop = if (isCropped) cropY else 0,
-                    scaleFactor = 1.0f,
-                    screenWidth = screenW,
-                    screenHeight = screenH
-                )
+                // Dedicated Full-Screen Menu / Popup OCR Mode (no ROI cropping, preserves headers)
+                val detectedBlocks = ocrEngine.recognizeFullScreenMenu(fullBitmap)
+                DiagnosticLogger.log("MenuScan: captured ${fullBitmap.width}x${fullBitmap.height}, detected blocks=${detectedBlocks.size}")
+
                 if (detectedBlocks.isEmpty()) {
+                    DiagnosticLogger.log("MenuScan: No text blocks detected on screen")
                     showToast("لم يتم العثور على نصوص واضحة في القائمة")
                     updateBubbleVisualState()
                     return@launch
                 }
 
-                // 6. Translate detected blocks
+                // Translate detected blocks preserving paragraph breaks and headers
                 withContext(Dispatchers.IO) {
                     for (block in detectedBlocks) {
                         val translated = translationManager.translate(block.text)
@@ -1108,27 +1096,29 @@ class TranslationOverlayService : Service() {
                 }
 
                 if (arabicBlocks.isEmpty()) {
-                    showToast("لم تتوفر ترجمة عربية للنصوص المكتشفة")
+                    DiagnosticLogger.log("MenuScan: Translation returned no Arabic text")
+                    showToast("لم تتوفر ترجمة عربية لنصوص القائمة")
                     updateBubbleVisualState()
                     return@launch
                 }
 
-                // 7. Render menu translations with opaque dark cards (#F210141D) pinned stably
-                seamlessOverlayRenderer?.renderTranslations(
+                // Render professional RTL Arabic modal card with explicit close button
+                seamlessOverlayRenderer?.renderFullScreenMenuModal(
                     blocks = arabicBlocks,
                     screenW = screenW,
-                    screenH = screenH,
-                    bitmapW = fullBitmap.width,
-                    bitmapH = fullBitmap.height
+                    screenH = screenH
                 )
                 pulseHeartbeat()
-
                 updateBubbleVisualState()
-                showToast("تم تثبيت ترجمة القائمة (انقر نقرة واحدة للإخفاء)")
+                DiagnosticLogger.log("MenuScan: Rendered modal with ${arabicBlocks.size} blocks successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "Zero-Self-Read scan error: ${e.message}", e)
-                seamlessOverlayRenderer?.setVisibility(true)
-                showToast("خطأ أثناء مسح القائمة: ${e.message}")
+                DiagnosticLogger.log("MenuScan error: ${e.javaClass.simpleName} - ${e.message}")
+                withContext(Dispatchers.Main) {
+                    bubbleView?.visibility = View.VISIBLE
+                    seamlessOverlayRenderer?.restoreVisibilityAfterCapture()
+                    showToast("حدث خطأ أثناء مسح القائمة")
+                }
             }
         }
     }

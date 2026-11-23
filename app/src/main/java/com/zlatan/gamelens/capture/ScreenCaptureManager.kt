@@ -221,6 +221,78 @@ class ScreenCaptureManager(
         }
     }
 
+    private var lastCapturedFullScreenBitmap: Bitmap? = null
+
+    /**
+     * Bounds-Safe Full-Screen Capture with Static-Frame Cache.
+     * Uses row-by-row Adreno safe buffer copying (identical to acquireCroppedRoi)
+     * with up to 3 retries (50ms apart) if acquireLatestImage() returns null on a static paused screen,
+     * falling back to the cached full-screen frame if reader returns null.
+     */
+    @Synchronized
+    fun acquireFullScreenBitmap(): Bitmap? {
+        val reader = imageReader ?: return lastCapturedFullScreenBitmap
+        var image: Image? = null
+        for (attempt in 1..3) {
+            try {
+                image = reader.acquireLatestImage()
+                if (image != null) break
+            } catch (t: Throwable) {
+                DiagnosticLogger.log("acquireFullScreenImage attempt $attempt error: ${t.javaClass.simpleName} - ${t.message}")
+            }
+            if (attempt < 3) {
+                try {
+                    Thread.sleep(50L)
+                } catch (_: InterruptedException) {}
+            }
+        }
+
+        if (image == null) {
+            Log.d(TAG, "acquireFullScreenBitmap: ImageReader returned null, using cached frame (cached=${lastCapturedFullScreenBitmap != null})")
+            DiagnosticLogger.log("acquireFullScreen: ImageReader null, using cached frame (cached=${lastCapturedFullScreenBitmap != null})")
+            return lastCapturedFullScreenBitmap
+        }
+
+        return try {
+            val imgW = image.width
+            val imgH = image.height
+            val planes = image.planes
+            if (planes.isEmpty()) return lastCapturedFullScreenBitmap
+
+            val plane = planes[0]
+            val buffer: ByteBuffer = plane.buffer
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val bufLimit = buffer.limit()
+
+            val rowBytes = imgW * pixelStride
+            val dest = ByteArray(rowBytes * imgH)
+
+            for (row in 0 until imgH) {
+                val srcOffset = row * rowStride
+                if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) {
+                    break
+                }
+                buffer.position(srcOffset)
+                buffer.get(dest, row * rowBytes, rowBytes)
+            }
+
+            val fullBitmap = Bitmap.createBitmap(imgW, imgH, Bitmap.Config.ARGB_8888)
+            fullBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
+
+            lastCapturedFullScreenBitmap = fullBitmap
+            fullBitmap
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error acquiring full-screen bitmap: ${t.message}", t)
+            DiagnosticLogger.log("acquireFullScreenBitmap error: ${t.javaClass.simpleName} - ${t.message}")
+            lastCapturedFullScreenBitmap
+        } finally {
+            try {
+                image.close()
+            } catch (_: Throwable) {}
+        }
+    }
+
     /**
      * Grabs the latest frame from the ImageReader and returns it as a Bitmap.
      * Safely handles Qualcomm Adreno GPU row padding to prevent BufferUnderflowException.
@@ -305,6 +377,7 @@ class ScreenCaptureManager(
             virtualDisplay = null
             imageReader?.close()
             imageReader = null
+            lastCapturedFullScreenBitmap = null
             Log.d(TAG, "VirtualDisplay and ImageReader released successfully")
             DiagnosticLogger.log("Capture manager released")
         } catch (t: Throwable) {

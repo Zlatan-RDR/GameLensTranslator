@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
         const val DEFAULT_FONT_SIZE_SP = 18f
         const val MODE_OPAQUE_COVER = "opaque_cover"
         const val MODE_OFFSET_ABOVE = "offset_above"
+        const val KEY_MIGRATED_OFFSET_ABOVE_V2 = "migrated_offset_above_v2"
 
         const val MODE_OFFLINE = "mode_offline"
         const val MODE_CLOUD = "mode_cloud"
@@ -472,6 +473,14 @@ class MainActivity : AppCompatActivity() {
         binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions"))
 
         binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
+
+        // One-time migration to Offset Above mode for 0% flicker
+        if (!prefs.getBoolean(KEY_MIGRATED_OFFSET_ABOVE_V2, false)) {
+            prefs.edit()
+                .putString(KEY_OVERLAY_RENDER_MODE, MODE_OFFSET_ABOVE)
+                .putBoolean(KEY_MIGRATED_OFFSET_ABOVE_V2, true)
+                .apply()
+        }
 
         val coverMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OFFSET_ABOVE)
         if (coverMode == MODE_OFFSET_ABOVE) {

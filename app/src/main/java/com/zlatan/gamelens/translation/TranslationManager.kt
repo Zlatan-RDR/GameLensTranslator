@@ -1,6 +1,8 @@
 package com.zlatan.gamelens.translation
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import android.util.LruCache
 import com.google.mlkit.common.model.DownloadConditions
@@ -11,6 +13,7 @@ import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
 import com.zlatan.gamelens.db.TranslationCacheManager
+import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.glossary.GlossaryManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -44,6 +48,18 @@ class TranslationManager(
     companion object {
         private const val TAG = "TranslationManager"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        fun hasActiveInternet(context: Context): Boolean {
+            return try {
+                val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+                val network = cm.activeNetwork ?: return false
+                val caps = cm.getNetworkCapabilities(network) ?: return false
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            } catch (_: Throwable) {
+                false
+            }
+        }
 
         private val DANGLING_WORDS = setOf(
             "to", "for", "with", "and", "but", "or", "that", "which", "who", "if", "when", "while",
@@ -120,6 +136,15 @@ class TranslationManager(
 
     init {
         initMlKitTranslator()
+        // Synchronously check if offline Arabic model is already downloaded to disk
+        modelManager.isModelDownloaded(arabicModel)
+            .addOnSuccessListener { downloaded ->
+                if (downloaded) {
+                    isMlKitModelReady = true
+                    modelStatusString = "جاهز للعمل أوفلاين (Ready Offline)"
+                    _modelStatusFlow.value = ModelStatus.READY
+                }
+            }
         checkModelState()
     }
 
@@ -311,9 +336,13 @@ class TranslationManager(
         val isOnlineEnhanced = context.getSharedPreferences(com.zlatan.gamelens.MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(com.zlatan.gamelens.MainActivity.KEY_ONLINE_TRANSLATE_ENHANCED, false)
 
+        val hasNet = hasActiveInternet(context)
+
         val translated = when {
-            isOnlineEnhanced -> {
-                translateViaGoogleFree(preprocessed) ?: when (config.mode) {
+            isOnlineEnhanced && hasNet -> {
+                withTimeoutOrNull(900L) {
+                    translateViaGoogleFree(preprocessed)
+                } ?: when (config.mode) {
                     TranslationMode.CLOUD_OPENAI -> {
                         if (config.apiKey.isNotBlank()) {
                             translateViaOpenAi(preprocessed) ?: translateViaMlKit(preprocessed)
@@ -324,7 +353,7 @@ class TranslationManager(
                     TranslationMode.OFFLINE_MLKIT -> translateViaMlKit(preprocessed)
                 }
             }
-            config.mode == TranslationMode.CLOUD_OPENAI -> {
+            config.mode == TranslationMode.CLOUD_OPENAI && hasNet -> {
                 if (config.apiKey.isNotBlank()) {
                     translateViaOpenAi(preprocessed) ?: translateViaMlKit(preprocessed)
                 } else {
@@ -544,7 +573,8 @@ class TranslationManager(
 
     private suspend fun translateViaMlKit(text: String): String = suspendCancellableCoroutine { continuation ->
         val translator = mlKitTranslator
-        if (translator == null || !isMlKitModelReady) {
+        if (translator == null) {
+            DiagnosticLogger.log("ML Kit translation error: translator is null")
             continuation.resume(text)
             return@suspendCancellableCoroutine
         }
@@ -557,6 +587,7 @@ class TranslationManager(
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "ML Kit translation failed: ${e.message}", e)
+                DiagnosticLogger.log("ML Kit offline translate error: ${e.javaClass.simpleName} - ${e.message}")
                 if (continuation.isActive) {
                     continuation.resume(text) // fallback to original text
                 }

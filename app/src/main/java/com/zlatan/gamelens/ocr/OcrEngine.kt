@@ -17,6 +17,13 @@ import kotlin.coroutines.resume
 
 class OcrEngine {
 
+    data class MenuTextBlock(
+        val text: String,
+        val boundingBox: Rect,
+        var translatedText: String? = null,
+        val isHeader: Boolean = false
+    )
+
     enum class SupersetVerdict {
         NOT_SUPERSET,
         CLEAN_PROGRESSIVE_EXPANSION,
@@ -653,6 +660,86 @@ class OcrEngine {
                 }
         } catch (t: Throwable) {
             Log.e(TAG, "ML Kit recognizeRoi exception: ${t.message}", t)
+            if (continuation.isActive) {
+                continuation.resume(emptyList())
+            }
+        }
+    }
+
+    /**
+     * Dedicated Full-Screen Menu / Popup OCR Mode.
+     * Runs ML Kit across the full-screen frame without subtitle ROI cropping,
+     * without all-caps credit filtration (preserving headers like AUTOSAVES AND CHECKPOINTS, BRIEFING),
+     * without center-band restriction, and without single-word punctuation rejection.
+     * Cleanly groups lines in each TextBlock into readable paragraphs, filtering out pure numeric HUD counters.
+     */
+    suspend fun recognizeFullScreenMenu(bitmap: Bitmap): List<MenuTextBlock> = suspendCancellableCoroutine { continuation ->
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
+            continuation.resume(emptyList())
+            return@suspendCancellableCoroutine
+        }
+
+        val argbBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
+            try {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (_: Exception) {
+                bitmap
+            }
+        } else {
+            bitmap
+        }
+
+        try {
+            val inputImage = InputImage.fromBitmap(argbBitmap, 0)
+            recognizer.process(inputImage)
+                .addOnSuccessListener { visionText ->
+                    val resultBlocks = mutableListOf<MenuTextBlock>()
+
+                    for (block in visionText.textBlocks) {
+                        val rawText = block.text.trim()
+                        if (rawText.length < 2) continue
+
+                        // Filter out pure numeric HUD counters (e.g. "8 / 74", "100%", "12:30", "$500")
+                        val lettersCount = rawText.count { it.isLetter() }
+                        if (lettersCount < 2) continue
+
+                        val box = block.boundingBox ?: Rect(0, 0, 0, 0)
+
+                        // Merge lines in the block cleanly into a paragraph preserving intentional breaks
+                        val cleanedLines = block.lines.mapNotNull { line ->
+                            val lineText = line.text.trim()
+                            if (lineText.count { it.isLetter() } >= 1) lineText else null
+                        }
+
+                        if (cleanedLines.isEmpty()) continue
+
+                        val paragraphText = cleanedLines.joinToString(" ")
+                        val isHeaderCandidate = (block.lines.size == 1 && paragraphText.length in 3..45) ||
+                                (paragraphText.count { it.isUpperCase() }.toFloat() / paragraphText.count { it.isLetter() }.coerceAtLeast(1) >= 0.70f && paragraphText.length <= 60)
+
+                        resultBlocks.add(
+                            MenuTextBlock(
+                                text = paragraphText,
+                                boundingBox = box,
+                                isHeader = isHeaderCandidate
+                            )
+                        )
+                    }
+
+                    // Sort blocks from top to bottom
+                    val sorted = resultBlocks.sortedWith(compareBy({ it.boundingBox.top }, { it.boundingBox.left }))
+                    if (continuation.isActive) {
+                        continuation.resume(sorted)
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e(TAG, "ML Kit recognizeFullScreenMenu error: ${e.message}", e)
+                    if (continuation.isActive) {
+                        continuation.resume(emptyList())
+                    }
+                }
+        } catch (t: Throwable) {
+            Log.e(TAG, "ML Kit recognizeFullScreenMenu exception: ${t.message}", t)
             if (continuation.isActive) {
                 continuation.resume(emptyList())
             }

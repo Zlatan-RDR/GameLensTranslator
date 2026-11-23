@@ -10,6 +10,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -17,9 +18,12 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.ocr.OcrBlock
+import com.zlatan.gamelens.ocr.OcrEngine
 
 class SeamlessOverlayRenderer(private val context: Context) {
 
@@ -284,8 +288,184 @@ class SeamlessOverlayRenderer(private val context: Context) {
         }
     }
 
+    /**
+     * Renders full-screen menu / popup translations into a crisp, professional RTL Arabic modal card.
+     * Stays 100% static until dismissed via the explicit close button or background tap.
+     */
+    fun renderFullScreenMenuModal(
+        blocks: List<OcrEngine.MenuTextBlock>,
+        screenW: Int = 0,
+        screenH: Int = 0
+    ) {
+        mainHandler.post {
+            if (!isContainerAttached || overlayContainer == null) {
+                initOverlayContainer()
+            }
+            val container = overlayContainer ?: return@post
+            if (!isContainerAttached) return@post
+
+            clearOcrViews()
+
+            if (!isVisible || blocks.isEmpty()) {
+                _hasPinnedCards = false
+                return@post
+            }
+
+            val density = context.resources.displayMetrics.density
+            val realW = if (screenW > 0) screenW else context.resources.displayMetrics.widthPixels
+            val realH = if (screenH > 0) screenH else context.resources.displayMetrics.heightPixels
+
+            // 1. Full-screen scrim backdrop
+            val scrimView = View(context).apply {
+                setBackgroundColor(Color.parseColor("#8C000000"))
+                setOnClickListener {
+                    clearMenuCards()
+                }
+            }
+            val scrimParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            container.addView(scrimView, scrimParams)
+
+            // 2. Central Modal Card
+            val cardW = (realW * 0.85f).toInt().coerceAtMost((680 * density).toInt()).coerceAtLeast((280 * density).toInt())
+            val maxCardH = (realH * 0.82f).toInt()
+
+            val cardContainer = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                textDirection = View.TEXT_DIRECTION_RTL
+                val bg = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    setColor(Color.parseColor("#F20A0E17"))
+                    cornerRadius = 16f * density
+                    setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#33FFFFFF"))
+                }
+                background = bg
+                setPadding((18 * density).toInt(), (14 * density).toInt(), (18 * density).toInt(), (14 * density).toInt())
+            }
+
+            // Top Header Row
+            val headerRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val titleView = TextView(context).apply {
+                text = "ترجمة القائمة / الإرشادات"
+                setTextColor(Color.parseColor("#38BDF8"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                textDirection = View.TEXT_DIRECTION_RTL
+            }
+            val titleParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f)
+            headerRow.addView(titleView, titleParams)
+
+            val closeButton = TextView(context).apply {
+                text = "إغلاق ✕"
+                setTextColor(Color.parseColor("#E0F2FE"))
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                typeface = Typeface.DEFAULT_BOLD
+                val btnBg = GradientDrawable().apply {
+                    shape = GradientDrawable.RECTANGLE
+                    setColor(Color.parseColor("#26FFFFFF"))
+                    cornerRadius = 8f * density
+                    setStroke((1f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+                }
+                background = btnBg
+                setPadding((12 * density).toInt(), (6 * density).toInt(), (12 * density).toInt(), (6 * density).toInt())
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    clearMenuCards()
+                }
+            }
+            headerRow.addView(closeButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            cardContainer.addView(headerRow)
+
+            // Header Divider
+            val divider = View(context).apply {
+                setBackgroundColor(Color.parseColor("#1FFFFFFF"))
+            }
+            val dividerParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (1 * density).toInt().coerceAtLeast(1)).apply {
+                topMargin = (10 * density).toInt()
+                bottomMargin = (12 * density).toInt()
+            }
+            cardContainer.addView(divider, dividerParams)
+
+            // Scrollable Content
+            val scrollView = ScrollView(context).apply {
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                textDirection = View.TEXT_DIRECTION_RTL
+                isVerticalScrollBarEnabled = true
+            }
+
+            val contentLayout = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                textDirection = View.TEXT_DIRECTION_RTL
+            }
+
+            for (block in blocks) {
+                val textToDisplay = block.translatedText ?: block.text
+                if (textToDisplay.isBlank()) continue
+
+                val blockView = TextView(context).apply {
+                    text = textToDisplay
+                    layoutDirection = View.LAYOUT_DIRECTION_RTL
+                    textDirection = View.TEXT_DIRECTION_RTL
+                    textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+                    gravity = Gravity.START
+
+                    if (block.isHeader) {
+                        setTextColor(Color.parseColor("#F59E0B")) // Warm amber accent for headings
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                        typeface = Typeface.DEFAULT_BOLD
+                        setPadding(0, (8 * density).toInt(), 0, (4 * density).toInt())
+                    } else {
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
+                        setLineSpacing(5f * density, 1.25f)
+                        setPadding(0, (2 * density).toInt(), 0, (8 * density).toInt())
+                    }
+                }
+                contentLayout.addView(blockView)
+            }
+
+            scrollView.addView(contentLayout)
+            val scrollParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f).apply {
+                weight = 1.0f
+            }
+            cardContainer.addView(scrollView, scrollParams)
+
+            val cardParams = FrameLayout.LayoutParams(cardW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER
+            }
+            cardContainer.post {
+                if (cardContainer.height > maxCardH) {
+                    val p = cardContainer.layoutParams
+                    p.height = maxCardH
+                    cardContainer.layoutParams = p
+                }
+            }
+
+            container.addView(cardContainer, cardParams)
+            _hasPinnedCards = true
+        }
+    }
+
     @Volatile
     private var _hasPinnedCards = false
+
+    @Volatile
+    private var subtitleHoldUntilMs: Long = 0L
+
+    fun getSubtitleHoldUntilMs(): Long = subtitleHoldUntilMs
+    fun isHoldActive(): Boolean = SystemClock.elapsedRealtime() < subtitleHoldUntilMs
 
     fun hasPinnedMenuCards(): Boolean = _hasPinnedCards
 
@@ -304,6 +484,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
         mainHandler.post {
             clearOcrViews()
             _hasPinnedCards = false
+            subtitleHoldUntilMs = 0L
             subtitleView?.visibility = View.GONE
             subtitleView?.text = ""
         }
@@ -383,6 +564,18 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val sub = subtitleView ?: return@post
             if (arabicText.isBlank()) {
                 sub.visibility = View.GONE
+                return@post
+            }
+
+            val currentText = sub.text?.toString() ?: ""
+            val isAlreadyShowing = sub.visibility == View.VISIBLE && currentText == arabicText
+            if (isAlreadyShowing) {
+                // Idempotent Zero-Blink: do not re-animate, clear, or touch background alpha; keep frozen
+                mainHandler.removeCallbacks(hideSubtitleRunnable)
+                val wordCount = arabicText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
+                val holdMs = maxOf(2000L + arabicText.length * 70L, 2000L + wordCount * 400L).coerceIn(3000L, 10500L)
+                subtitleHoldUntilMs = SystemClock.elapsedRealtime() + holdMs
+                mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
                 return@post
             }
 
@@ -470,9 +663,8 @@ class SeamlessOverlayRenderer(private val context: Context) {
             com.zlatan.gamelens.diag.SubtitleHistoryManager.recordOrUpgradeStreaming(englishText, arabicText)
             mainHandler.removeCallbacks(hideSubtitleRunnable)
             val wordCount = arabicText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
-            val charBasedMs = 900L + (arabicText.length * 62L)
-            val wordBasedMs = 900L + (wordCount * 340L)
-            val holdMs = maxOf(charBasedMs, wordBasedMs).coerceIn(2200L, 9000L)
+            val holdMs = maxOf(2000L + arabicText.length * 70L, 2000L + wordCount * 400L).coerceIn(3000L, 10500L)
+            subtitleHoldUntilMs = SystemClock.elapsedRealtime() + holdMs
             mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
         }
     }
@@ -494,6 +686,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
         mainHandler.post {
             clearOcrViews()
             _hasPinnedCards = false
+            subtitleHoldUntilMs = 0L
             subtitleView?.visibility = View.GONE
         }
     }
