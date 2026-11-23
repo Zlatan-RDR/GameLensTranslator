@@ -6,11 +6,11 @@ import kotlin.math.abs
 
 /**
  * High-speed 4x4-strided luminance pixel-diff gate for cropped subtitle ROI (~1.5ms on Snapdragon 8s Gen 4).
- * Compares integer luminance across a 4x4 subsampled grid and gates downstream OCR if delta < 2.5%.
+ * Compares integer luminance across a 4x4 subsampled grid and gates downstream OCR if delta < 0.45%.
  */
 class FastPixelDiffGate(
     private val stride: Int = 4,
-    private val diffThresholdPercent: Float = 0.025f // 2.5% delta
+    private val diffThresholdPercent: Float = 0.0045f // 0.45% delta (lowered from 2.5% to detect short 2-3 word subtitles)
 ) {
     private var lastLuminanceSamples: ByteArray? = null
     private var pendingSamples: ByteArray? = null
@@ -79,7 +79,7 @@ class FastPixelDiffGate(
 
     /**
      * Samples 4x4-strided luminance across the cropped ROI.
-     * Returns true if pixel delta >= 2.5% or dimensions changed.
+     * Returns true if pixel delta >= 0.45% or dimensions changed.
      */
     fun hasChanged(bitmap: Bitmap): Boolean {
         val ratio = computeDiffRatio(bitmap)

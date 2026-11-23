@@ -550,36 +550,41 @@ class TranslationOverlayService : Service() {
 
         if (croppedRoi == null) return
 
-        // 4. Stage 2: Settle-Then-Translate Pixel-Diff Gate (~1.5ms) (from overlay-translator & Translumo)
+        // 4. Stage 2: Settle-Then-Translate Pixel-Diff Gate (~1.5ms) & 560ms Heartbeat Scan
         val isOverlayShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
         val timeSinceLastOcr = now - lastOcrTimestamp
         val forceClearCheck = isOverlayShowing && (timeSinceLastOcr >= 420L)
+        val forceHeartbeat = timeSinceLastOcr >= 560L // Mandatory heartbeat scan every 560ms (4 ticks)
 
         val delta = fastPixelDiffGate.computeDiffRatio(croppedRoi)
-        if (isRoiSettling) {
+        if (isRoiSettling && !forceInstantPass) {
             val waitElapsed = now - roiSettleStartTime
-            if (delta < 0.020f || waitElapsed >= 280L) {
-                // Frame stabilized (< 2.0% delta) or max settling time reached (280ms) -> commit and proceed to OCR
+            if (delta < 0.0045f || waitElapsed >= 140L) {
+                // Frame stabilized (< 0.45% delta) or max settling time reached (140ms / 1 frame) -> commit and proceed to OCR
                 isRoiSettling = false
                 fastPixelDiffGate.commitSamples(croppedRoi)
             } else {
-                // Still in transition (fade-in / camera motion) -> wait 1 more frame
+                // Still settling within 1-frame window -> wait 1 frame
                 if (!croppedRoi.isRecycled) croppedRoi.recycle()
                 return
             }
-        } else if (delta >= 0.025f) {
-            // New motion detected: initiate settling wait so transitional half-faded frames are not read
+        } else if (delta >= 0.0045f && !forceInstantPass) {
+            // New motion detected: initiate 1-frame settling wait (140ms) so transitional half-faded frames settle
             isRoiSettling = true
             roiSettleStartTime = now
             fastPixelDiffGate.commitSamples(croppedRoi)
-            if (!forceClearCheck && !forceInstantPass) {
+            if (!forceClearCheck && !forceHeartbeat) {
                 if (!croppedRoi.isRecycled) croppedRoi.recycle()
                 return
             }
-        } else if (!forceClearCheck && !forceInstantPass) {
+        } else if (!forceClearCheck && !forceHeartbeat && !forceInstantPass) {
+            // ROI static and no heartbeat/clear triggers -> skip OCR
             if (!croppedRoi.isRecycled) croppedRoi.recycle()
             return
         }
+
+        // Proceeding with OCR: reset transient triggers & update last OCR timestamp
+        isRoiSettling = false
         forceInstantPass = false
         lastOcrTimestamp = now
 
@@ -590,6 +595,7 @@ class TranslationOverlayService : Service() {
 
         var lines = rawLines
         var filterSource = "Raw (q=%.2f)".format(java.util.Locale.US, rawScore)
+        var bestScore = rawScore
 
         if (rawLines.isEmpty() || rawScore < 0.80f) {
             val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(croppedRoi)
@@ -601,6 +607,7 @@ class TranslationOverlayService : Service() {
                     val mortScore = ocrEngine.scoreOcrQuality(mortText)
                     if (mortScore > rawScore || rawLines.isEmpty()) {
                         lines = mortLines
+                        bestScore = mortScore
                         filterSource = "Mort (q=%.2f)".format(java.util.Locale.US, mortScore)
                     }
                 }
@@ -621,6 +628,16 @@ class TranslationOverlayService : Service() {
             com.zlatan.gamelens.ocr.OcrTextCleaner.isGarbledDocumentNoise(mergedEnglish) ||
             com.zlatan.gamelens.ocr.OcrTextCleaner.isDiacriticSelfOcrGarble(mergedEnglish)
         ) {
+            if (mergedRaw.isNotBlank()) {
+                val dropReason = when {
+                    com.zlatan.gamelens.ocr.OcrTextCleaner.isNoiseOrPrompt(mergedEnglish) -> "noise/prompt"
+                    com.zlatan.gamelens.ocr.OcrTextCleaner.isGarbledDocumentNoise(mergedEnglish) -> "garbled-doc"
+                    com.zlatan.gamelens.ocr.OcrTextCleaner.isDiacriticSelfOcrGarble(mergedEnglish) -> "diacritic-garble"
+                    else -> "empty/blank"
+                }
+                Log.d(TAG, "OCR skipped [$dropReason]: \"$mergedRaw\"")
+                DiagnosticLogger.log("OCR skipped [$dropReason]: \"$mergedRaw\"")
+            }
             consecutiveEmptyOcrPasses++
             val timeSinceDisplay = now - lastSubtitleDisplayTimestamp
             // Dynamic Reading-Speed Hold Duration:
@@ -639,38 +656,50 @@ class TranslationOverlayService : Service() {
 
         // Jitter Gate: skip if >= 88% similar to currently displayed text (0ms, zero flicker)
         if (lastDisplayedEnglishText.isNotEmpty() && com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(mergedEnglish, lastDisplayedEnglishText, 0.88f)) {
+            Log.d(TAG, "OCR skipped [jitter/dedup]: \"$mergedEnglish\" (matches displayed: \"$lastDisplayedEnglishText\")")
             return
         }
 
         // Prefix/subset overwrite guard: ignore new OCR strings that are shorter subsets/prefixes (>= 75% token overlap) of the currently displayed sentence within 5000ms
         if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 5000L)) {
             if (com.zlatan.gamelens.ocr.OcrTextCleaner.isShorterSubsetOrPrefix(mergedEnglish, lastDisplayedEnglishText)) {
+                Log.d(TAG, "OCR skipped [shorter-subset]: \"$mergedEnglish\" (subset of: \"$lastDisplayedEnglishText\")")
                 return
             }
         }
 
-        // 7. Normalization, Patch Matching (0ms snap) and 1-Frame Stability Confirmation
+        // 7. Normalization, Patch Matching (0ms snap) and Candidate Handling
         val promptNormalized = translationManager.normalizeControllerPrompts(mergedEnglish)
         val patchMatch = PatchManager.lookup(promptNormalized)
 
-        if (patchMatch == null) {
-            // Non-patch OCR string: require 1-frame stability confirmation (2 consecutive captures within 350ms with >= 80% similarity)
+        if (patchMatch != null) {
+            // Patch matched: instant 0ms snap translation!
+            candidateEnglishText = ""
+            Log.d(TAG, "Patch snapped (0ms): \"$promptNormalized\"")
+        } else if (bestScore >= 0.70f) {
+            // High-confidence clean candidate (>= 0.70f): translate immediately on first pass (0ms delay)
+            candidateEnglishText = ""
+            Log.d(TAG, "High-confidence OCR passed directly (q=%.2f): \"$promptNormalized\"".format(java.util.Locale.US, bestScore))
+        } else {
+            // Low-confidence candidate (< 0.70f): require 2-frame stability confirmation within 1000ms
             val nowMs = android.os.SystemClock.uptimeMillis()
             val isCandidateMatch = candidateEnglishText.isNotEmpty() &&
-                    (nowMs - candidateTimestamp <= 350L) &&
+                    (nowMs - candidateTimestamp <= 1000L) &&
                     com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(promptNormalized, candidateEnglishText, 0.80f)
 
             if (!isCandidateMatch) {
-                // First frame: store candidate and wait for 2nd frame confirmation
+                // First frame of low-confidence candidate: store and force instant pass on the very next 140ms poll
                 candidateEnglishText = promptNormalized
                 candidateTimestamp = nowMs
+                forceInstantPass = true
+                val dropMsg = "OCR skipped [pending-confirmation q=%.2f]: \"$promptNormalized\" (waiting 2nd frame <= 1000ms)".format(java.util.Locale.US, bestScore)
+                Log.d(TAG, dropMsg)
+                DiagnosticLogger.log(dropMsg)
                 return
             }
-            // 2nd frame confirmed within 350ms! Clear candidate and proceed to translate
+            // 2nd frame confirmed within 1000ms! Clear candidate and proceed to translate
             candidateEnglishText = ""
-        } else {
-            // Patch matched: instant 0ms snap translation!
-            candidateEnglishText = ""
+            Log.d(TAG, "Low-confidence OCR confirmed on 2nd frame: \"$promptNormalized\"")
         }
 
         // Final guard against orientation flip or foreground switch right before translation
@@ -690,6 +719,7 @@ class TranslationOverlayService : Service() {
         val arabicTranslation = if (patchMatch != null) rawArabic else translationManager.repairGluedArabicWords(rawArabic)
 
         if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(promptNormalized.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
+            Log.d(TAG, "OCR skipped [empty-or-non-arabic]: \"$promptNormalized\" -> \"$arabicTranslation\"")
             return
         }
 
