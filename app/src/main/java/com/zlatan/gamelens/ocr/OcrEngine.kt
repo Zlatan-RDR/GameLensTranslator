@@ -291,14 +291,19 @@ class OcrEngine {
                             !isHudPrompt(text) &&
                             !isAllCapsNonDialogue(text) &&
                             !OcrTextCleaner.isNoiseOrPrompt(text) &&
-                            !OcrTextCleaner.isGarbledDocumentNoise(text)
+                            !OcrTextCleaner.isGarbledDocumentNoise(text) &&
+                            !OcrTextCleaner.isDiacriticSelfOcrGarble(text)
                         }
                         .sortedBy { it.boundingBox?.top ?: 0 }
-                        .map { it.text.trim() }
+                        .map { OcrTextCleaner.normalizeOcrArtifacts(it.text.trim()) }
 
                     val validLines = if (lines.isNotEmpty()) {
                         val joined = lines.joinToString(" ")
-                        if (!passesEnglishTokenRatioFilter(joined) || OcrTextCleaner.isGarbledDocumentNoise(joined)) {
+                        val normalizedJoined = OcrTextCleaner.normalizeOcrArtifacts(joined)
+                        if (!passesEnglishTokenRatioFilter(normalizedJoined) ||
+                            OcrTextCleaner.isGarbledDocumentNoise(normalizedJoined) ||
+                            OcrTextCleaner.isDiacriticSelfOcrGarble(normalizedJoined)
+                        ) {
                             emptyList()
                         } else {
                             lines

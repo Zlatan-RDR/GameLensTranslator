@@ -268,6 +268,8 @@ class TranslationManager(
         processed = processed.replace(Regex("([a-zA-Z]{2,})-\\s+([a-zA-Z]{2,})"), "$1$2")
 
         // 2. Repair common monospace split tokens
+        processed = processed.replace(Regex("\\b(DIANA)\\s+(BURN\\s*WOOD|BURNE)\\b", RegexOption.IGNORE_CASE), "Diana Burnwood")
+        processed = processed.replace(Regex("\\b(BURN)\\s+(WOOD)\\b", RegexOption.IGNORE_CASE), "Burnwood")
         processed = processed.replace(Regex("\\b(AVAI)\\s+(LABLE|LABLE)\\b", RegexOption.IGNORE_CASE), "Available")
         processed = processed.replace(Regex("\\b(OPTI)\\s+(ONS)\\b", RegexOption.IGNORE_CASE), "Options")
         processed = processed.replace(Regex("\\b(DIFFI)\\s+(CULTY)\\b", RegexOption.IGNORE_CASE), "Difficulty")
@@ -386,6 +388,14 @@ class TranslationManager(
     fun repairGluedArabicWords(arabicText: String): String {
         if (arabicText.isBlank()) return ""
         var sanitized = arabicText
+
+        // 0. High-frequency specific ML Kit mistranslations & character names
+        sanitized = sanitized.replace("فيو من الأيام", "يوماً ما")
+        sanitized = sanitized.replace("في يوم من الايام", "يوماً ما")
+        sanitized = sanitized.replace(Regex("\\bستهداف\\b"), "استهداف")
+        sanitized = sanitized.replace(Regex("(?i)\\bDiana\\s+Burn\\s*wood\\b"), "ديانا بيرنوود")
+        sanitized = sanitized.replace(Regex("(?i)\\bBurnwood\\b"), "بيرنوود")
+        sanitized = sanitized.replace("ديانا بيرن وود", "ديانا بيرنوود")
 
         // 1. High-frequency specific ML Kit glued words and contractions
         sanitized = sanitized.replace("\u0645\u0627\u0630 ", "\u0645\u0627\u0630\u0627 ")

@@ -472,7 +472,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
 
-        val coverMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OPAQUE_COVER)
+        val coverMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OFFSET_ABOVE)
         if (coverMode == MODE_OFFSET_ABOVE) {
             binding.rbOffsetAbove.isChecked = true
         } else {

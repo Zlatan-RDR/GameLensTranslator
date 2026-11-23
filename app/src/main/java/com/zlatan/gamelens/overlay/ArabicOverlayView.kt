@@ -45,7 +45,7 @@ class ArabicOverlayView(
         setTextColor(Color.WHITE) // High contrast crisp white text
 
         val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-        val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
+        val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) == MainActivity.MODE_OPAQUE_COVER
         val bgColor = Color.argb(255, 5, 7, 11) // 100% solid opaque #FF05070B
 
         val cornerRadiusPx = 4f * resources.displayMetrics.density

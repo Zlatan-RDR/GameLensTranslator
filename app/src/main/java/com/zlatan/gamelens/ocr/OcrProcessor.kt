@@ -114,7 +114,8 @@ object MortFilter {
             val minC = minOf(r, minOf(g, b))
             val sat = if (maxC == 0) 0 else ((maxC - minC) * 255) / maxC
 
-            val isSub = (lum >= 175 && sat <= 65) || (r >= 170 && g >= 150 && b <= 100 && lum >= 150)
+            // Softened threshold: lum >= 155 (was 175) to retain anti-aliased font strokes and thin letters
+            val isSub = (lum >= 155 && sat <= 65) || (r >= 165 && g >= 145 && b <= 110 && lum >= 140)
             if (isSub) {
                 pixels[i] = -0x1 // 0xFFFFFFFF (pure white)
                 subtitlePixels++
@@ -148,10 +149,91 @@ object OcrTextCleaner {
         "press", "tap enter", "enter", "pause", "menu", "cancel",
         "continue", "autosave", "saving", "loading", "loading..."
     )
+    private val EUROPEAN_DIACRITICS = setOf(
+        'ä', 'š', 'ì', '„', 'ö', 'ü', 'ç', 'é', 'è', 'à', 'â', 'ê', 'î', 'ô', 'û', 'ñ', '“', '”', '»', '«', '›', '‹'
+    )
+
+    /**
+     * Rejects Arabic-as-Latin OCR garble (e.g. "Jlal ce Blg .äyul gUloglaall")
+     * produced when ML Kit mistakenly scans Arabic overlay text with Latin models.
+     */
+    fun isDiacriticSelfOcrGarble(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return true
+        val hasDiacritic = trimmed.any { it in EUROPEAN_DIACRITICS }
+
+        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return true
+
+        val shortGarbleCount = tokens.count { token ->
+            val letters = token.filter { it.isLetter() }
+            letters.length in 1..2 && !SHORT_VALID_WORDS.contains(letters.lowercase(Locale.US))
+        }
+        val shortGarbleRatio = shortGarbleCount.toFloat() / tokens.size.toFloat()
+
+        if (hasDiacritic && shortGarbleCount > 0) return true
+        if (tokens.size >= 2 && shortGarbleRatio > 0.30f) return true
+        return false
+    }
+
+    /**
+     * Pre-translation OCR repair for mid-word casing and split-word artifacts
+     * before passing text to PatchManager or ML Kit.
+     */
+    fun normalizeOcrArtifacts(text: String): String {
+        if (text.isBlank()) return ""
+        var s = text.trim()
+
+        // Split-word and spacing repairs
+        s = s.replace(Regex("(?i)\\bf\\s+inally\\b"), "finally")
+        s = s.replace(Regex("(?i)\\bfina\\s+lly\\b"), "finally")
+        s = s.replace(Regex("(?i)\\bdi\\s+ana\\b"), "Diana")
+        s = s.replace(Regex("(?i)\\bburn\\s+wood\\b"), "Burnwood")
+        s = s.replace(Regex("(?i)\\bi\\s+t's\\b"), "it's")
+        s = s.replace(Regex("(?i)\\bice-\\s*cream\\b"), "ice-cream")
+        s = s.replace(Regex("(?i)\\bqur\\b"), "our")
+        s = s.replace(Regex("(?i)\\bluck(\\d+)\\b"), "luck, $1")
+        s = s.replace(Regex("(?i)\\busedthe\\b"), "used the")
+        s = s.replace(Regex("(?i)\\bafterall\\b"), "After all")
+
+        // Mid-word casing & OCR character confusion fixes
+        s = s.replace(Regex("(?i)\\bwilL\\b"), "will")
+        s = s.replace(Regex("(?i)\\bWOuLd\\b"), "would")
+        s = s.replace(Regex("(?i)\\bcoMmunication\\b"), "communication")
+        s = s.replace(Regex("(?i)\\baccOunt\\b"), "account")
+        s = s.replace(Regex("(?i)\\boWn\\b"), "own")
+        s = s.replace(Regex("(?i)\\bdeaLt\\b"), "dealt")
+        s = s.replace(Regex("(?i)\\beXposed\\b"), "exposed")
+        s = s.replace(Regex("(?i)\\bW[ìi]red\\b"), "wired")
+
+        return s
+    }
+
+    /**
+     * Returns true if newText is a shorter prefix or subset (>= 75% token overlap)
+     * of currently displayed text, preventing partial dialogue overwrite flickers.
+     */
+    fun isShorterSubsetOrPrefix(newText: String, currentText: String): Boolean {
+        val n = newText.trim().lowercase(Locale.US)
+        val c = currentText.trim().lowercase(Locale.US)
+        if (n.isEmpty() || c.isEmpty() || n == c) return false
+        if (n.length >= c.length) return false
+
+        if (c.startsWith(n) || c.contains(n)) return true
+
+        val newTokens = n.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val currTokens = c.split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
+        if (newTokens.isEmpty()) return false
+
+        val matchCount = newTokens.count { currTokens.contains(it) }
+        val overlapRatio = matchCount.toFloat() / newTokens.size.toFloat()
+        return overlapRatio >= 0.75f
+    }
 
     fun isNoiseOrPrompt(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
+        if (isDiacriticSelfOcrGarble(trimmed)) return true
 
         // Reject self-app name or UI text
         if (trimmed.contains("GameLens", ignoreCase = true) || trimmed.contains("Translator", ignoreCase = true)) {

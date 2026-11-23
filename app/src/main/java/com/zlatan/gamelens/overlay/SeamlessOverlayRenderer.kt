@@ -181,7 +181,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val scaleY = if (bitmapH > 0 && screenH > 0) screenH.toFloat() / bitmapH.toFloat() else 1.0f
 
             val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-            val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
+            val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) == MainActivity.MODE_OPAQUE_COVER
 
             if (isOpaqueCover) {
                 // Dynamic Multi-Line Union Bounding Box for Opaque Cover Mode:
@@ -387,7 +387,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             }
 
             val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-            val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
+            val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) == MainActivity.MODE_OPAQUE_COVER
             val calRect = CalibrationOverlay.getCalibratedRect(prefs)
             val fontSizeSp = prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, 18f)
             sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSizeSp)
@@ -456,11 +456,12 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.setPadding((16 * density).toInt(), (8 * density).toInt(), (16 * density).toInt(), (8 * density).toInt())
 
                 val targetTop = (zoneTop - zoneH - (8 * density).toInt()).coerceAtLeast(0)
-                val layoutParams = FrameLayout.LayoutParams(zoneW, zoneH).apply {
+                val layoutParams = FrameLayout.LayoutParams(zoneW, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     gravity = Gravity.TOP or Gravity.START
                     leftMargin = zoneLeft
                     topMargin = targetTop
                 }
+                sub.minimumHeight = (28 * density).toInt()
                 sub.layoutParams = layoutParams
             }
 
@@ -471,7 +472,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val wordCount = arabicText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
             val charBasedMs = 900L + (arabicText.length * 62L)
             val wordBasedMs = 900L + (wordCount * 340L)
-            val holdMs = maxOf(charBasedMs, wordBasedMs).coerceIn(1800L, 9000L)
+            val holdMs = maxOf(charBasedMs, wordBasedMs).coerceIn(2200L, 9000L)
             mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
         }
     }

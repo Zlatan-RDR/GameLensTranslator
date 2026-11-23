@@ -137,6 +137,16 @@ class ScreenCaptureManager(
     }
 
     /**
+     * Drains any stale queued frame from the ImageReader before capturing a fresh composited frame.
+     */
+    @Synchronized
+    fun drainStaleFrame() {
+        try {
+            imageReader?.acquireLatestImage()?.close()
+        } catch (_: Throwable) {}
+    }
+
+    /**
      * Grabs a cropped sub-region (ROI) directly from the ImageReader without allocating
      * the full-screen (1080x2400) Bitmap, cutting memory allocations by >80% and reducing latency.
      * Bounds-safe against Qualcomm Adreno buffer limits and unmutated buffer states.

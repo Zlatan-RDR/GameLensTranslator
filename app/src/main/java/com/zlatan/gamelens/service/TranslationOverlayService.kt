@@ -151,6 +151,8 @@ class TranslationOverlayService : Service() {
     private var lastDisplayedEnglishText: String = ""
     private var candidateEnglishText: String = ""
     private var candidateTimestamp: Long = 0L
+    private var lastSubtitleDisplayTimestamp: Long = 0L
+    private var lastOpaquePollTimestamp: Long = 0L
 
     private lateinit var cacheManager: TranslationCacheManager
     private lateinit var glossaryManager: GlossaryManager
@@ -451,7 +453,7 @@ class TranslationOverlayService : Service() {
             DiagnosticLogger.log("Precision ROI OCR loop started (140ms)")
             while (isActive) {
                 val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-                val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OPAQUE_COVER) == MainActivity.MODE_OPAQUE_COVER
+                val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) == MainActivity.MODE_OPAQUE_COVER
 
                 try {
                     processFramePipeline(isOpaqueCover)
@@ -521,13 +523,20 @@ class TranslationOverlayService : Service() {
         // 3. Stage 1: Strict Calibrated ROI Crop directly from ImageReader buffer
         val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
+        val now = android.os.SystemClock.uptimeMillis()
 
-        // For Opaque Cover mode, if the solid black bar is currently visible, hide it for a 20ms pulse to read under it
+        // In Offset Above mode, never hide overlay during capture (0% flicker, 0% self-OCR, instant 140ms capture).
+        // In Opaque Cover mode, if subtitle is visible, poll at most every 1200ms: hide, wait 65ms, drain 1 stale frame, capture, restore.
         val croppedRoi: Bitmap? = if (isOpaqueCover && seamlessOverlayRenderer?.isSubtitleVisible() == true) {
+            if (now - lastOpaquePollTimestamp < 1200L) {
+                return
+            }
+            lastOpaquePollTimestamp = now
             withContext(Dispatchers.Main) {
                 seamlessOverlayRenderer?.setInvisibleForCapture()
             }
-            delay(20L)
+            delay(65L)
+            captureMgr.drainStaleFrame()
             val b = captureMgr.acquireCroppedRoi(calRect)
             withContext(Dispatchers.Main) {
                 seamlessOverlayRenderer?.restoreVisibilityAfterCapture()
@@ -541,7 +550,6 @@ class TranslationOverlayService : Service() {
 
         // 4. Stage 2: Fast Pixel-Diff Gate (~1.5ms) - skip unchanged frames unless subtitle is showing and clear-check (420ms) is due
         val isOverlayShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
-        val now = android.os.SystemClock.uptimeMillis()
         val timeSinceLastOcr = now - lastOcrTimestamp
         val forceClearCheck = isOverlayShowing && (timeSinceLastOcr >= 420L)
 
@@ -553,19 +561,20 @@ class TranslationOverlayService : Service() {
         forceInstantPass = false
         lastOcrTimestamp = now
 
-        // 5. Stage 3: MORT Subtitle Luminance Isolation Mask with Raw-Crop Fallback
-        var filterSource = "Mort"
-        val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(croppedRoi)
-        var lines = if (mortBitmap != null) {
-            val res = ocrEngine.recognizeRoi(mortBitmap)
-            if (!mortBitmap.isRecycled) mortBitmap.recycle()
-            res
-        } else emptyList()
+        // 5. Stage 3: Prefer Clean Raw ROI first, fallback to softer MortFilter (lum >= 155) if empty or noisy
+        var filterSource = "Raw"
+        var lines = ocrEngine.recognizeRoi(croppedRoi)
 
         if (lines.isEmpty()) {
-            // Fallback once to raw cropped ROI
-            lines = ocrEngine.recognizeRoi(croppedRoi)
-            filterSource = "Raw"
+            val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(croppedRoi)
+            if (mortBitmap != null) {
+                val mortLines = ocrEngine.recognizeRoi(mortBitmap)
+                if (!mortBitmap.isRecycled) mortBitmap.recycle()
+                if (mortLines.isNotEmpty()) {
+                    lines = mortLines
+                    filterSource = "Mort"
+                }
+            }
         }
 
         if (!croppedRoi.isRecycled) {
@@ -573,23 +582,21 @@ class TranslationOverlayService : Service() {
         }
 
         // 6. Stage 4: Spatial Line Grouping, HUD Filtering & Empty Checks
-        if (lines.isEmpty()) {
-            consecutiveEmptyOcrPasses++
-            if (consecutiveEmptyOcrPasses >= 2) {
-                seamlessOverlayRenderer?.clear()
-                lastDisplayedEnglishText = ""
-                candidateEnglishText = ""
-            }
-            return
-        }
+        val mergedRaw = lines.joinToString(" ") { it.trim() }
+        val mergedEnglish = com.zlatan.gamelens.ocr.OcrTextCleaner.normalizeOcrArtifacts(mergedRaw)
 
-        val mergedEnglish = lines.joinToString(" ") { it.trim() }
-        if (mergedEnglish.isBlank() ||
+        if (lines.isEmpty() ||
+            mergedEnglish.isBlank() ||
             com.zlatan.gamelens.ocr.OcrTextCleaner.isNoiseOrPrompt(mergedEnglish) ||
-            com.zlatan.gamelens.ocr.OcrTextCleaner.isGarbledDocumentNoise(mergedEnglish)
+            com.zlatan.gamelens.ocr.OcrTextCleaner.isGarbledDocumentNoise(mergedEnglish) ||
+            com.zlatan.gamelens.ocr.OcrTextCleaner.isDiacriticSelfOcrGarble(mergedEnglish)
         ) {
             consecutiveEmptyOcrPasses++
-            if (consecutiveEmptyOcrPasses >= 2) {
+            val timeSinceDisplay = now - lastSubtitleDisplayTimestamp
+            // Dynamic Reading-Speed Hold Duration:
+            // Do not prematurely hide displayed subtitles after 280ms if minimum reading time hasn't elapsed.
+            // Only hide after 1200ms of continuous empty passes (9 passes * 140ms = 1260ms) once minimum 2200ms has passed.
+            if (timeSinceDisplay >= 2200L && consecutiveEmptyOcrPasses >= 9) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -603,6 +610,13 @@ class TranslationOverlayService : Service() {
         // Jitter Gate: skip if >= 88% similar to currently displayed text (0ms, zero flicker)
         if (lastDisplayedEnglishText.isNotEmpty() && com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(mergedEnglish, lastDisplayedEnglishText, 0.88f)) {
             return
+        }
+
+        // Prefix/subset overwrite guard: ignore new OCR strings that are shorter subsets/prefixes (>= 75% token overlap) of the currently displayed sentence within 5000ms
+        if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 5000L)) {
+            if (com.zlatan.gamelens.ocr.OcrTextCleaner.isShorterSubsetOrPrefix(mergedEnglish, lastDisplayedEnglishText)) {
+                return
+            }
         }
 
         // 7. Normalization, Patch Matching (0ms snap) and 1-Frame Stability Confirmation
@@ -648,6 +662,7 @@ class TranslationOverlayService : Service() {
         }
 
         lastDisplayedEnglishText = mergedEnglish
+        lastSubtitleDisplayTimestamp = now
 
         // 8. Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
         seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)
