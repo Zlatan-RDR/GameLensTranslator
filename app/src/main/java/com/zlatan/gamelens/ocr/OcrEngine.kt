@@ -75,10 +75,18 @@ class OcrEngine {
 
     fun isNoiseOrSymbol(text: String): Boolean {
         if (text.isEmpty()) return true
-        if (text.length == 1 && !text.equals("a", ignoreCase = true) && !text.equals("i", ignoreCase = true)) {
-            return true
+        val trimmed = text.trim()
+        val lettersOnly = trimmed.filter { it.isLetter() }
+        if (lettersOnly.length < 4) {
+            val isAllCaps = lettersOnly.length >= 2 && lettersOnly == lettersOnly.uppercase(java.util.Locale.US)
+            val lower = lettersOnly.lowercase(java.util.Locale.US)
+            if (isAllCaps || !SHORT_VALID_WORDS.contains(lower)) {
+                if (PatchManager.lookup(trimmed) == null) {
+                    return true
+                }
+            }
         }
-        return STANDALONE_NUMBER_OR_SYMBOL_REGEX.matches(text)
+        return STANDALONE_NUMBER_OR_SYMBOL_REGEX.matches(trimmed)
     }
 
     fun isAllCapsNonDialogue(text: String): Boolean {
@@ -282,15 +290,21 @@ class OcrEngine {
                             !isNoiseOrSymbol(text) &&
                             !isHudPrompt(text) &&
                             !isAllCapsNonDialogue(text) &&
-                            !OcrTextCleaner.isNoiseOrPrompt(text)
+                            !OcrTextCleaner.isNoiseOrPrompt(text) &&
+                            !OcrTextCleaner.isGarbledDocumentNoise(text)
                         }
                         .sortedBy { it.boundingBox?.top ?: 0 }
                         .map { it.text.trim() }
 
-                    val validLines = if (lines.isNotEmpty() && !passesEnglishTokenRatioFilter(lines.joinToString(" "))) {
-                        emptyList()
+                    val validLines = if (lines.isNotEmpty()) {
+                        val joined = lines.joinToString(" ")
+                        if (!passesEnglishTokenRatioFilter(joined) || OcrTextCleaner.isGarbledDocumentNoise(joined)) {
+                            emptyList()
+                        } else {
+                            lines
+                        }
                     } else {
-                        lines
+                        emptyList()
                     }
 
                     if (continuation.isActive) {

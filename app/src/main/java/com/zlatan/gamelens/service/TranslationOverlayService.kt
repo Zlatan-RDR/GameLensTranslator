@@ -149,6 +149,8 @@ class TranslationOverlayService : Service() {
     private val ocrEngine = OcrEngine()
     private var lastOcrTimestamp: Long = 0L
     private var lastDisplayedEnglishText: String = ""
+    private var candidateEnglishText: String = ""
+    private var candidateTimestamp: Long = 0L
 
     private lateinit var cacheManager: TranslationCacheManager
     private lateinit var glossaryManager: GlossaryManager
@@ -485,17 +487,11 @@ class TranslationOverlayService : Service() {
         val (screenW, screenH, dpi) = getRealScreenDimensions()
 
         // 1. Auto-pause in Portrait or when GameLens is in the foreground
-        if (screenH > screenW) {
+        if (screenH > screenW || com.zlatan.gamelens.MainActivity.isAppInForeground) {
             if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
-            }
-            return
-        }
-        if (com.zlatan.gamelens.MainActivity.isAppInForeground) {
-            if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
-                seamlessOverlayRenderer?.clear()
-                lastDisplayedEnglishText = ""
+                candidateEnglishText = ""
             }
             return
         }
@@ -513,6 +509,13 @@ class TranslationOverlayService : Service() {
             captureMgr.updateDimensions(screenW, screenH, dpi)
             clampBubbleWithinScreen(screenW, screenH)
             seamlessOverlayRenderer?.updateScreenDimensions()
+        }
+
+        if (curH > curW) {
+            seamlessOverlayRenderer?.clear()
+            lastDisplayedEnglishText = ""
+            candidateEnglishText = ""
+            return
         }
 
         // 3. Stage 1: Strict Calibrated ROI Crop directly from ImageReader buffer
@@ -551,6 +554,7 @@ class TranslationOverlayService : Service() {
         lastOcrTimestamp = now
 
         // 5. Stage 3: MORT Subtitle Luminance Isolation Mask with Raw-Crop Fallback
+        var filterSource = "Mort"
         val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(croppedRoi)
         var lines = if (mortBitmap != null) {
             val res = ocrEngine.recognizeRoi(mortBitmap)
@@ -561,6 +565,7 @@ class TranslationOverlayService : Service() {
         if (lines.isEmpty()) {
             // Fallback once to raw cropped ROI
             lines = ocrEngine.recognizeRoi(croppedRoi)
+            filterSource = "Raw"
         }
 
         if (!croppedRoi.isRecycled) {
@@ -573,16 +578,21 @@ class TranslationOverlayService : Service() {
             if (consecutiveEmptyOcrPasses >= 2) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
+                candidateEnglishText = ""
             }
             return
         }
 
         val mergedEnglish = lines.joinToString(" ") { it.trim() }
-        if (mergedEnglish.isBlank() || com.zlatan.gamelens.ocr.OcrTextCleaner.isNoiseOrPrompt(mergedEnglish)) {
+        if (mergedEnglish.isBlank() ||
+            com.zlatan.gamelens.ocr.OcrTextCleaner.isNoiseOrPrompt(mergedEnglish) ||
+            com.zlatan.gamelens.ocr.OcrTextCleaner.isGarbledDocumentNoise(mergedEnglish)
+        ) {
             consecutiveEmptyOcrPasses++
             if (consecutiveEmptyOcrPasses >= 2) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
+                candidateEnglishText = ""
             }
             return
         }
@@ -595,9 +605,36 @@ class TranslationOverlayService : Service() {
             return
         }
 
-        // 7. Normalization, Patch Matching (0ms snap) and Translation
+        // 7. Normalization, Patch Matching (0ms snap) and 1-Frame Stability Confirmation
         val promptNormalized = translationManager.normalizeControllerPrompts(mergedEnglish)
         val patchMatch = PatchManager.lookup(promptNormalized)
+
+        if (patchMatch == null) {
+            // Non-patch OCR string: require 1-frame stability confirmation (2 consecutive captures within 350ms with >= 80% similarity)
+            val nowMs = android.os.SystemClock.uptimeMillis()
+            val isCandidateMatch = candidateEnglishText.isNotEmpty() &&
+                    (nowMs - candidateTimestamp <= 350L) &&
+                    com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(promptNormalized, candidateEnglishText, 0.80f)
+
+            if (!isCandidateMatch) {
+                // First frame: store candidate and wait for 2nd frame confirmation
+                candidateEnglishText = promptNormalized
+                candidateTimestamp = nowMs
+                return
+            }
+            // 2nd frame confirmed within 350ms! Clear candidate and proceed to translate
+            candidateEnglishText = ""
+        } else {
+            // Patch matched: instant 0ms snap translation!
+            candidateEnglishText = ""
+        }
+
+        // Final guard against orientation flip or foreground switch right before translation
+        val (finalW, finalH, _) = getRealScreenDimensions()
+        if (finalH > finalW || com.zlatan.gamelens.MainActivity.isAppInForeground) {
+            return
+        }
+
         val arabicTranslation = if (patchMatch != null) {
             patchMatch
         } else {
@@ -615,7 +652,8 @@ class TranslationOverlayService : Service() {
         // 8. Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
         seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)
         pulseHeartbeat()
-        DiagnosticLogger.log("Precision OCR: \"$promptNormalized\" -> \"$arabicTranslation\"")
+        DiagnosticLogger.log("Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
+        Log.i(TAG, "Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
     }
 
     private fun normalizeForJitterGate(text: String): String {

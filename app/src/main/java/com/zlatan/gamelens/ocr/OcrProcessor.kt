@@ -139,6 +139,10 @@ object MortFilter {
  */
 object OcrTextCleaner {
     private val STANDALONE_COUNTER_REGEX = Regex("^\\d+(\\s*[/\\\\\\-:]\\s*\\d+)?$")
+    private val SHORT_VALID_WORDS = setOf(
+        "a", "i", "to", "in", "on", "at", "by", "of", "or", "is", "it",
+        "no", "go", "up", "we", "he", "me", "my", "do", "so", "ok", "am", "an", "as"
+    )
     private val HUD_PROMPTS = setOf(
         "tap to", "press to", "hold to", "to skip", "skip",
         "press", "tap enter", "enter", "pause", "menu", "cancel",
@@ -148,6 +152,11 @@ object OcrTextCleaner {
     fun isNoiseOrPrompt(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
+
+        // Reject self-app name or UI text
+        if (trimmed.contains("GameLens", ignoreCase = true) || trimmed.contains("Translator", ignoreCase = true)) {
+            return true
+        }
 
         // Standalone single letters (except valid English words 'a' or 'i')
         if (trimmed.length == 1) {
@@ -159,6 +168,18 @@ object OcrTextCleaner {
 
         // Must contain at least one letter
         if (!trimmed.any { it.isLetter() }) return true
+
+        // Discard short < 4 letter strings unless they are recognized short lowercase/mixed words, never 1-3 char all-caps acronyms (IED, TED, ASS, CRE, ND)
+        val lettersOnly = trimmed.filter { it.isLetter() }
+        if (lettersOnly.length < 4) {
+            val isAllCaps = lettersOnly.length >= 2 && lettersOnly == lettersOnly.uppercase(Locale.US)
+            val lower = lettersOnly.lowercase(Locale.US)
+            if (isAllCaps || !SHORT_VALID_WORDS.contains(lower)) {
+                if (com.zlatan.gamelens.patch.PatchManager.lookup(trimmed) == null) {
+                    return true
+                }
+            }
+        }
 
         val lower = trimmed.lowercase(Locale.US)
         for (prompt in HUD_PROMPTS) {
@@ -176,6 +197,59 @@ object OcrTextCleaner {
         }
 
         return false
+    }
+
+    /**
+     * Rejects garbled document noise, mixed alphanumeric gibberish (e.g. M0OC, pernalone5.07),
+     * and long runs of broken consonants (> 35% of tokens).
+     */
+    fun isGarbledDocumentNoise(text: String): Boolean {
+        val tokens = text.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return true
+
+        var garbledCount = 0
+        for (token in tokens) {
+            val clean = token.filter { it.isLetterOrDigit() }
+            if (clean.isEmpty()) continue
+
+            val hasDigit = clean.any { it.isDigit() }
+            val hasLetter = clean.any { it.isLetter() }
+
+            // Mixed letters & digits (e.g. M0OC, pernalone5.07, TDDC94) that aren't known controllers/anchors
+            val isMixedAlphaNum = hasDigit && hasLetter && !isKnownButtonOrAnchor(clean)
+
+            // Consonant noise or vowel-less tokens of length >= 3 (e.g. CRE, TDDC, Fattrctt)
+            val letters = clean.filter { it.isLetter() }
+            val isConsonantNoise = if (letters.length >= 3) {
+                val vowels = letters.count { it in "aeiouyAEIOUY" }
+                vowels == 0 || hasExcessiveConsonantRun(letters)
+            } else false
+
+            if (isMixedAlphaNum || isConsonantNoise) {
+                garbledCount++
+            }
+        }
+
+        val garbledRatio = garbledCount.toFloat() / tokens.size.toFloat()
+        return garbledRatio > 0.35f
+    }
+
+    private fun hasExcessiveConsonantRun(s: String): Boolean {
+        var run = 0
+        for (c in s.lowercase(Locale.US)) {
+            if (c in "aeiouy") {
+                run = 0
+            } else {
+                run++
+                if (run >= 4) return true // 4+ consecutive consonants like 'Fattrctt'
+            }
+        }
+        return false
+    }
+
+    private fun isKnownButtonOrAnchor(s: String): Boolean {
+        val upper = s.uppercase(Locale.US)
+        return upper in setOf("L1", "L2", "L3", "R1", "R2", "R3", "LB", "RB", "LT", "RT", "47")
     }
 
     /**

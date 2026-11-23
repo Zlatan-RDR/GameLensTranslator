@@ -41,7 +41,7 @@ class CalibrationOverlay(
 
         val PRESET_FULL_SCREEN = RectF(0f, 0f, 1f, 1f)
         val PRESET_CENTER_DIALOGS = RectF(0.12f, 0.32f, 0.88f, 0.68f)
-        val PRESET_BOTTOM_SUBTITLES = RectF(0.10f, 0.72f, 0.90f, 0.96f)
+        val PRESET_BOTTOM_SUBTITLES = RectF(0.12f, 0.72f, 0.88f, 0.96f)
 
         fun getCalibratedRect(prefs: SharedPreferences): RectF {
             val isEnabled = prefs.getBoolean(PREFS_KEY_CALIBRATION_ENABLED, true)
@@ -52,6 +52,14 @@ class CalibrationOverlay(
             val t = prefs.getFloat(PREFS_KEY_CAL_TOP, PRESET_BOTTOM_SUBTITLES.top)
             val r = prefs.getFloat(PREFS_KEY_CAL_RIGHT, PRESET_BOTTOM_SUBTITLES.right)
             val b = prefs.getFloat(PREFS_KEY_CAL_BOTTOM, PRESET_BOTTOM_SUBTITLES.bottom)
+            val height = b - t
+            val width = r - l
+
+            // Auto-migrate oversized legacy saved boxes (> 40% screen height or invalid bounds)
+            if (height > 0.40f || height <= 0.04f || width <= 0.10f || l < 0f || r > 1f || t < 0f || b > 1f) {
+                saveCalibration(prefs, PRESET_BOTTOM_SUBTITLES)
+                return PRESET_BOTTOM_SUBTITLES
+            }
             return RectF(l, t, r, b)
         }
 
@@ -72,7 +80,7 @@ class CalibrationOverlay(
     private var rootContainer: FrameLayout? = null
     private var isAttached = false
 
-    private val boxRect = RectF(0.10f, 0.72f, 0.90f, 0.96f) // Default bottom subtitles
+    private val boxRect = RectF(0.12f, 0.72f, 0.88f, 0.96f) // Default bottom subtitles
 
     fun show() {
         if (isAttached) return
@@ -243,8 +251,8 @@ class CalibrationOverlay(
         }
 
         val btnBottom = Button(context).apply {
-            text = "سفلي"
-            textSize = 11f
+            text = "إعادة ضبط شريط الترجمة السفلي"
+            textSize = 10f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#37474F"))
             setOnClickListener {
