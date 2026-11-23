@@ -89,7 +89,9 @@ class TranslationManager(
             "Travis" to "ترافيس",
             "Benjamin" to "بنيامين",
             "Agent 47" to "العميل 47",
-            "Chicago" to "شيكاغو"
+            "Chicago" to "شيكاغو",
+            "Clean Kill" to "قتل صامت",
+            "Clean kill" to "قتل صامت"
         )
 
         /**
@@ -425,6 +427,7 @@ class TranslationManager(
         processed = processed.replace(Regex("\\b(take|into|behind|in)\\s+cover\\b", RegexOption.IGNORE_CASE), "$1 shielded cover")
         processed = processed.replace(Regex("\\bHITBOX(ES)?\\b", RegexOption.IGNORE_CASE), "damage zone")
         processed = processed.replace(Regex("\\bCOOLDOWNS?\\b", RegexOption.IGNORE_CASE), "recharge duration")
+        processed = processed.replace(Regex("(?i)\\bClean\\s+Kill\\b"), "قتل صامت")
 
         // 4. Split camelCase menu terms before translation (PlayStyle -> Play Style) & handle gaming compounds
         processed = processed.replace(Regex("([a-z])([A-Z])"), "$1 $2")
@@ -556,6 +559,7 @@ class TranslationManager(
         sanitized = sanitized.replace(Regex("(?i)\\bهتاف\\s+اشمئزاز\\b"), "آه")
         sanitized = sanitized.replace("هتاف اشمئزاز", "آه")
         sanitized = sanitized.replace(Regex("(?i)\\b[ua]rgh\\b"), "آه")
+        sanitized = sanitized.replace(Regex("(?i)\\bClean\\s+Kill\\b"), "قتل صامت")
         sanitized = sanitized.replace("ليسهلا", "ليس سهلاً")
 
         // 1. High-frequency specific ML Kit glued words and contractions

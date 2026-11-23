@@ -690,8 +690,8 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.minimumHeight = opaqueH
                 sub.layoutParams = layoutParams
             } else {
-                // Offset Above Mode: anchor subtitle bar tightly 10dp above calRect.top
-                val gap10dp = (10 * density).toInt()
+                // Offset Above Mode: anchor subtitle bar tightly 4dp above calRect.top
+                val gap4dp = (4 * density).toInt()
                 val maxBarW = (screenW * 0.78f).toInt()
 
                 val bg = GradientDrawable().apply {
@@ -704,9 +704,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.background = bg
                 sub.alpha = 1.0f
                 sub.background?.alpha = 255
-                sub.setPadding((18 * density).toInt(), (10 * density).toInt(), (18 * density).toInt(), (10 * density).toInt())
+                sub.setPadding((18 * density).toInt(), (8 * density).toInt(), (18 * density).toInt(), (8 * density).toInt())
 
-                val bottomAnchor = (screenH - zoneTop + gap10dp).coerceAtLeast(0)
+                val bottomAnchor = (screenH - zoneTop + gap4dp).coerceAtLeast(0)
                 val layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
                     bottomMargin = bottomAnchor

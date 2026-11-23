@@ -637,13 +637,19 @@ class OcrEngine {
                                 return@filter false
                             }
 
-                            // 4. Reject Clipped Single-Word HUD Action Prompts & UI Fragments without terminal sentence punctuation
+                            // 4. Reject Clipped Single-Word HUD Action Prompts & UI Fragments
                             val clusterTokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
                             if (clusterTokens.size == 1) {
                                 val word = clusterTokens[0]
-                                val hasEndingPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?") ||
-                                        word.endsWith(".\"") || word.endsWith("!\"") || word.endsWith("?\"")
-                                if (!hasEndingPunctuation && PatchManager.lookup(text) == null) {
+                                val coreLetters = word.filter { it.isLetter() }.lowercase(java.util.Locale.US)
+                                val isShortOrHud = coreLetters.length <= 4 || OcrTextCleaner.HUD_ACTION_STEMS.contains(coreLetters)
+                                if (isShortOrHud && PatchManager.lookup(text) == null) {
+                                    return@filter false
+                                }
+                            }
+                            if (Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(text)) {
+                                val hasTerminal = text.endsWith(".") || text.endsWith("!") || text.endsWith("?")
+                                if (!hasTerminal && PatchManager.lookup(text) == null) {
                                     return@filter false
                                 }
                             }
@@ -665,13 +671,17 @@ class OcrEngine {
                         val joinedTokens = normalizedJoined.split(Regex("\\s+")).filter { it.isNotBlank() }
                         val isSingleWordHudFragment = joinedTokens.size == 1 && run {
                             val word = joinedTokens[0]
-                            val hasEndingPunctuation = word.endsWith(".") || word.endsWith("!") || word.endsWith("?") ||
-                                    word.endsWith(".\"") || word.endsWith("!\"") || word.endsWith("?\"")
-                            !hasEndingPunctuation && PatchManager.lookup(normalizedJoined) == null
+                            val coreLetters = word.filter { it.isLetter() }.lowercase(java.util.Locale.US)
+                            val isShortOrHud = coreLetters.length <= 4 || OcrTextCleaner.HUD_ACTION_STEMS.contains(coreLetters)
+                            isShortOrHud && PatchManager.lookup(normalizedJoined) == null
                         }
+                        val isBannerPopup = Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(normalizedJoined) &&
+                                !normalizedJoined.endsWith(".") && !normalizedJoined.endsWith("!") &&
+                                PatchManager.lookup(normalizedJoined) == null
 
                         if (totalLetters < 2 ||
                             isSingleWordHudFragment ||
+                            isBannerPopup ||
                             !passesEnglishTokenRatioFilter(normalizedJoined) ||
                             OcrTextCleaner.isGarbledDocumentNoise(normalizedJoined) ||
                             OcrTextCleaner.isDiacriticSelfOcrGarble(normalizedJoined) ||
@@ -732,6 +742,14 @@ class OcrEngine {
                 .addOnSuccessListener { visionText ->
                     val resultBlocks = mutableListOf<MenuTextBlock>()
 
+                    val allLineHeights = visionText.textBlocks.flatMap { it.lines }
+                        .mapNotNull { it.boundingBox?.height() }
+                        .filter { it > 0 }
+                        .sorted()
+                    val medianLineHeight = if (allLineHeights.isNotEmpty()) {
+                        allLineHeights[allLineHeights.size / 2]
+                    } else 0
+
                     for (block in visionText.textBlocks) {
                         val rawText = block.text.trim()
                         if (rawText.length < 2) continue
@@ -742,6 +760,11 @@ class OcrEngine {
 
                         val box = block.boundingBox ?: Rect(0, 0, 0, 0)
 
+                        // Filter out miniature thumbnail labels inside menu tutorials whose bounding-box height is < 0.62f * medianLineHeight
+                        if (medianLineHeight > 0 && box.height() < 0.62f * medianLineHeight && block.lines.size == 1) {
+                            continue
+                        }
+
                         // Merge lines in the block cleanly into a paragraph preserving intentional breaks
                         val cleanedLines = block.lines.mapNotNull { line ->
                             val lineText = line.text.trim()
@@ -750,7 +773,7 @@ class OcrEngine {
 
                         if (cleanedLines.isEmpty()) continue
 
-                        val paragraphText = cleanedLines.joinToString(" ")
+                        val paragraphText = OcrTextCleaner.normalizeOcrArtifacts(cleanedLines.joinToString(" "))
                         val isHeaderCandidate = (block.lines.size == 1 && paragraphText.length in 3..45) ||
                                 (paragraphText.count { it.isUpperCase() }.toFloat() / paragraphText.count { it.isLetter() }.coerceAtLeast(1) >= 0.70f && paragraphText.length <= 60)
 
@@ -780,9 +803,10 @@ class OcrEngine {
                             if (isSameCard) {
                                 mergedBlocks.removeAt(mergedBlocks.size - 1)
                                 val unionBox = Rect(prev.boundingBox).apply { union(cur.boundingBox) }
+                                val mergedText = OcrTextCleaner.normalizeOcrArtifacts("${prev.text} ${cur.text}")
                                 mergedBlocks.add(
                                     MenuTextBlock(
-                                        text = "${prev.text} ${cur.text}",
+                                        text = mergedText,
                                         boundingBox = unionBox,
                                         isHeader = false
                                     )

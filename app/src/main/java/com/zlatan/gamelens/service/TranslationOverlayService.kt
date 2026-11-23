@@ -1315,6 +1315,7 @@ class TranslationOverlayService : Service() {
 
         ocrEngine.close()
         translationManager.close()
+        com.zlatan.gamelens.diag.SubtitleHistoryManager.flush(this)
         com.zlatan.gamelens.patch.PatchManager.flushPendingSession(this)
 
         bubbleView?.let {

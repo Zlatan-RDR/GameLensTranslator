@@ -82,7 +82,7 @@ object PatchManager {
     private const val PERSISTED_PATCH_FILENAME = "active_patch.json"
     private const val BACKUP_PATCH_FILENAME = "active_patch.json.bak"
     private const val TMP_PATCH_FILENAME = "active_patch.json.tmp"
-    private const val FLUSH_THROTTLE_MS = 2000L
+    private const val FLUSH_THROTTLE_MS = 1500L
 
     // Session Logger: logs unique completed (English -> Arabic) pairs
     private val sessionPairs = ConcurrentHashMap<String, String>()
@@ -735,18 +735,15 @@ object PatchManager {
         }
         sessionPairs[enTrimmed] = arTrimmed
 
-        val now = System.currentTimeMillis()
-        if (now - lastFlushTimeMs < FLUSH_THROTTLE_MS) {
-            scheduleThrottledFlush(context)
-            return
-        }
-        lastFlushTimeMs = now
-
-        sessionScope.launch {
+        // Trailing debounce: delay 1500ms before persisting to MediaStore / disk
+        pendingFlushJob?.cancel()
+        pendingFlushJob = sessionScope.launch {
+            kotlinx.coroutines.delay(FLUSH_THROTTLE_MS)
             try {
                 flushSessionToDownloads(context)
+                lastFlushTimeMs = System.currentTimeMillis()
             } catch (t: Throwable) {
-                Log.w(TAG, "Session export error: ${t.message}")
+                Log.w(TAG, "Session throttled export error: ${t.message}")
             }
         }
     }
@@ -769,9 +766,11 @@ object PatchManager {
     }
 
     fun flushPendingSession(context: Context) {
+        pendingFlushJob?.cancel()
         sessionScope.launch {
             try {
                 flushSessionToDownloads(context)
+                lastFlushTimeMs = System.currentTimeMillis()
             } catch (t: Throwable) {
                 Log.w(TAG, "Final flush error: ${t.message}")
             }

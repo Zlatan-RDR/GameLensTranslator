@@ -165,6 +165,10 @@ object OcrTextCleaner {
         "press", "tap enter", "enter", "pause", "menu", "cancel",
         "continue", "autosave", "saving", "loading", "loading..."
     )
+    val HUD_ACTION_STEMS = setOf(
+        "drop", "drag", "enter", "fnter", "ente", "subdue", "hide", "dump", "open", "close",
+        "take", "pick", "use", "talk", "interact", "disguise", "sguise", "disauise", "activate", "activat"
+    )
     val EUROPEAN_DIACRITICS = setOf(
         'ä', 'ö', 'ü', 'š', 'ì', 'ç', 'ł', 'ž', 'ć', '„',
         'é', 'è', 'à', 'â', 'ê', 'î', 'ô', 'û', 'ñ', '“', '”', '»', '«', '›', '‹'
@@ -229,6 +233,14 @@ object OcrTextCleaner {
         // Generic detached trailing-letter heal: collapse [A-Za-z]{4,} + single non-a/i letter -> glued
         s = s.replace(Regex("\\b([A-Za-z]{4,})\\s+([b-hj-zB-HJ-Z])\\b"), "$1$2")
 
+        // Collapse single/double-letter OCR splits inside words: ca Lmly -> calmly, ho Ld -> hold
+        s = Regex("\\b([a-z]{2,4})\\s+([A-Z][a-z]{2,})\\b").replace(s) { match ->
+            match.groupValues[1] + match.groupValues[2].lowercase(Locale.US)
+        }
+
+        // Collapse suffix splits: suppli ed -> supplied, confusi on -> confusion, discret ion -> discretion
+        s = s.replace(Regex("(?i)\\b([A-Za-z]{4,})\\s+(ed|on|ion|ly|ing|ment|al|er|es)\\b"), "$1$2")
+
         // Normalize colloquial contractions & slang for clean ML Kit translation
         s = s.replace(Regex("(?i)\\boutta\\b"), "out of")
         s = s.replace(Regex("(?i)\\bgonna\\b"), "going to")
@@ -245,8 +257,14 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\bit'sthe\\b"), "it's the")
         s = s.replace(Regex("(?i)\\banyt\\s+ime\\b"), "anytime")
         s = s.replace(Regex("(?i)\\bcli\\s+ent\\b"), "client")
+        s = s.replace(Regex("(?i)\\bwillbring\\b"), "will bring")
+        s = s.replace(Regex("(?i)\\bGettingintothe\\b"), "Getting into the")
+        s = s.replace(Regex("(?i)\\bfromenemy\\b"), "from enemy")
+        s = s.replace(Regex("(?i)\\btokeen\\s*lyperceive\\b"), "to keenly perceive")
+        s = s.replace(Regex("(?i)\\bmanwill\\b"), "man will")
 
         // Mid-word casing & OCR character confusion fixes
+        s = s.replace(Regex("(?i)\\bSiLverballer\\b"), "Silverballer")
         s = s.replace(Regex("(?i)\\bkilL\\b"), "kill")
         s = s.replace(Regex("(?i)\\byOu\\b"), "you")
         s = s.replace(Regex("(?i)\\bSOon\\b"), "soon")
@@ -362,6 +380,24 @@ object OcrTextCleaner {
 
         // Digits / score / counters like "12/30", "100", "5-2"
         if (STANDALONE_COUNTER_REGEX.matches(trimmed)) return true
+
+        // Reject single-word non-patch strings whose stripped alphabetic core is <= 4 chars or matches HUD action stems
+        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (tokens.size == 1) {
+            val coreLetters = tokens[0].filter { it.isLetter() }.lowercase(Locale.US)
+            val isShortOrHud = coreLetters.length <= 4 || HUD_ACTION_STEMS.contains(coreLetters)
+            if (isShortOrHud && com.zlatan.gamelens.patch.PatchManager.lookup(trimmed) == null) {
+                return true
+            }
+        }
+
+        // Reject 2-word non-sentence HUD banners matching ^A\s+[A-Za-z]{4,12}$ without terminal punctuation unless in patch
+        if (Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(trimmed)) {
+            val hasTerminalPunctuation = trimmed.endsWith(".") || trimmed.endsWith("!") || trimmed.endsWith("?")
+            if (!hasTerminalPunctuation && com.zlatan.gamelens.patch.PatchManager.lookup(trimmed) == null) {
+                return true
+            }
+        }
 
         // Must contain at least one letter
         if (!trimmed.any { it.isLetter() }) return true

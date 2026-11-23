@@ -41,16 +41,16 @@ class CalibrationOverlay(
 
         val PRESET_FULL_SCREEN = RectF(0f, 0f, 1f, 1f)
         val PRESET_CENTER_DIALOGS = RectF(0.12f, 0.32f, 0.88f, 0.68f)
-        val PRESET_BOTTOM_SUBTITLES = RectF(0.10f, 0.71f, 0.90f, 0.95f)
+        val PRESET_BOTTOM_SUBTITLES = RectF(0.10f, 0.655f, 0.90f, 0.95f)
 
         fun getCalibratedRect(prefs: SharedPreferences): RectF {
             val isEnabled = prefs.getBoolean(PREFS_KEY_CALIBRATION_ENABLED, true)
             if (!isEnabled) {
                 return PRESET_BOTTOM_SUBTITLES
             }
-            val isMigrated071 = prefs.getBoolean("migrated_roi_071_v3", false)
-            if (!isMigrated071) {
-                prefs.edit().putBoolean("migrated_roi_071_v3", true).apply()
+            val isMigrated0655 = prefs.getBoolean("migrated_roi_0655_v4", false)
+            if (!isMigrated0655) {
+                prefs.edit().putBoolean("migrated_roi_0655_v4", true).apply()
                 saveCalibration(prefs, PRESET_BOTTOM_SUBTITLES)
                 return PRESET_BOTTOM_SUBTITLES
             }
@@ -86,7 +86,7 @@ class CalibrationOverlay(
     private var rootContainer: FrameLayout? = null
     private var isAttached = false
 
-    private val boxRect = RectF(0.10f, 0.71f, 0.90f, 0.95f) // Default bottom subtitles
+    private val boxRect = RectF(0.10f, 0.655f, 0.90f, 0.95f) // Default bottom subtitles
 
     fun show() {
         if (isAttached) return

@@ -88,4 +88,8 @@ object SubtitleHistoryManager {
         entries.clear()
         _historyFlow.value = emptyList()
     }
+
+    fun flush(context: android.content.Context) {
+        com.zlatan.gamelens.patch.PatchManager.flushPendingSession(context)
+    }
 }
