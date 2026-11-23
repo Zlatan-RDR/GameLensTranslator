@@ -30,6 +30,13 @@ class OcrEngine {
         )
     }
 
+    private data class ElementCluster(
+        val text: String,
+        val top: Int,
+        val centerX: Float,
+        val isCentered: Boolean
+    )
+
     fun isCreditOrTitleLine(text: String): Boolean {
         val upper = text.uppercase(java.util.Locale.US)
         for (kw in CREDIT_KEYWORDS) {
@@ -376,36 +383,91 @@ class OcrEngine {
                 .addOnSuccessListener { visionText ->
                     val allRawLines = visionText.textBlocks.flatMap { it.lines }
 
-                    val hasCenteredLine = allRawLines.any { line ->
-                        val box = line.boundingBox
-                        if (box != null && roiWidth > 0f) {
-                            val cxRatio = box.centerX() / roiWidth
-                            cxRatio in 0.22f..0.78f && line.text.trim().any { it.isLetter() }
-                        } else false
+                    // Element-Level Gap Splitting: iterate line.elements sorted left-to-right.
+                    // Split elements into separate horizontal clusters whenever the gap between consecutive elements > 1.8f * lineHeight.
+                    val allClusters = mutableListOf<ElementCluster>()
+                    for (line in allRawLines) {
+                        val elements = line.elements
+                        if (elements.isEmpty()) {
+                            val text = line.text.trim()
+                            if (text.isNotEmpty()) {
+                                val box = line.boundingBox
+                                val cx = box?.centerX()?.toFloat() ?: (roiWidth / 2f)
+                                val cxRatio = if (roiWidth > 0f) cx / roiWidth else 0.5f
+                                allClusters.add(
+                                    ElementCluster(
+                                        text = text,
+                                        top = box?.top ?: 0,
+                                        centerX = cx,
+                                        isCentered = cxRatio in 0.18f..0.82f
+                                    )
+                                )
+                            }
+                            continue
+                        }
+
+                        val sortedElements = elements.sortedBy { it.boundingBox?.left ?: 0 }
+                        val lineHeight = (line.boundingBox?.height() ?: 30).toFloat().coerceAtLeast(20f)
+                        val gapThreshold = 1.8f * lineHeight
+
+                        val clusters = mutableListOf<MutableList<com.google.mlkit.vision.text.Text.Element>>()
+                        var curCluster = mutableListOf<com.google.mlkit.vision.text.Text.Element>()
+
+                        for (elem in sortedElements) {
+                            if (curCluster.isEmpty()) {
+                                curCluster.add(elem)
+                            } else {
+                                val prevElem = curCluster.last()
+                                val prevRight = prevElem.boundingBox?.right ?: 0
+                                val currLeft = elem.boundingBox?.left ?: 0
+                                val gap = currLeft - prevRight
+                                if (gap > gapThreshold) {
+                                    clusters.add(curCluster)
+                                    curCluster = mutableListOf(elem)
+                                } else {
+                                    curCluster.add(elem)
+                                }
+                            }
+                        }
+                        if (curCluster.isNotEmpty()) {
+                            clusters.add(curCluster)
+                        }
+
+                        for (c in clusters) {
+                            val cText = c.joinToString(" ") { it.text.trim() }.trim()
+                            if (cText.isEmpty()) continue
+                            val cLeft = c.mapNotNull { it.boundingBox?.left }.minOrNull() ?: (line.boundingBox?.left ?: 0)
+                            val cRight = c.mapNotNull { it.boundingBox?.right }.maxOrNull() ?: (line.boundingBox?.right ?: 0)
+                            val cTop = c.mapNotNull { it.boundingBox?.top }.minOrNull() ?: (line.boundingBox?.top ?: 0)
+                            val cCenterX = (cLeft + cRight) / 2f
+                            val cxRatio = if (roiWidth > 0f) cCenterX / roiWidth else 0.5f
+                            allClusters.add(
+                                ElementCluster(
+                                    text = cText,
+                                    top = cTop,
+                                    centerX = cCenterX,
+                                    isCentered = cxRatio in 0.18f..0.82f
+                                )
+                            )
+                        }
                     }
 
-                    val lines = allRawLines
-                        .filter { line ->
-                            val text = line.text.trim()
-                            val box = line.boundingBox
+                    val hasCenteredCluster = allClusters.any { it.isCentered && it.text.any { ch -> ch.isLetter() } }
+
+                    val lines = allClusters
+                        .filter { cluster ->
+                            val text = cluster.text
 
                             // 1. Single character rejection: alphabetic count must be >= 2
                             val letterCount = text.count { it.isLetter() }
                             if (letterCount < 2) return@filter false
 
-                            // 2. Reject Opening Credits & Title lines (>=75% uppercase or credit keywords)
+                            // 2. Reject Opening Credits & Title lines (>=75% uppercase for >=4 chars, or credit keywords)
                             if (isCreditOrTitleLine(text)) return@filter false
 
-                            // 3. Horizontal Center-Band Filter (0.22f..0.78f)
-                            if (box != null && roiWidth > 0f) {
-                                val cxRatio = box.centerX() / roiWidth
-                                val isOutsideCenter = cxRatio !in 0.22f..0.78f
-                                if (isOutsideCenter) {
-                                    val isUpperOrShort = isMostlyUpper(text) || text.length < 15
-                                    if (hasCenteredLine || isUpperOrShort) {
-                                        return@filter false
-                                    }
-                                }
+                            // 3. Side-Margin Filter: discard outer margin clusters (centerX/roiWidth outside 0.18f..0.82f) when a centered cluster exists
+                            if (hasCenteredCluster && !cluster.isCentered) {
+                                return@filter false
                             }
 
                             !isNoiseOrSymbol(text) &&
@@ -415,7 +477,7 @@ class OcrEngine {
                             !OcrTextCleaner.isGarbledDocumentNoise(text) &&
                             !OcrTextCleaner.isDiacriticSelfOcrGarble(text)
                         }
-                        .sortedBy { it.boundingBox?.top ?: 0 }
+                        .sortedBy { it.top }
                         .map { OcrTextCleaner.normalizeOcrArtifacts(it.text.trim()) }
 
                     val validLines = if (lines.isNotEmpty()) {

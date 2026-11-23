@@ -618,6 +618,23 @@ class TranslationOverlayService : Service() {
             croppedRoi.recycle()
         }
 
+        // Hard Quality Floor (0.55f): Unconditionally discard if bestScore < 0.55f (never queue for confirmation)
+        if (bestScore < 0.55f) {
+            if (lines.isNotEmpty()) {
+                val dropMsg = "OCR skipped [low-quality-floor q=%.2f < 0.55]: \"${lines.joinToString(" ")}\"".format(java.util.Locale.US, bestScore)
+                Log.d(TAG, dropMsg)
+                DiagnosticLogger.log(dropMsg)
+            }
+            consecutiveEmptyOcrPasses++
+            val timeSinceDisplay = now - lastSubtitleDisplayTimestamp
+            if (timeSinceDisplay >= 2200L && consecutiveEmptyOcrPasses >= 9) {
+                seamlessOverlayRenderer?.clear()
+                lastDisplayedEnglishText = ""
+                candidateEnglishText = ""
+            }
+            return
+        }
+
         // 6. Stage 4: Spatial Line Grouping, HUD Filtering & Empty Checks
         val mergedRaw = lines.joinToString(" ") { it.trim() }
         val mergedEnglish = com.zlatan.gamelens.ocr.OcrTextCleaner.normalizeOcrArtifacts(mergedRaw)
@@ -664,6 +681,16 @@ class TranslationOverlayService : Service() {
         if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 5000L)) {
             if (com.zlatan.gamelens.ocr.OcrTextCleaner.isShorterSubsetOrPrefix(mergedEnglish, lastDisplayedEnglishText)) {
                 Log.d(TAG, "OCR skipped [shorter-subset]: \"$mergedEnglish\" (subset of: \"$lastDisplayedEnglishText\")")
+                return
+            }
+        }
+
+        // Clean-Superset Overwrite Guard: discard new non-patch strings within 6000ms that contain >= 80% of currently displayed sentence words (credit-polluted re-reads like "Exactly. Good luck 47.RROBERTRow")
+        if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 6000L)) {
+            if (com.zlatan.gamelens.ocr.OcrTextCleaner.isCreditPollutedSuperset(mergedEnglish, lastDisplayedEnglishText) &&
+                PatchManager.lookup(mergedEnglish) == null
+            ) {
+                Log.d(TAG, "OCR skipped [credit-polluted-superset]: \"$mergedEnglish\" (polluted re-read of: \"$lastDisplayedEnglishText\")")
                 return
             }
         }

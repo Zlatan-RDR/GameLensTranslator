@@ -166,7 +166,8 @@ object OcrTextCleaner {
         "continue", "autosave", "saving", "loading", "loading..."
     )
     val EUROPEAN_DIACRITICS = setOf(
-        'ä', 'š', 'ì', '„', 'ö', 'ü', 'ç', 'é', 'è', 'à', 'â', 'ê', 'î', 'ô', 'û', 'ñ', '“', '”', '»', '«', '›', '‹'
+        'ä', 'ö', 'ü', 'š', 'ì', 'ç', 'ł', 'ž', 'ć', '„',
+        'é', 'è', 'à', 'â', 'ê', 'î', 'ô', 'û', 'ñ', '“', '”', '»', '«', '›', '‹'
     )
 
     /**
@@ -176,8 +177,15 @@ object OcrTextCleaner {
     fun isDiacriticSelfOcrGarble(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
-        val hasDiacritic = trimmed.any { it in EUROPEAN_DIACRITICS }
 
+        // Reject broken punctuation/parenthesis fragments like "...(Self-Read"
+        if (Regex("^\\.{2,}\\s*\\(").containsMatchIn(trimmed)) return true
+
+        // Reject any OCR string containing >= 2 non-ASCII European diacritic characters anywhere
+        val diacriticCount = trimmed.count { it in EUROPEAN_DIACRITICS }
+        if (diacriticCount >= 2) return true
+
+        val hasDiacritic = diacriticCount > 0
         val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
         if (tokens.isEmpty()) return true
 
@@ -264,10 +272,48 @@ object OcrTextCleaner {
         return overlapRatio >= 0.75f
     }
 
+    /**
+     * Rejects new OCR candidate if it is a credit-polluted superset of currently displayed clean English text
+     * (e.g. "Exactly. Good luck 47.RROBERTRow" after "Exactly. Good Luck 47.",
+     *  or "ED DY Sir. Yeah it's an ice-cream truck..." after "Yeah it's an ice-cream truck...").
+     */
+    fun isCreditPollutedSuperset(newText: String, currentText: String): Boolean {
+        val n = newText.trim().lowercase(Locale.US)
+        val c = currentText.trim().lowercase(Locale.US)
+        if (n.isEmpty() || c.isEmpty() || n == c) return false
+        if (n.length <= c.length) return false
+
+        val cWords = c.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+        val nWords = n.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+        if (cWords.size < 2 || nWords.size <= cWords.size) return false
+
+        // Check contiguous substring match ignoring punctuation
+        val cClean = cWords.joinToString(" ")
+        val nClean = nWords.joinToString(" ")
+        if (nClean.contains(cClean)) return true
+
+        // Check sliding window for >= 80% word match as a contiguous span
+        val windowSize = cWords.size
+        val minMatch = (cWords.size * 0.80f).toInt().coerceAtLeast(2)
+        for (i in 0..(nWords.size - windowSize)) {
+            var matches = 0
+            for (j in 0 until windowSize) {
+                if (nWords[i + j] == cWords[j]) {
+                    matches++
+                }
+            }
+            if (matches >= minMatch) {
+                return true
+            }
+        }
+        return false
+    }
+
     fun isNoiseOrPrompt(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
         if (isDiacriticSelfOcrGarble(trimmed)) return true
+        if (Regex("^\\.{2,}\\s*\\(").containsMatchIn(trimmed)) return true
 
         // Reject self-app name or UI text
         if (trimmed.contains("GameLens", ignoreCase = true) || trimmed.contains("Translator", ignoreCase = true)) {

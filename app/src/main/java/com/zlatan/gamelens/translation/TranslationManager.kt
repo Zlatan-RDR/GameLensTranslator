@@ -386,6 +386,10 @@ class TranslationManager(
         processed = processed.replace(Regex("\\bHITBOX(ES)?\\b", RegexOption.IGNORE_CASE), "damage zone")
         processed = processed.replace(Regex("\\bCOOLDOWNS?\\b", RegexOption.IGNORE_CASE), "recharge duration")
 
+        // 4. Interjection normalization before machine translation
+        processed = processed.replace(Regex("\\b[Uu]rgh!?\\b"), "Ugh!")
+        processed = processed.replace(Regex("\\b[Aa]rgh!?\\b"), "Ah!")
+
         return processed
     }
 
@@ -504,6 +508,8 @@ class TranslationManager(
         sanitized = sanitized.replace(Regex("(?i)\\bDiana\\s+Burn\\s*wood\\b"), "ديانا بيرنوود")
         sanitized = sanitized.replace(Regex("(?i)\\bBurnwood\\b"), "بيرنوود")
         sanitized = sanitized.replace("ديانا بيرن وود", "ديانا بيرنوود")
+        sanitized = sanitized.replace(Regex("(?i)\\b[ua]rgh\\b"), "آه")
+        sanitized = sanitized.replace("ليسهلا", "ليس سهلاً")
 
         // 1. High-frequency specific ML Kit glued words and contractions
         sanitized = sanitized.replace("\u0645\u0627\u0630 ", "\u0645\u0627\u0630\u0627 ")
