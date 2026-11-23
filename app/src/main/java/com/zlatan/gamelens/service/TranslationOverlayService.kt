@@ -654,10 +654,10 @@ class TranslationOverlayService : Service() {
             croppedRoi.recycle()
         }
 
-        // Hard Quality Floor (0.55f): Unconditionally discard if bestScore < 0.55f (never queue for confirmation)
-        if (bestScore < 0.55f) {
+        // Hard Quality Floor (0.70f): Unconditionally discard if bestScore < 0.70f (never queue for confirmation)
+        if (bestScore < 0.70f) {
             if (lines.isNotEmpty()) {
-                val dropMsg = "OCR skipped [low-quality-floor q=%.2f < 0.55]: \"${lines.joinToString(" ")}\"".format(java.util.Locale.US, bestScore)
+                val dropMsg = "OCR skipped [low-quality-floor q=%.2f < 0.70]: \"${lines.joinToString(" ")}\"".format(java.util.Locale.US, bestScore)
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
             }

@@ -262,6 +262,22 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\bfromenemy\\b"), "from enemy")
         s = s.replace(Regex("(?i)\\btokeen\\s*lyperceive\\b"), "to keenly perceive")
         s = s.replace(Regex("(?i)\\bmanwill\\b"), "man will")
+        s = s.replace(Regex("(?i)\\bItell\\b"), "I tell")
+        s = s.replace(Regex("(?i)\\bislike\\b"), "is like")
+        s = s.replace(Regex("(?i)\\bwereless\\b"), "were less")
+        s = s.replace(Regex("(?i)\\bwhatshe's+\\b"), "what she's")
+        s = s.replace(Regex("(?i)\\byourinstinct\\b"), "your instinct")
+        s = s.replace(Regex("(?i)\\bbelooking\\b"), "be looking")
+        s = s.replace(Regex("(?i)\\bComeon\\b"), "Come on")
+        s = s.replace(Regex("(?i)\\bhewon't\\b"), "he won't")
+        s = s.replace(Regex("(?i)\\bwakingup\\b"), "waking up")
+        s = s.replace(Regex("(?i)\\btheagency\\b"), "the agency")
+        s = s.replace(Regex("(?i)\\blastaugust\\b"), "last August")
+
+        // Exact split word repairs
+        s = s.replace(Regex("(?i)\\bwi\\s+tnesses\\b"), "witnesses")
+        s = s.replace(Regex("(?i)\\bdisgui\\s+se\\b"), "disguise")
+        s = s.replace(Regex("(?i)\\bsllip\\b"), "slip")
 
         // Mid-word casing & OCR character confusion fixes
         s = s.replace(Regex("(?i)\\bSiLverballer\\b"), "Silverballer")

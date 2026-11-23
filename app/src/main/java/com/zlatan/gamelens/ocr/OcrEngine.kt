@@ -42,6 +42,23 @@ class OcrEngine {
             "PRODUCED BY", "DIRECTED BY", "DESIGNER", "PROGRAMMER", "MUSIC BY", "WRITTEN BY"
         )
 
+        fun stripBackgroundTextureGarbage(text: String): String {
+            if (text.isBlank()) return ""
+            val tokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+            val cleanTokens = tokens.filterNot { token ->
+                val clean = token.trimEnd('.', ',', '!', '?', ';', ':', '"', '\'')
+                // 3+ identical consecutive letters (e.g. sss, SsS)
+                val has3Identical = Regex("(?i)([a-z])\\1{2,}").containsMatchIn(clean)
+                // Letter+digit+letter corruption (e.g. s8t8, tet8a)
+                val hasLetterDigitLetter = Regex("(?i)[a-z]+\\d+[a-z]+").containsMatchIn(clean)
+                // Dot-glued nonsense tokens with 3+ repeated characters (e.g. sss.sste, sss.s8t8) excluding decimal numbers
+                val isDotGluedGarbage = Regex("(?i)[a-z]{2,}\\.[a-z0-9]{3,}").matches(clean) &&
+                        Regex("(?i)([a-z0-9])\\1{2,}").containsMatchIn(clean)
+                has3Identical || hasLetterDigitLetter || isDotGluedGarbage
+            }
+            return cleanTokens.joinToString(" ")
+        }
+
         fun uppercaseRatio(text: String): Float {
             val letters = text.filter { it.isLetter() }
             if (letters.isEmpty()) return 0.0f
@@ -622,6 +639,10 @@ class OcrEngine {
                     val hasCenteredCluster = allClusters.any { it.isCentered && it.text.any { ch -> ch.isLetter() } }
 
                     val lines = allClusters
+                        .mapNotNull { cluster ->
+                            val stripped = stripBackgroundTextureGarbage(cluster.text)
+                            if (stripped.isBlank()) null else cluster.copy(text = stripped)
+                        }
                         .filter { cluster ->
                             val text = cluster.text
 
@@ -667,25 +688,31 @@ class OcrEngine {
                     val validLines = if (lines.isNotEmpty()) {
                         val joined = lines.joinToString(" ")
                         val normalizedJoined = OcrTextCleaner.normalizeOcrArtifacts(joined)
-                        val totalLetters = normalizedJoined.count { it.isLetter() }
-                        val joinedTokens = normalizedJoined.split(Regex("\\s+")).filter { it.isNotBlank() }
+                        val strippedJoined = stripBackgroundTextureGarbage(normalizedJoined)
+                        val totalLetters = strippedJoined.count { it.isLetter() }
+                        val realWords = strippedJoined.split(Regex("\\s+")).filter { w ->
+                            val lettersOnly = w.filter { it.isLetter() }
+                            lettersOnly.length >= 2 && !OcrTextCleaner.HUD_ACTION_STEMS.contains(lettersOnly.lowercase(java.util.Locale.US))
+                        }
+                        val joinedTokens = strippedJoined.split(Regex("\\s+")).filter { it.isNotBlank() }
                         val isSingleWordHudFragment = joinedTokens.size == 1 && run {
                             val word = joinedTokens[0]
                             val coreLetters = word.filter { it.isLetter() }.lowercase(java.util.Locale.US)
                             val isShortOrHud = coreLetters.length <= 4 || OcrTextCleaner.HUD_ACTION_STEMS.contains(coreLetters)
-                            isShortOrHud && PatchManager.lookup(normalizedJoined) == null
+                            isShortOrHud && PatchManager.lookup(strippedJoined) == null
                         }
-                        val isBannerPopup = Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(normalizedJoined) &&
-                                !normalizedJoined.endsWith(".") && !normalizedJoined.endsWith("!") &&
-                                PatchManager.lookup(normalizedJoined) == null
+                        val isBannerPopup = Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(strippedJoined) &&
+                                !strippedJoined.endsWith(".") && !strippedJoined.endsWith("!") &&
+                                PatchManager.lookup(strippedJoined) == null
 
                         if (totalLetters < 2 ||
+                            (realWords.size < 2 && PatchManager.lookup(strippedJoined) == null) ||
                             isSingleWordHudFragment ||
                             isBannerPopup ||
-                            !passesEnglishTokenRatioFilter(normalizedJoined) ||
-                            OcrTextCleaner.isGarbledDocumentNoise(normalizedJoined) ||
-                            OcrTextCleaner.isDiacriticSelfOcrGarble(normalizedJoined) ||
-                            isCreditOrTitleLine(normalizedJoined)
+                            !passesEnglishTokenRatioFilter(strippedJoined) ||
+                            OcrTextCleaner.isGarbledDocumentNoise(strippedJoined) ||
+                            OcrTextCleaner.isDiacriticSelfOcrGarble(strippedJoined) ||
+                            isCreditOrTitleLine(strippedJoined)
                         ) {
                             emptyList()
                         } else {

@@ -89,9 +89,7 @@ class TranslationManager(
             "Travis" to "ترافيس",
             "Benjamin" to "بنيامين",
             "Agent 47" to "العميل 47",
-            "Chicago" to "شيكاغو",
-            "Clean Kill" to "قتل صامت",
-            "Clean kill" to "قتل صامت"
+            "Chicago" to "شيكاغو"
         )
 
         /**
@@ -331,6 +329,30 @@ class TranslationManager(
             return@withContext cached
         }
 
+        // Deterministic Clean Kill handling: if input is standalone "Clean kill" or "Clean kill - ..."
+        val cleanKillPrefixMatch = Regex("(?i)^clean\\s+kill\\s*[-–—:]\\s*(.+)$").find(trimmed)
+        if (cleanKillPrefixMatch != null) {
+            val remainder = cleanKillPrefixMatch.groupValues[1].trim()
+            val translatedRemainder = translate(remainder, isFinal)
+            val result = "قتل صامت - $translatedRemainder".trim()
+            fastMemoryCache.put(trimmed, result)
+            cacheManager.put(trimmed, result)
+            if (isFinal) {
+                com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, trimmed, result, isFinal = true)
+            }
+            return@withContext result
+        }
+
+        if (Regex("(?i)^clean\\s+kill[!.?]?$").matches(trimmed)) {
+            val result = "قتل صامت"
+            fastMemoryCache.put(trimmed, result)
+            cacheManager.put(trimmed, result)
+            if (isFinal) {
+                com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, trimmed, result, isFinal = true)
+            }
+            return@withContext result
+        }
+
         // 3. Pre-translation OCR repair & gaming term normalization
         val preprocessed = preprocessGamingText(trimmed)
 
@@ -373,8 +395,27 @@ class TranslationManager(
             else -> translateViaMlKit(preprocessed)
         }
 
+        // Multi-sentence fallback when ML Kit leaves trailing sentences untranslated
+        var effectiveTranslated = translated
+        val consecutiveEnglishRegex = Regex("(?i)\\b[a-zA-Z]{2,}(?:\\s+[a-zA-Z]{2,}){3,}\\b")
+        if (consecutiveEnglishRegex.containsMatchIn(effectiveTranslated)) {
+            val sentences = preprocessed.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
+            if (sentences.size > 1) {
+                val sentenceTranslations = sentences.map { sent ->
+                    val trimmedSent = sent.trim()
+                    if (trimmedSent.isNotEmpty()) {
+                        translateViaMlKit(trimmedSent)
+                    } else ""
+                }
+                val reassembled = sentenceTranslations.filter { it.isNotBlank() }.joinToString(" ")
+                if (reassembled.isNotBlank()) {
+                    effectiveTranslated = reassembled
+                }
+            }
+        }
+
         // 5. Post-process with glossary term replacements & protected proper-noun glossary
-        val glossaryReplaced = glossaryManager.applyTermReplacements(translated)
+        val glossaryReplaced = glossaryManager.applyTermReplacements(effectiveTranslated)
         val protectedReplaced = applyProtectedGlossary(glossaryReplaced)
 
         // 6. Strip ML Kit neural repetition loops & repair glued words
@@ -427,7 +468,6 @@ class TranslationManager(
         processed = processed.replace(Regex("\\b(take|into|behind|in)\\s+cover\\b", RegexOption.IGNORE_CASE), "$1 shielded cover")
         processed = processed.replace(Regex("\\bHITBOX(ES)?\\b", RegexOption.IGNORE_CASE), "damage zone")
         processed = processed.replace(Regex("\\bCOOLDOWNS?\\b", RegexOption.IGNORE_CASE), "recharge duration")
-        processed = processed.replace(Regex("(?i)\\bClean\\s+Kill\\b"), "قتل صامت")
 
         // 4. Split camelCase menu terms before translation (PlayStyle -> Play Style) & handle gaming compounds
         processed = processed.replace(Regex("([a-z])([A-Z])"), "$1 $2")
@@ -581,11 +621,15 @@ class TranslationManager(
         sanitized = sanitized.replace(Regex("\\b\\u062F\\u064A\\u0627\\u0646\\u0627\\u0644(\\S+)"), "\u062F\u064A\u0627\u0646\u0627 \u0627\u0644$1")
 
         // 2. Insert space between non-connecting terminal letters and definite-article prefix or particles/pronouns
+        // Guard: never split before الة (e.g. بإزالة / إزالة) or when preceded by a stem fragment like بإز
         val gluedPattern = Regex(
             "([\\u0627\\u0649\\u0629\\u0647\\u062F\\u0630\\u0631\\u0632\\u0648])" +
-            "(?=\\u0627\\u0644[\\u0600-\\u06FF]|(?:(?:\\u0647\\u064A|\\u0647\\u0648|\\u0647\\u0645|\\u064A\\u062C\\u0628|\\u0623\\u0646|\\u0623\\u0648|\\u0625\\u0644\\u0649|\\u0639\\u0644\\u0649|\\u0645\\u0646|\\u0639\\u0646|\\u0645\\u0639|\\u0647\\u0630\\u0627|\\u0647\\u0630\\u0647|\\u0630\\u0644\\u0643)\\b))"
+            "(?=\\u0627\\u0644(?![\u0629\u0649])[\u0600-\u06FF]{2,}|(?:(?:\\u0647\\u064A|\\u0647\\u0648|\\u0647\\u0645|\\u064A\\u062C\\u0628|\\u0623\\u0646|\\u0623\\u0648|\\u0625\\u0644\\u0649|\\u0639\\u0644\\u0649|\\u0645\\u0646|\\u0639\\u0646|\\u0645\\u0639|\\u0647\\u0630\\u0627|\\u0647\\u0630\\u0647|\\u0630\\u0644\\u0643)\\b))"
         )
         sanitized = sanitized.replace(gluedPattern, "$1 ")
+        sanitized = sanitized.replace(Regex("\\bبإز\\s+الة\\b"), "بإزالة")
+        sanitized = sanitized.replace(Regex("بإز\\s+الة"), "بإزالة")
+        sanitized = sanitized.replace(Regex("إز\\s+الة"), "إزالة")
         sanitized = sanitized.replace(Regex("\\bهد\\s+في(:|\\b)"), "هدفي$1")
 
         return sanitized.trim()
