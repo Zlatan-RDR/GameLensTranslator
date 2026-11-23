@@ -153,6 +153,8 @@ class TranslationOverlayService : Service() {
     private var candidateTimestamp: Long = 0L
     private var lastSubtitleDisplayTimestamp: Long = 0L
     private var lastOpaquePollTimestamp: Long = 0L
+    private var isRoiSettling: Boolean = false
+    private var roiSettleStartTime: Long = 0L
 
     private lateinit var cacheManager: TranslationCacheManager
     private lateinit var glossaryManager: GlossaryManager
@@ -548,31 +550,59 @@ class TranslationOverlayService : Service() {
 
         if (croppedRoi == null) return
 
-        // 4. Stage 2: Fast Pixel-Diff Gate (~1.5ms) - skip unchanged frames unless subtitle is showing and clear-check (420ms) is due
+        // 4. Stage 2: Settle-Then-Translate Pixel-Diff Gate (~1.5ms) (from overlay-translator & Translumo)
         val isOverlayShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
         val timeSinceLastOcr = now - lastOcrTimestamp
         val forceClearCheck = isOverlayShowing && (timeSinceLastOcr >= 420L)
 
-        val hasChanged = fastPixelDiffGate.hasChanged(croppedRoi)
-        if (!hasChanged && !forceClearCheck && !forceInstantPass) {
+        val delta = fastPixelDiffGate.computeDiffRatio(croppedRoi)
+        if (isRoiSettling) {
+            val waitElapsed = now - roiSettleStartTime
+            if (delta < 0.020f || waitElapsed >= 280L) {
+                // Frame stabilized (< 2.0% delta) or max settling time reached (280ms) -> commit and proceed to OCR
+                isRoiSettling = false
+                fastPixelDiffGate.commitSamples(croppedRoi)
+            } else {
+                // Still in transition (fade-in / camera motion) -> wait 1 more frame
+                if (!croppedRoi.isRecycled) croppedRoi.recycle()
+                return
+            }
+        } else if (delta >= 0.025f) {
+            // New motion detected: initiate settling wait so transitional half-faded frames are not read
+            isRoiSettling = true
+            roiSettleStartTime = now
+            fastPixelDiffGate.commitSamples(croppedRoi)
+            if (!forceClearCheck && !forceInstantPass) {
+                if (!croppedRoi.isRecycled) croppedRoi.recycle()
+                return
+            }
+        } else if (!forceClearCheck && !forceInstantPass) {
             if (!croppedRoi.isRecycled) croppedRoi.recycle()
             return
         }
         forceInstantPass = false
         lastOcrTimestamp = now
 
-        // 5. Stage 3: Prefer Clean Raw ROI first, fallback to softer MortFilter (lum >= 155) if empty or noisy
-        var filterSource = "Raw"
-        var lines = ocrEngine.recognizeRoi(croppedRoi)
+        // 5. Stage 3: Dual-Pass OCR with Quality Scoring (Raw ROI vs MortFilter lum >= 155)
+        val rawLines = ocrEngine.recognizeRoi(croppedRoi)
+        val rawText = rawLines.joinToString(" ")
+        val rawScore = ocrEngine.scoreOcrQuality(rawText)
 
-        if (lines.isEmpty()) {
+        var lines = rawLines
+        var filterSource = "Raw (q=%.2f)".format(java.util.Locale.US, rawScore)
+
+        if (rawLines.isEmpty() || rawScore < 0.80f) {
             val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(croppedRoi)
             if (mortBitmap != null) {
                 val mortLines = ocrEngine.recognizeRoi(mortBitmap)
                 if (!mortBitmap.isRecycled) mortBitmap.recycle()
                 if (mortLines.isNotEmpty()) {
-                    lines = mortLines
-                    filterSource = "Mort"
+                    val mortText = mortLines.joinToString(" ")
+                    val mortScore = ocrEngine.scoreOcrQuality(mortText)
+                    if (mortScore > rawScore || rawLines.isEmpty()) {
+                        lines = mortLines
+                        filterSource = "Mort (q=%.2f)".format(java.util.Locale.US, mortScore)
+                    }
                 }
             }
         }
@@ -649,13 +679,15 @@ class TranslationOverlayService : Service() {
             return
         }
 
-        val arabicTranslation = if (patchMatch != null) {
+        val rawArabic = if (patchMatch != null) {
             patchMatch
         } else {
             withContext(Dispatchers.IO) {
                 translationManager.translate(promptNormalized)
             }
         }
+
+        val arabicTranslation = if (patchMatch != null) rawArabic else translationManager.repairGluedArabicWords(rawArabic)
 
         if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(promptNormalized.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
             return

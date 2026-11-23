@@ -13,16 +13,17 @@ class FastPixelDiffGate(
     private val diffThresholdPercent: Float = 0.025f // 2.5% delta
 ) {
     private var lastLuminanceSamples: ByteArray? = null
+    private var pendingSamples: ByteArray? = null
     private var lastSampleCount: Int = 0
     private var lastWidth: Int = 0
     private var lastHeight: Int = 0
 
     /**
-     * Samples 4x4-strided luminance across the cropped ROI.
-     * Returns true if pixel delta >= 2.5% or dimensions changed.
+     * Computes the luminance difference ratio between the provided bitmap and the last committed frame.
+     * Retains samples in pending state until committed.
      */
-    fun hasChanged(bitmap: Bitmap): Boolean {
-        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return false
+    fun computeDiffRatio(bitmap: Bitmap): Float {
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return 0f
         val w = bitmap.width
         val h = bitmap.height
 
@@ -49,13 +50,10 @@ class FastPixelDiffGate(
             }
         }
 
+        pendingSamples = currentSamples
         val prev = lastLuminanceSamples
         if (prev == null || lastWidth != w || lastHeight != h || prev.size != sampleIdx) {
-            lastLuminanceSamples = currentSamples
-            lastSampleCount = sampleIdx
-            lastWidth = w
-            lastHeight = h
-            return true
+            return 1.0f
         }
 
         var diffCount = 0
@@ -66,17 +64,35 @@ class FastPixelDiffGate(
             }
         }
 
-        val changeRatio = diffCount.toFloat() / sampleIdx.toFloat()
-        val changed = changeRatio >= diffThresholdPercent
+        return diffCount.toFloat() / sampleIdx.toFloat()
+    }
+
+    /**
+     * Commits pending samples as the reference baseline for subsequent diff comparisons.
+     */
+    fun commitSamples(bitmap: Bitmap) {
+        lastLuminanceSamples = pendingSamples
+        lastSampleCount = pendingSamples?.size ?: 0
+        lastWidth = bitmap.width
+        lastHeight = bitmap.height
+    }
+
+    /**
+     * Samples 4x4-strided luminance across the cropped ROI.
+     * Returns true if pixel delta >= 2.5% or dimensions changed.
+     */
+    fun hasChanged(bitmap: Bitmap): Boolean {
+        val ratio = computeDiffRatio(bitmap)
+        val changed = ratio >= diffThresholdPercent
         if (changed) {
-            lastLuminanceSamples = currentSamples
-            lastSampleCount = sampleIdx
+            commitSamples(bitmap)
         }
         return changed
     }
 
     fun reset() {
         lastLuminanceSamples = null
+        pendingSamples = null
         lastSampleCount = 0
         lastWidth = 0
         lastHeight = 0
@@ -149,7 +165,7 @@ object OcrTextCleaner {
         "press", "tap enter", "enter", "pause", "menu", "cancel",
         "continue", "autosave", "saving", "loading", "loading..."
     )
-    private val EUROPEAN_DIACRITICS = setOf(
+    val EUROPEAN_DIACRITICS = setOf(
         'ä', 'š', 'ì', '„', 'ö', 'ü', 'ç', 'é', 'è', 'à', 'â', 'ê', 'î', 'ô', 'û', 'ñ', '“', '”', '»', '«', '›', '‹'
     )
 
@@ -185,6 +201,9 @@ object OcrTextCleaner {
         var s = text.trim()
 
         // Split-word and spacing repairs
+        s = s.replace(Regex("(?i)\\bBenj\\s+amin\\b"), "Benjamin")
+        s = s.replace(Regex("(?i)\\bscalpe\\s+l\\b"), "scalpel")
+        s = s.replace(Regex("(?i)\\bdon'tjudge\\b"), "don't judge")
         s = s.replace(Regex("(?i)\\bf\\s+inally\\b"), "finally")
         s = s.replace(Regex("(?i)\\bfina\\s+lly\\b"), "finally")
         s = s.replace(Regex("(?i)\\bdi\\s+ana\\b"), "Diana")
@@ -196,6 +215,19 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\busedthe\\b"), "used the")
         s = s.replace(Regex("(?i)\\bafterall\\b"), "After all")
 
+        // Remove stray underscores (e.g. cut off_ -> cut off)
+        s = s.replace(Regex("_+"), " ")
+
+        // Generic detached trailing-letter heal: collapse [A-Za-z]{4,} + single non-a/i letter -> glued
+        s = s.replace(Regex("\\b([A-Za-z]{4,})\\s+([b-hj-zB-HJ-Z])\\b"), "$1$2")
+
+        // Normalize colloquial contractions & slang for clean ML Kit translation
+        s = s.replace(Regex("(?i)\\boutta\\b"), "out of")
+        s = s.replace(Regex("(?i)\\bgonna\\b"), "going to")
+        s = s.replace(Regex("(?i)\\bwanna\\b"), "want to")
+        s = s.replace(Regex("(?i)\\bgotta\\b"), "got to")
+        s = s.replace(Regex("(?i)\\bkinda\\b"), "kind of")
+
         // Mid-word casing & OCR character confusion fixes
         s = s.replace(Regex("(?i)\\bwilL\\b"), "will")
         s = s.replace(Regex("(?i)\\bWOuLd\\b"), "would")
@@ -206,7 +238,9 @@ object OcrTextCleaner {
         s = s.replace(Regex("(?i)\\beXposed\\b"), "exposed")
         s = s.replace(Regex("(?i)\\bW[ìi]red\\b"), "wired")
 
-        return s
+        s = s.replace(Regex("\\s+"), " ")
+
+        return s.trim()
     }
 
     /**

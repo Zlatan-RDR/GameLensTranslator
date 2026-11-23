@@ -65,6 +65,17 @@ class TranslationManager(
             "get", "got", "gotten", "help", "helped", "hide", "hid", "move", "moved"
         )
 
+        val DEFAULT_PROTECTED_GLOSSARY = linkedMapOf(
+            "Diana Burnwood" to "ديانا بيرنوود",
+            "Diana Burn Wood" to "ديانا بيرنوود",
+            "Burnwood" to "بيرنوود",
+            "Benjamin Travis" to "بنيامين ترافيس",
+            "Travis" to "ترافيس",
+            "Benjamin" to "بنيامين",
+            "Agent 47" to "العميل 47",
+            "Chicago" to "شيكاغو"
+        )
+
         /**
          * Quick static check for service startup gate.
          */
@@ -83,7 +94,13 @@ class TranslationManager(
         .writeTimeout(1200L, TimeUnit.MILLISECONDS)
         .build()
 
-    private val fastMemoryCache = LruCache<String, String>(500)
+    private val googleHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(900L, TimeUnit.MILLISECONDS)
+        .readTimeout(900L, TimeUnit.MILLISECONDS)
+        .writeTimeout(900L, TimeUnit.MILLISECONDS)
+        .build()
+
+    private val fastMemoryCache = LruCache<String, String>(256)
 
     private val modelManager = RemoteModelManager.getInstance()
     private val arabicModel = TranslateRemoteModel.Builder(TranslateLanguage.ARABIC).build()
@@ -106,9 +123,68 @@ class TranslationManager(
         checkModelState()
     }
 
-    fun updateConfig(newConfig: TranslationConfig) {
-        this.config = newConfig
-        Log.d(TAG, "TranslationConfig updated: Mode=${config.mode}, Model=${config.modelName}")
+    fun updateOnlineEnhanced(enabled: Boolean) {
+        Log.d(TAG, "Online enhanced translation set to: $enabled")
+    }
+
+    /**
+     * Fast in-memory fuzzy search across recent LRU translation cache entries (>= 0.90 similarity).
+     */
+    fun findFuzzyMemoryCacheMatch(text: String, threshold: Float = 0.90f): String? {
+        val snapshot = fastMemoryCache.snapshot()
+        for ((cachedEn, cachedAr) in snapshot) {
+            if (com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(text, cachedEn, threshold)) {
+                return cachedAr
+            }
+        }
+        return null
+    }
+
+    /**
+     * Enforces correct canon Arabic transliterations for protected character/place names.
+     */
+    fun applyProtectedGlossary(arabicText: String): String {
+        var result = arabicText
+        for ((enName, arName) in DEFAULT_PROTECTED_GLOSSARY) {
+            result = result.replace(Regex("(?i)\\b$enName\\b"), arName)
+        }
+        return result
+    }
+
+    /**
+     * Optional keyless Google Translate endpoint with strict 900ms timeout.
+     * Falls back to null immediately on timeout or network errors.
+     */
+    private suspend fun translateViaGoogleFree(text: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val encodedQuery = java.net.URLEncoder.encode(text, "UTF-8")
+            val url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ar&dt=t&q=$encodedQuery"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0")
+                .get()
+                .build()
+
+            googleHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val bodyStr = response.body?.string() ?: return@withContext null
+                val jsonArray = JSONArray(bodyStr)
+                val sentencesArray = jsonArray.optJSONArray(0) ?: return@withContext null
+                val sb = java.lang.StringBuilder()
+                for (i in 0 until sentencesArray.length()) {
+                    val sArr = sentencesArray.optJSONArray(i)
+                    if (sArr != null && sArr.length() > 0) {
+                        val transPart = sArr.optString(0, "")
+                        sb.append(transPart)
+                    }
+                }
+                val result = sb.toString().trim()
+                if (result.isNotEmpty()) result else null
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "Google Free Translate failed/timed out (900ms): ${t.message}, fallback to offline ML Kit")
+            null
+        }
     }
 
     fun getStatusString(): String {
@@ -204,6 +280,12 @@ class TranslationManager(
             return@withContext memMatch
         }
 
+        // Fuzzy In-Memory Cache (0ms, >= 0.90 similarity)
+        val fuzzyMatch = findFuzzyMemoryCacheMatch(trimmed, 0.90f)
+        if (fuzzyMatch != null) {
+            return@withContext fuzzyMatch
+        }
+
         // 1. Direct Game Glossary Exact Match
         val glossaryMatch = glossaryManager.findExactMatch(trimmed)
         if (glossaryMatch != null) {
@@ -213,31 +295,46 @@ class TranslationManager(
         // 2. Instant Cache (Memory LRU -> Room Persistent DB)
         val cached = cacheManager.get(trimmed)
         if (cached != null) {
+            fastMemoryCache.put(trimmed, cached)
             return@withContext cached
         }
 
         // 3. Pre-translation OCR repair & gaming term normalization
         val preprocessed = preprocessGamingText(trimmed)
 
-        // 4. Translate via configured engine
-        val translated = when (config.mode) {
-            TranslationMode.CLOUD_OPENAI -> {
+        // 4. Translate via configured engine (with optional Online Enhanced fallback)
+        val isOnlineEnhanced = context.getSharedPreferences(com.zlatan.gamelens.MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(com.zlatan.gamelens.MainActivity.KEY_ONLINE_TRANSLATE_ENHANCED, false)
+
+        val translated = when {
+            isOnlineEnhanced -> {
+                translateViaGoogleFree(preprocessed) ?: when (config.mode) {
+                    TranslationMode.CLOUD_OPENAI -> {
+                        if (config.apiKey.isNotBlank()) {
+                            translateViaOpenAi(preprocessed) ?: translateViaMlKit(preprocessed)
+                        } else {
+                            translateViaMlKit(preprocessed)
+                        }
+                    }
+                    TranslationMode.OFFLINE_MLKIT -> translateViaMlKit(preprocessed)
+                }
+            }
+            config.mode == TranslationMode.CLOUD_OPENAI -> {
                 if (config.apiKey.isNotBlank()) {
                     translateViaOpenAi(preprocessed) ?: translateViaMlKit(preprocessed)
                 } else {
                     translateViaMlKit(preprocessed)
                 }
             }
-            TranslationMode.OFFLINE_MLKIT -> {
-                translateViaMlKit(preprocessed)
-            }
+            else -> translateViaMlKit(preprocessed)
         }
 
-        // 5. Post-process with glossary term replacements
+        // 5. Post-process with glossary term replacements & protected proper-noun glossary
         val glossaryReplaced = glossaryManager.applyTermReplacements(translated)
+        val protectedReplaced = applyProtectedGlossary(glossaryReplaced)
 
         // 6. Strip ML Kit neural repetition loops & repair glued words
-        val deduplicated = deduplicateRepetitions(glossaryReplaced)
+        val deduplicated = deduplicateRepetitions(protectedReplaced)
         val finalResult = repairGluedArabicWords(deduplicated)
 
         // 7. Save to Cache for subsequent 0ms hits
@@ -390,9 +487,15 @@ class TranslationManager(
         var sanitized = arabicText
 
         // 0. High-frequency specific ML Kit mistranslations & character names
-        sanitized = sanitized.replace("فيو من الأيام", "يوماً ما")
-        sanitized = sanitized.replace("في يوم من الايام", "يوماً ما")
-        sanitized = sanitized.replace(Regex("\\bستهداف\\b"), "استهداف")
+        sanitized = sanitized.replace(Regex("فيو\\s+من\\s+الأيام"), "يوماً ما")
+        sanitized = sanitized.replace(Regex("في\\s+يوم\\s+من\\s+الايام"), "يوماً ما")
+        sanitized = sanitized.replace(Regex("في\\s+يوم\\s+من\\s+الأيام"), "يوماً ما")
+        sanitized = sanitized.replace(Regex("(?<![\\u0627\\u0623\\u0625\\u0622])ستهداف"), "استهداف")
+        sanitized = sanitized.replace(Regex("الأمو\\s+الحسابك"), "الأموال لحسابك")
+        sanitized = sanitized.replace(Regex("الامو\\s+الحسابك"), "الأموال لحسابك")
+        sanitized = sanitized.replace(Regex("الأموال\\s+الحسابك"), "الأموال لحسابك")
+        sanitized = sanitized.replace(Regex("(?i)\\bبن\\s+جيم\\s+في\\s+ترافيس\\b"), "بنيامين ترافيس")
+        sanitized = sanitized.replace(Regex("(?i)\\bديانا\\s+بوووود\\b"), "ديانا بيرنوود")
         sanitized = sanitized.replace(Regex("(?i)\\bDiana\\s+Burn\\s*wood\\b"), "ديانا بيرنوود")
         sanitized = sanitized.replace(Regex("(?i)\\bBurnwood\\b"), "بيرنوود")
         sanitized = sanitized.replace("ديانا بيرن وود", "ديانا بيرنوود")

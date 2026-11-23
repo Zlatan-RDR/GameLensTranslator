@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_API_ENDPOINT = "key_api_endpoint"
         const val KEY_GAME_AUDIO_ENABLED = "key_game_audio_enabled"
         const val KEY_OVERLAY_RENDER_MODE = "overlay_render_mode"
+        const val KEY_ONLINE_TRANSLATE_ENHANCED = "key_online_translate_enhanced"
         const val KEY_SUBTITLE_FONT_SIZE_SP = "key_subtitle_font_size_sp"
         const val DEFAULT_FONT_SIZE_SP = 18f
         const val MODE_OPAQUE_COVER = "opaque_cover"
@@ -479,6 +480,8 @@ class MainActivity : AppCompatActivity() {
             binding.rbOpaqueCover.isChecked = true
         }
 
+        binding.switchOnlineEnhanced.isChecked = prefs.getBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, false)
+
         val fontSizeSp = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
         binding.sliderFontSize.progress = (fontSizeSp - 14f).toInt().coerceIn(0, 10)
         binding.tvFontSizeValue.text = "${fontSizeSp.toInt()} sp"
@@ -510,6 +513,7 @@ class MainActivity : AppCompatActivity() {
                 .putString(KEY_TRANSLATION_MODE, selectedMode)
                 .putString(KEY_API_KEY, apiKey)
                 .putString(KEY_API_ENDPOINT, if (apiEndpoint.isBlank()) "https://api.openai.com/v1/chat/completions" else apiEndpoint)
+                .putBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, binding.switchOnlineEnhanced.isChecked)
                 .apply()
 
             translationManager.updateConfig(
@@ -536,6 +540,12 @@ class MainActivity : AppCompatActivity() {
                     DiagnosticLogger.log("Model download failed: ${e.message}")
                 }
             )
+        }
+
+        binding.switchOnlineEnhanced.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, isChecked).apply()
+            val msg = if (isChecked) "تم تفعيل الترجمة السحابية المحسّنة (مع عودة تلقائية للأوفلاين 900ms)" else "تم الرجوع للترجمة المحلية بدون إنترنت بالكامل"
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         }
 
         binding.switchGameAudio.setOnCheckedChangeListener { _, isChecked ->
