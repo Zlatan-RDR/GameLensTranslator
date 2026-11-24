@@ -425,6 +425,11 @@ class ScreenCaptureManager(
 
     @Synchronized
     fun clearFullScreenCache() {
+        try {
+            lastCapturedFullScreenBitmap?.let {
+                if (!it.isRecycled) it.recycle()
+            }
+        } catch (_: Throwable) {}
         lastCapturedFullScreenBitmap = null
     }
 
@@ -577,6 +582,12 @@ class ScreenCaptureManager(
                 tempBitmap = null // transfer ownership
             } else {
                 cleanBitmap = Bitmap.createBitmap(tempBitmap, 0, 0, imgW, imgH)
+                try {
+                    if (tempBitmap != null && !tempBitmap.isRecycled) {
+                        tempBitmap.recycle()
+                    }
+                } catch (_: Throwable) {}
+                tempBitmap = null
             }
             cleanBitmap
         } catch (t: Throwable) {
@@ -607,6 +618,11 @@ class ScreenCaptureManager(
             virtualDisplay = null
             imageReader?.close()
             imageReader = null
+            try {
+                lastCapturedFullScreenBitmap?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
+            } catch (_: Throwable) {}
             lastCapturedFullScreenBitmap = null
             Log.d(TAG, "VirtualDisplay and ImageReader released successfully")
             DiagnosticLogger.log("Capture manager released")

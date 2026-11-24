@@ -1242,6 +1242,11 @@ class TranslationOverlayService : Service() {
 
                 // Dedicated Full-Screen Menu / Popup OCR Mode (no ROI cropping, preserves headers)
                 val detectedBlocks = ocrEngine.recognizeFullScreenMenu(fullBitmap)
+                try {
+                    if (!fullBitmap.isRecycled) {
+                        fullBitmap.recycle()
+                    }
+                } catch (_: Throwable) {}
                 DiagnosticLogger.log("MenuScan: captured ${fullBitmap.width}x${fullBitmap.height}, detected blocks=${detectedBlocks.size}")
                 detectedBlocks.forEachIndexed { i, b ->
                     DiagnosticLogger.log("MenuBlock #$i: ${b.text.take(100).replace("\n", " ")}")
@@ -1504,6 +1509,19 @@ class TranslationOverlayService : Service() {
                 quickMenuParams = null
             }
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        try {
+            DiagnosticLogger.log("TranslationOverlayService: onTrimMemory level=$level")
+            screenCaptureManager?.clearFullScreenCache()
+            translationManager.trimMemory()
+            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+                fastPixelDiffGate.reset()
+                frameDiffEngine.reset()
+            }
+        } catch (_: Throwable) {}
     }
 
     override fun onDestroy() {

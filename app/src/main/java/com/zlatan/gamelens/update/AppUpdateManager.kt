@@ -71,21 +71,56 @@ object AppUpdateManager {
                 .build()
 
             val response = httpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                val err = "GitHub API returned HTTP ${response.code}"
-                Log.w(TAG, err)
-                return@withContext UpdateCheckResult.Error(err)
+            val code = response.code
+            val bodyString = response.body?.use { it.string() }
+
+            val currentVersion = try {
+                BuildConfig.VERSION_NAME
+            } catch (_: Throwable) {
+                "1.0.0"
             }
 
-            val bodyString = response.body?.string() ?: return@withContext UpdateCheckResult.Error("Empty response body")
-            val json = JSONObject(bodyString)
+            parseReleaseResponse(code, bodyString, currentVersion)
+        } catch (t: Throwable) {
+            val err = "Update check failed: ${t.message}"
+            Log.e(TAG, err, t)
+            DiagnosticLogger.log("Update check error: ${t.message}")
+            UpdateCheckResult.Error(err)
+        }
+    }
 
+    /**
+     * Parses the GitHub Releases API response, treating HTTP 404 gracefully as UpToDate.
+     */
+    fun parseReleaseResponse(
+        code: Int,
+        bodyString: String?,
+        currentVersion: String = "1.0.0"
+    ): UpdateCheckResult {
+        if (code == 404) {
+            Log.i(TAG, "No GitHub releases published yet (HTTP 404). Treating as up to date.")
+            DiagnosticLogger.log("Update check: No releases published yet (HTTP 404)")
+            return UpdateCheckResult.UpToDate
+        }
+
+        if (code !in 200..299) {
+            val err = "GitHub API returned HTTP $code"
+            Log.w(TAG, err)
+            return UpdateCheckResult.Error(err)
+        }
+
+        if (bodyString.isNullOrBlank()) {
+            return UpdateCheckResult.Error("Empty response body")
+        }
+
+        return try {
+            val json = JSONObject(bodyString)
             val tagName = json.optString("tag_name", "").trim()
             val releaseNotes = json.optString("body", "").trim()
             val assetsArray = json.optJSONArray("assets")
 
             if (tagName.isEmpty() || assetsArray == null || assetsArray.length() == 0) {
-                return@withContext UpdateCheckResult.Error("No release assets found in release $tagName")
+                return UpdateCheckResult.Error("No release assets found in release $tagName")
             }
 
             // Find first .apk asset
@@ -102,7 +137,7 @@ object AppUpdateManager {
             }
 
             if (apkDownloadUrl.isEmpty()) {
-                return@withContext UpdateCheckResult.Error("No APK asset attached to release $tagName")
+                return UpdateCheckResult.Error("No APK asset attached to release $tagName")
             }
 
             // Validate download URL host security
@@ -111,16 +146,10 @@ object AppUpdateManager {
                 val err = "Untrusted APK download host: ${parsedUrl.host}"
                 Log.e(TAG, err)
                 DiagnosticLogger.log("Update: Security validation failed for URL: $apkDownloadUrl")
-                return@withContext UpdateCheckResult.Error(err)
+                return UpdateCheckResult.Error(err)
             }
 
-            val currentVersion = try {
-                BuildConfig.VERSION_NAME
-            } catch (_: Throwable) {
-                "1.0.0"
-            }
             val isNewer = isNewerVersion(tagName, currentVersion)
-
             Log.d(TAG, "Update check: local=$currentVersion, remote=$tagName, isNewer=$isNewer")
             DiagnosticLogger.log("Update check: local=$currentVersion, remote=$tagName, isNewer=$isNewer")
 
@@ -137,7 +166,9 @@ object AppUpdateManager {
                 UpdateCheckResult.UpToDate
             }
         } catch (t: Throwable) {
-            val err = "Update check failed: ${t.message}"
+            UpdateCheckResult.Error("Failed to parse release: ${t.message}")
+        }
+    }
             Log.e(TAG, err, t)
             DiagnosticLogger.log("Update check error: ${t.javaClass.simpleName} - ${t.message}")
             UpdateCheckResult.Error(err)

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="128" height="128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0B1120" />
+      <stop offset="60%" stop-color="#0F172A" />
+      <stop offset="100%" stop-color="#172554" />
+    </linearGradient>
+    <linearGradient id="lensGrad" x1="34" y1="34" x2="74" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10B981" />
+      <stop offset="50%" stop-color="#14B8A6" />
+      <stop offset="100%" stop-color="#06B6D4" />
+    </linearGradient>
+  </defs>
+
+  <!-- Obsidian-Navy Background with Rounded Corners -->
+  <rect width="108" height="108" rx="24" fill="url(#bgGrad)" />
+
+  <!-- Subtle ambient glow circle -->
+  <circle cx="54" cy="54" r="42" fill="none" stroke="#38BDF8" stroke-width="1" stroke-opacity="0.12" />
+
+  <!-- Outer aperture guide ring -->
+  <circle cx="54" cy="54" r="27" fill="none" stroke="#38BDF8" stroke-width="1.2" stroke-opacity="0.30" />
+
+  <!-- 4 Cardinal Reticle Ticks -->
+  <line x1="54" y1="22" x2="54" y2="28" stroke="#10B981" stroke-width="2.2" stroke-linecap="round" />
+  <line x1="54" y1="80" x2="54" y2="86" stroke="#06B6D4" stroke-width="2.2" stroke-linecap="round" />
+  <line x1="22" y1="54" x2="28" y2="54" stroke="#10B981" stroke-width="2.2" stroke-linecap="round" />
+  <line x1="80" y1="54" x2="86" y2="54" stroke="#06B6D4" stroke-width="2.2" stroke-linecap="round" />
+
+  <!-- Main Optical Lens Ring (Emerald -> Cyan Gradient) -->
+  <circle cx="54" cy="54" r="20" fill="none" stroke="url(#lensGrad)" stroke-width="3.6" stroke-linecap="round" />
+
+  <!-- Inner Lens Aperture Ring -->
+  <circle cx="54" cy="54" r="14" fill="none" stroke="#67E8F9" stroke-width="1" stroke-opacity="0.40" />
+
+  <!-- Minimalist Prism Facets (Left: Emerald, Right: Cyan) -->
+  <polygon points="54,43 44,54 54,65" fill="#10B981" fill-opacity="0.85" />
+  <polygon points="54,43 64,54 54,65" fill="#38BDF8" fill-opacity="0.85" />
+
+  <!-- Translation Prism Core Spark (Luminous White Starburst) -->
+  <path d="M40,54 Q54,52.5 68,54 Q54,55.5 40,54 Z" fill="#FFFFFF" />
+  <path d="M54,40 Q52.5,54 54,68 Q55.5,54 54,40 Z" fill="#FFFFFF" />
+
+  <!-- Center Jewel Dot -->
+  <circle cx="54" cy="54" r="2" fill="#FFFFFF" />
+</svg>

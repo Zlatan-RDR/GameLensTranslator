@@ -22,20 +22,37 @@ android {
     }
 
     signingConfigs {
-        create("unified") {
-            storeFile = file("keystore/gamelens-unified.jks")
-            storePassword = "gamelens2026"
-            keyAlias = "gamelens"
-            keyPassword = "gamelens2026"
+        val envPath = System.getenv("KEYSTORE_PATH")
+        val keystoreFile = if (!envPath.isNullOrBlank() && file(envPath).exists()) {
+            file(envPath)
+        } else if (file("keystore/gamelens-unified.jks").exists()) {
+            file("keystore/gamelens-unified.jks")
+        } else {
+            null
+        }
+
+        if (keystoreFile != null) {
+            create("unified") {
+                storeFile = keystoreFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "gamelens2026"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "gamelens"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "gamelens2026"
+            }
         }
     }
 
     buildTypes {
         getByName("debug") {
-            signingConfig = signingConfigs.getByName("unified")
+            val unified = signingConfigs.findByName("unified")
+            if (unified != null) {
+                signingConfig = unified
+            }
         }
         getByName("release") {
-            signingConfig = signingConfigs.getByName("unified")
+            val unified = signingConfigs.findByName("unified")
+            if (unified != null) {
+                signingConfig = unified
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

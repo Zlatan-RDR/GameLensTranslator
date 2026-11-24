@@ -13,6 +13,11 @@ object EnglishWordRepairer {
     private const val TAG = "EnglishWordRepairer"
     private const val ASSET_FILE = "en_dict.txt"
 
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    private val CONTRACTION_LEFT_REGEX = Regex("^([A-Za-z]+(?:n['’]t|['’](?:s|ve|re|ll|d|m)))([A-Za-z]+)$", RegexOption.IGNORE_CASE)
+    private val CONTRACTION_RIGHT_REGEX = Regex("^([A-Za-z]+)(he['’]s|she['’]s|it['’]s|that['’]s|what['’]s|there['’]s|who['’]s|where['’]s|won['’]t|can['’]t)$", RegexOption.IGNORE_CASE)
+    private val CAMEL_CASE_REGEX = Regex("^([A-Z][a-z]{2,})([A-Z][a-z]+|[a-z]{2,})$")
+
     @Volatile
     private var isInitialized = false
 
@@ -77,7 +82,7 @@ object EnglishWordRepairer {
      * Measures the ratio of recognizable English dictionary words in the given text.
      */
     fun dictionaryCoverage(text: String): Float {
-        val tokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val tokens = text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
         if (tokens.isEmpty()) return 0f
         var validCount = 0
         for (t in tokens) {
@@ -116,7 +121,7 @@ object EnglishWordRepairer {
     fun repair(text: String): String {
         if (text.isBlank() || dictionaryMap.isEmpty()) return text
 
-        val rawTokens = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val rawTokens = text.trim().split(WHITESPACE_REGEX).filter { it.isNotEmpty() }
         if (rawTokens.isEmpty()) return text
 
         // Pass A — Adjacent Split-Word Rejoining
@@ -174,8 +179,8 @@ object EnglishWordRepairer {
                 continue
             }
 
-            // Contraction gluing at end of left piece: e.g. Don'tact -> Don't act
-            val mCont1 = Regex("^([A-Za-z]+(?:n['’]t|['’](?:s|ve|re|ll|d|m)))([A-Za-z]+)$", RegexOption.IGNORE_CASE).matchEntire(core)
+            // Contraction gluing at end of left piece: e.g. Don't act -> Don't act
+            val mCont1 = CONTRACTION_LEFT_REGEX.matchEntire(core)
             if (mCont1 != null) {
                 val p1 = mCont1.groupValues[1]
                 val p2 = mCont1.groupValues[2]
@@ -189,7 +194,7 @@ object EnglishWordRepairer {
             }
 
             // Contraction gluing at start of right piece: e.g. sayshe's -> says he's
-            val mCont2 = Regex("^([A-Za-z]+)(he['’]s|she['’]s|it['’]s|that['’]s|what['’]s|there['’]s|who['’]s|where['’]s|won['’]t|can['’]t)$", RegexOption.IGNORE_CASE).matchEntire(core)
+            val mCont2 = CONTRACTION_RIGHT_REGEX.matchEntire(core)
             if (mCont2 != null) {
                 val p1 = mCont2.groupValues[1]
                 val p2 = mCont2.groupValues[2]
@@ -200,7 +205,7 @@ object EnglishWordRepairer {
             }
 
             // CamelCase gluing: e.g. Maybewe -> Maybe we
-            val mCamel = Regex("^([A-Z][a-z]{2,})([A-Z][a-z]+|[a-z]{2,})$").matchEntire(core)
+            val mCamel = CAMEL_CASE_REGEX.matchEntire(core)
             if (mCamel != null) {
                 val p1 = mCamel.groupValues[1]
                 val p2 = mCamel.groupValues[2]

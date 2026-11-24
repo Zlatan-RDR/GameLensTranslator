@@ -97,7 +97,15 @@ class TranslationCacheManager(context: Context) {
                         translatedText = trimmedTranslated
                     )
                 )
+                // Periodically prune database beyond 5,000 entries
+                currentDao.pruneOldEntries()
             } catch (_: Throwable) {}
+        }
+    }
+
+    fun trimMemory() {
+        synchronized(memoryCache) {
+            memoryCache.evictAll()
         }
     }
 

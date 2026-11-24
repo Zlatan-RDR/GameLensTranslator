@@ -25,4 +25,13 @@ class AppUpdateManagerTest {
         assertFalse(AppUpdateManager.isNewerVersion("1.0.0", "1.0.1"))
         assertFalse(AppUpdateManager.isNewerVersion("v1.2.0", "1.3.0"))
     }
+
+    @Test
+    fun testHttp404GracefullyHandledAsNoUpdate() {
+        val result404 = AppUpdateManager.parseReleaseResponse(404, null, "1.0.0")
+        assertTrue(result404 is UpdateCheckResult.UpToDate)
+
+        val result500 = AppUpdateManager.parseReleaseResponse(500, null, "1.0.0")
+        assertTrue(result500 is UpdateCheckResult.Error)
+    }
 }

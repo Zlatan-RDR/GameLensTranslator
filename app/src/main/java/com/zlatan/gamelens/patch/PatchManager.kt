@@ -43,6 +43,26 @@ object PatchManager {
     private const val TAG = "PatchManager"
     private const val OCR_FUZZY_THRESHOLD = 0.86f
     private const val ASR_FUZZY_THRESHOLD = 0.80f
+    private const val MAX_PATCH_FILE_SIZE_BYTES = 25L * 1024 * 1024 // 25 MB safe cap
+
+    private val BR_TAG_REGEX = Regex("<br\\s*/?>", RegexOption.IGNORE_CASE)
+    private val ESCAPED_N_REGEX = Regex("\\\\n", RegexOption.IGNORE_CASE)
+    private val CURLY_NUM_REGEX = Regex("\\{[0-9]+\\}")
+    private val PRINTF_FMT_REGEX = Regex("%[0-9]*[sdif]")
+    private val COLOR_TAG_OPEN_REGEX = Regex("\\[COLOR=[^\\]]*\\]", RegexOption.IGNORE_CASE)
+    private val COLOR_TAG_CLOSE_REGEX = Regex("\\[/COLOR\\]", RegexOption.IGNORE_CASE)
+    private val CARET_NUM_REGEX = Regex("\\^[0-9]")
+    private val HTML_ENTITY_REGEX = Regex("&[a-zA-Z]+;")
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    private val NON_ALPHANUMERIC_SPACE_REGEX = Regex("[^a-z0-9\\s]")
+    private val ZERO_WIDTH_CHARS_REGEX = Regex("[\\u200B\\u200C\\u200D\\uFEFF]")
+    private val CONTROL_CHARS_REGEX = Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]")
+    private val JSON_PAIR_PATTERN = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOption.DOT_MATCHES_ALL)
+    private val DOUBLE_NEWLINE_SPLIT = Regex("(\\r?\\n){2,}")
+    private val DIGITS_ONLY_LINE = Regex("^\\d+$")
+    private val XML_TAG_REGEX = Regex("<(?:string|entry|item|text)[^>]+(?:name|key|id)=[\"']([^\"']+)[\"'][^>]*>(.*?)</(?:string|entry|item|text)>", RegexOption.DOT_MATCHES_ALL)
+    private val PO_MSG_REGEX = Regex("msgid\\s+\"([^\"]+)\"\\s*\\n\\s*msgstr\\s+\"([^\"]+)\"")
+    private val CSV_DELIMITER_REGEX = Regex("[,;\\t]")
 
     private val patchMap = ConcurrentHashMap<String, String>() // normalized lowercase English -> Arabic
     private val rawEntries = mutableListOf<Pair<String, String>>() // original pairs for fuzzy matching
@@ -103,26 +123,26 @@ object PatchManager {
 
     fun stripGameMarkup(text: String): String {
         return text
-            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("\\\\n", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("\\{[0-9]+\\}"), " ")
-            .replace(Regex("%[0-9]*[sdif]"), " ")
-            .replace(Regex("\\[COLOR=[^\\]]*\\]", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\[/COLOR\\]", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\^[0-9]"), "")
-            .replace(Regex("&[a-zA-Z]+;"), " ")
-            .replace(Regex("\\s+"), " ")
+            .replace(BR_TAG_REGEX, " ")
+            .replace(ESCAPED_N_REGEX, " ")
+            .replace(CURLY_NUM_REGEX, " ")
+            .replace(PRINTF_FMT_REGEX, " ")
+            .replace(COLOR_TAG_OPEN_REGEX, "")
+            .replace(COLOR_TAG_CLOSE_REGEX, "")
+            .replace(CARET_NUM_REGEX, "")
+            .replace(HTML_ENTITY_REGEX, " ")
+            .replace(WHITESPACE_REGEX, " ")
             .trim()
     }
 
     fun cleanDisplayString(text: String): String {
         return text
-            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("\\\\n", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("\\[COLOR=[^\\]]*\\]", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\[/COLOR\\]", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\^[0-9]"), "")
-            .replace(Regex("\\s+"), " ")
+            .replace(BR_TAG_REGEX, " ")
+            .replace(ESCAPED_N_REGEX, " ")
+            .replace(COLOR_TAG_OPEN_REGEX, "")
+            .replace(COLOR_TAG_CLOSE_REGEX, "")
+            .replace(CARET_NUM_REGEX, "")
+            .replace(WHITESPACE_REGEX, " ")
             .trim()
     }
 
@@ -130,8 +150,8 @@ object PatchManager {
         val stripped = stripGameMarkup(text)
         return stripped.trim()
             .lowercase(Locale.US)
-            .replace(Regex("[^a-z0-9\\s]"), "")
-            .replace(Regex("\\s+"), " ")
+            .replace(NON_ALPHANUMERIC_SPACE_REGEX, "")
+            .replace(WHITESPACE_REGEX, " ")
     }
 
     /**
@@ -209,9 +229,9 @@ object PatchManager {
         // Replace non-breaking spaces (\u00A0) with standard space
         cleaned = cleaned.replace('\u00A0', ' ')
         // Strip zero-width characters (\u200B, \u200C, \u200D, \uFEFF)
-        cleaned = cleaned.replace(Regex("[\\u200B\\u200C\\u200D\\uFEFF]"), "")
+        cleaned = cleaned.replace(ZERO_WIDTH_CHARS_REGEX, "")
         // Strip stray control characters (keep \n and \t)
-        cleaned = cleaned.replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]"), "")
+        cleaned = cleaned.replace(CONTROL_CHARS_REGEX, "")
 
         val logName = if (fileName.isNotBlank()) fileName else "file"
         DiagnosticLogger.log("PatchManager: Decoded $logName as $charsetName -> UTF-8")
@@ -231,13 +251,29 @@ object PatchManager {
         return ""
     }
 
+    private fun readStreamBounded(stream: java.io.InputStream): ByteArray {
+        val buffer = java.io.ByteArrayOutputStream()
+        val temp = ByteArray(16384)
+        var totalRead = 0L
+        var read = stream.read(temp)
+        while (read != -1) {
+            totalRead += read
+            if (totalRead > MAX_PATCH_FILE_SIZE_BYTES) {
+                throw IllegalStateException("حجم ملف الباتش يتجاوز الحد الأقصى (25 ميجابايت)")
+            }
+            buffer.write(temp, 0, read)
+            read = stream.read(temp)
+        }
+        return buffer.toByteArray()
+    }
+
     /**
      * Loads a game patch from an SAF content Uri (.json, .srt, .txt).
      */
     suspend fun loadPatchFromUri(context: Context, uri: Uri, fileName: String): Int = withContext(Dispatchers.IO) {
         try {
             val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
-                stream.readBytes()
+                readStreamBounded(stream)
             } ?: return@withContext 0
 
             val (content, charsetName) = decodeBytesSmart(bytes, fileName)
@@ -388,9 +424,8 @@ object PatchManager {
     }
 
     private fun extractJsonPairsViaRegex(content: String): Int {
-        val pattern = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOption.DOT_MATCHES_ALL)
         var count = 0
-        for (match in pattern.findAll(content)) {
+        for (match in JSON_PAIR_PATTERN.findAll(content)) {
             val k = unescapeJsonString(match.groupValues[1]).trim()
             val v = unescapeJsonString(match.groupValues[2]).trim()
             if (k.isNotBlank() && v.isNotBlank()) {
@@ -402,9 +437,8 @@ object PatchManager {
     }
 
     private fun extractJsonMapViaRegex(content: String): Map<String, String> {
-        val pattern = Regex("\"((?:[^\"\\\\]|\\\\.)*)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"", RegexOption.DOT_MATCHES_ALL)
         val map = mutableMapOf<String, String>()
-        for (match in pattern.findAll(content)) {
+        for (match in JSON_PAIR_PATTERN.findAll(content)) {
             val k = unescapeJsonString(match.groupValues[1]).trim()
             val v = unescapeJsonString(match.groupValues[2]).trim()
             if (k.isNotBlank() && v.isNotBlank()) {
@@ -417,12 +451,12 @@ object PatchManager {
     private fun parseSrt(content: String) {
         // SRT format: blocks separated by blank lines
         // 1\n00:00:01,000 --> 00:00:04,000\nEnglish line\nArabic line\n\n
-        val blocks = content.split(Regex("(\\r?\\n){2,}"))
+        val blocks = content.split(DOUBLE_NEWLINE_SPLIT)
         for (block in blocks) {
             val lines = block.lines().map { it.trim() }.filter { it.isNotBlank() }
             if (lines.size >= 3) {
                 // Skip number and timestamp
-                val textLines = lines.filterNot { it.matches(Regex("^\\d+$")) || it.contains("-->") }
+                val textLines = lines.filterNot { it.matches(DIGITS_ONLY_LINE) || it.contains("-->") }
                 if (textLines.size >= 2) {
                     val en = textLines[0]
                     val ar = textLines[1]
@@ -540,7 +574,7 @@ object PatchManager {
             return Pair(rawAsrText, exactMatch)
         }
 
-        val uWords = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val uWords = normalized.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
         val uCount = uWords.size
 
         // 2. Prefix & Substring-Containment Contiguous-Span Matching (>= 75% similarity for >= 4-word spans)
@@ -551,7 +585,7 @@ object PatchManager {
             synchronized(rawEntries) {
                 for ((en, ar) in rawEntries) {
                     val pNorm = normalizeText(en)
-                    val pWords = pNorm.split(Regex("\\s+")).filter { it.isNotBlank() }
+                    val pWords = pNorm.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
                     val pCount = pWords.size
 
                     // Case A: Decoded utterance (>= 4 words) matches >= 75% of a contiguous span in a longer patch key
@@ -605,7 +639,7 @@ object PatchManager {
             synchronized(rawEntries) {
                 for ((en, ar) in rawEntries) {
                     val pNorm = normalizeText(en)
-                    val pWords = pNorm.split(Regex("\\s+")).filter { it.isNotBlank() }
+                    val pWords = pNorm.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
                     if (pWords.size < uWords.size) continue
 
                     val coverageRatio = uWords.size.toFloat() / pWords.size.toFloat()
@@ -870,9 +904,9 @@ object PatchManager {
         arFileName: String
     ): Int = withContext(Dispatchers.IO) {
         try {
-            val enBytes = context.contentResolver.openInputStream(enUri)?.use { it.readBytes() }
+            val enBytes = context.contentResolver.openInputStream(enUri)?.use { readStreamBounded(it) }
                 ?: return@withContext 0
-            val arBytes = context.contentResolver.openInputStream(arUri)?.use { it.readBytes() }
+            val arBytes = context.contentResolver.openInputStream(arUri)?.use { readStreamBounded(it) }
                 ?: return@withContext 0
 
             executeDualPairing(context, enBytes, arBytes, enFileName, arFileName)
@@ -897,7 +931,7 @@ object PatchManager {
         }
 
         try {
-            val arBytes = context.contentResolver.openInputStream(arUri)?.use { it.readBytes() }
+            val arBytes = context.contentResolver.openInputStream(arUri)?.use { readStreamBounded(it) }
             if (arBytes == null || arBytes.isEmpty()) {
                 lastPairingError = "تعذر قراءة الملف العربي"
                 return@withContext 0
@@ -1021,10 +1055,9 @@ object PatchManager {
     }
 
     private fun pairXmlFiles(enContent: String, arContent: String): Int {
-        val regexTag = Regex("<(?:string|entry|item|text)[^>]+(?:name|key|id)=[\"']([^\"']+)[\"'][^>]*>(.*?)</(?:string|entry|item|text)>", RegexOption.DOT_MATCHES_ALL)
         val enMap = mutableMapOf<String, String>()
         val enList = mutableListOf<String>()
-        for (m in regexTag.findAll(enContent)) {
+        for (m in XML_TAG_REGEX.findAll(enContent)) {
             val k = m.groupValues[1].trim()
             val v = m.groupValues[2].trim().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
             if (k.isNotBlank() && v.isNotBlank()) {
@@ -1106,8 +1139,7 @@ object PatchManager {
     }
 
     private fun pairPoFiles(enContent: String, arContent: String): Int {
-        val regexMsg = Regex("msgid\\s+\"([^\"]+)\"\\s*\\n\\s*msgstr\\s+\"([^\"]+)\"")
-        val arMatches = regexMsg.findAll(arContent).toList()
+        val arMatches = PO_MSG_REGEX.findAll(arContent).toList()
         var directPairs = 0
         for (m in arMatches) {
             val en = m.groupValues[1].trim()
@@ -1119,7 +1151,7 @@ object PatchManager {
         }
         if (directPairs > 0) return directPairs
 
-        val enMatches = regexMsg.findAll(enContent).toList()
+        val enMatches = PO_MSG_REGEX.findAll(enContent).toList()
         if (enMatches.isNotEmpty() && arMatches.isNotEmpty()) {
             val arMap = mutableMapOf<String, String>()
             for (m in arMatches) {
@@ -1150,7 +1182,7 @@ object PatchManager {
         val arList = mutableListOf<String>()
 
         for (row in enRows) {
-            val parts = row.split(Regex("[,;\\t]"), limit = 2)
+            val parts = row.split(CSV_DELIMITER_REGEX, limit = 2)
             if (parts.size == 2) {
                 val key = parts[0].trim().removeSurrounding("\"").removeSurrounding("'")
                 val text = parts[1].trim().removeSurrounding("\"").removeSurrounding("'")
@@ -1164,7 +1196,7 @@ object PatchManager {
         }
 
         for (row in arRows) {
-            val parts = row.split(Regex("[,;\\t]"), limit = 2)
+            val parts = row.split(CSV_DELIMITER_REGEX, limit = 2)
             if (parts.size == 2) {
                 val key = parts[0].trim().removeSurrounding("\"").removeSurrounding("'")
                 val text = parts[1].trim().removeSurrounding("\"").removeSurrounding("'")
@@ -1208,14 +1240,14 @@ object PatchManager {
             if (matchedByIndex > 0) return matchedByIndex
         }
 
-        val enBlocks = enContent.split(Regex("(\\r?\\n){2,}")).mapNotNull { extractSrtText(it) }
-        val arBlocks = arContent.split(Regex("(\\r?\\n){2,}")).mapNotNull { extractSrtText(it) }
+        val enBlocks = enContent.split(DOUBLE_NEWLINE_SPLIT).mapNotNull { extractSrtText(it) }
+        val arBlocks = arContent.split(DOUBLE_NEWLINE_SPLIT).mapNotNull { extractSrtText(it) }
         return pairLineLists(enBlocks, arBlocks)
     }
 
     private fun parseSrtCues(content: String): Map<Int, String> {
         val cues = mutableMapOf<Int, String>()
-        val blocks = content.split(Regex("(\\r?\\n){2,}"))
+        val blocks = content.split(DOUBLE_NEWLINE_SPLIT)
         for (block in blocks) {
             val lines = block.lines().map { it.trim() }.filter { it.isNotBlank() }
             if (lines.size >= 2) {
@@ -1232,7 +1264,7 @@ object PatchManager {
 
     private fun extractSrtText(block: String): String? {
         val textLines = block.lines().map { it.trim() }
-            .filterNot { it.isBlank() || it.matches(Regex("^\\d+$")) || it.contains("-->") }
+            .filterNot { it.isBlank() || it.matches(DIGITS_ONLY_LINE) || it.contains("-->") }
         return if (textLines.isNotEmpty()) textLines.joinToString(" ") else null
     }
 

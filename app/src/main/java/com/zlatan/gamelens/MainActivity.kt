@@ -45,6 +45,7 @@ import com.zlatan.gamelens.overlay.CalibrationOverlay
 import com.zlatan.gamelens.patch.PatchManager
 import com.zlatan.gamelens.profile.GameProfile
 import com.zlatan.gamelens.profile.GameProfileManager
+import com.zlatan.gamelens.security.SecureApiKeyStorage
 import com.zlatan.gamelens.service.ModelDownloadService
 import com.zlatan.gamelens.service.TranslationOverlayService
 import com.zlatan.gamelens.translation.ModelStatus
@@ -234,7 +235,7 @@ class MainActivity : AppCompatActivity() {
         glossaryManager = GlossaryManager(this)
         val initialConfig = TranslationConfig(
             mode = if (prefs.getString(KEY_TRANSLATION_MODE, MODE_AUTO) == MODE_OFFLINE) TranslationMode.OFFLINE_MLKIT else TranslationMode.CLOUD_OPENAI,
-            apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
+            apiKey = SecureApiKeyStorage.getApiKey(prefs, KEY_API_KEY),
             apiEndpoint = prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1") ?: "https://api.openai.com/v1",
             modelName = prefs.getString(KEY_MODEL_NAME, "gpt-4o-mini") ?: "gpt-4o-mini"
         )
@@ -560,7 +561,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.etApiKey.setText(prefs.getString(KEY_API_KEY, ""))
+        binding.etApiKey.setText(SecureApiKeyStorage.getApiKey(prefs, KEY_API_KEY))
         binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1"))
         binding.etModelName.setText(prefs.getString(KEY_MODEL_NAME, "gpt-4o-mini"))
 
@@ -604,6 +605,7 @@ class MainActivity : AppCompatActivity() {
 
         // Developer Mode
         val devMode = prefs.getBoolean(KEY_DEVELOPER_MODE, false)
+        DiagnosticLogger.isDevModeActive = devMode
         binding.switchDeveloperMode.isChecked = devMode
         binding.layoutDiagnosticConsole.visibility = if (devMode) View.VISIBLE else View.GONE
 
@@ -670,10 +672,18 @@ class MainActivity : AppCompatActivity() {
         val apiEndpoint = binding.etApiEndpoint.text?.toString()?.trim() ?: ""
         val modelName = binding.etModelName.text?.toString()?.trim() ?: "gpt-4o-mini"
 
+        val finalEndpoint = if (apiEndpoint.isBlank()) "https://api.openai.com/v1" else apiEndpoint
+        val (isValid, errorMsg) = SecureApiKeyStorage.isValidEndpointUrl(finalEndpoint)
+        if (!isValid && (selectedMode == MODE_CLOUD || selectedMode == MODE_AUTO)) {
+            binding.etApiEndpoint.error = errorMsg
+        } else {
+            binding.etApiEndpoint.error = null
+        }
+
+        SecureApiKeyStorage.saveApiKey(prefs, KEY_API_KEY, apiKey)
         prefs.edit()
             .putString(KEY_TRANSLATION_MODE, selectedMode)
-            .putString(KEY_API_KEY, apiKey)
-            .putString(KEY_API_ENDPOINT, if (apiEndpoint.isBlank()) "https://api.openai.com/v1" else apiEndpoint)
+            .putString(KEY_API_ENDPOINT, finalEndpoint)
             .putString(KEY_MODEL_NAME, if (modelName.isBlank()) "gpt-4o-mini" else modelName)
             .putBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, binding.switchOnlineEnhanced.isChecked)
             .apply()
@@ -682,7 +692,7 @@ class MainActivity : AppCompatActivity() {
             TranslationConfig(
                 mode = if (selectedMode == MODE_OFFLINE) TranslationMode.OFFLINE_MLKIT else TranslationMode.CLOUD_OPENAI,
                 apiKey = apiKey,
-                apiEndpoint = if (apiEndpoint.isBlank()) "https://api.openai.com/v1" else apiEndpoint,
+                apiEndpoint = finalEndpoint,
                 modelName = if (modelName.isBlank()) "gpt-4o-mini" else modelName
             )
         )
@@ -798,6 +808,7 @@ class MainActivity : AppCompatActivity() {
 
         // Developer Mode Toggle
         binding.switchDeveloperMode.setOnCheckedChangeListener { _, isChecked ->
+            DiagnosticLogger.isDevModeActive = isChecked
             prefs.edit().putBoolean(KEY_DEVELOPER_MODE, isChecked).apply()
             binding.layoutDiagnosticConsole.visibility = if (isChecked) View.VISIBLE else View.GONE
         }

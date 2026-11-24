@@ -10,13 +10,17 @@ class FrameDiffEngine(
     private val sampleGridSize: Int = 36,
     private val diffThresholdPercent: Float = 0.005f // 0.5% difference threshold for sensitive subtitle detection
 ) {
-    private var previousSampleHash: LongArray? = null
+    private val totalSamples = sampleGridSize * sampleGridSize
+    private val currentSampleHash = LongArray(totalSamples)
+    private val previousSampleHash = LongArray(totalSamples)
+    private var hasValidPrevious = false
     private var previousWidth: Int = 0
     private var previousHeight: Int = 0
 
     /**
      * Evaluates whether the full-screen frame has changed significantly compared to the last frame.
      * Optionally skips pixel samples falling inside the excluded bubble area.
+     * Uses pre-allocated LongArray primitive buffers for zero GC allocation churn.
      * Runs on Dispatchers.Default for zero main-thread overhead.
      */
     suspend fun hasFrameChanged(bitmap: Bitmap, excludedRect: Rect? = null): Boolean = withContext(Dispatchers.Default) {
@@ -25,29 +29,23 @@ class FrameDiffEngine(
         val w = bitmap.width
         val h = bitmap.height
 
-        // If dimensions changed (e.g. rotation), immediately treat as changed
-        if (previousWidth != w || previousHeight != h) {
+        populateSampleHash(bitmap, excludedRect)
+
+        // If dimensions changed (e.g. rotation) or first frame
+        if (!hasValidPrevious || previousWidth != w || previousHeight != h) {
             previousWidth = w
             previousHeight = h
-            previousSampleHash = computeSampleHash(bitmap, excludedRect)
-            return@withContext true
-        }
-
-        val currentHash = computeSampleHash(bitmap, excludedRect)
-        val prevHash = previousSampleHash
-
-        if (prevHash == null || prevHash.size != currentHash.size) {
-            previousSampleHash = currentHash
+            System.arraycopy(currentSampleHash, 0, previousSampleHash, 0, totalSamples)
+            hasValidPrevious = true
             return@withContext true
         }
 
         var differingSamples = 0
         var validSamples = 0
-        val totalSamples = currentHash.size
 
         for (i in 0 until totalSamples) {
-            val prevPixel = prevHash[i]
-            val currPixel = currentHash[i]
+            val prevPixel = previousSampleHash[i]
+            val currPixel = currentSampleHash[i]
 
             // -1L indicates an excluded/ignored sample (e.g. floating bubble)
             if (prevPixel == -1L || currPixel == -1L) continue
@@ -68,16 +66,15 @@ class FrameDiffEngine(
         val hasChanged = changeRatio >= diffThresholdPercent
 
         if (hasChanged) {
-            previousSampleHash = currentHash
+            System.arraycopy(currentSampleHash, 0, previousSampleHash, 0, totalSamples)
         }
 
         hasChanged
     }
 
-    private fun computeSampleHash(bitmap: Bitmap, excludedRect: Rect?): LongArray {
+    private fun populateSampleHash(bitmap: Bitmap, excludedRect: Rect?) {
         val width = bitmap.width
         val height = bitmap.height
-        val samples = LongArray(sampleGridSize * sampleGridSize)
 
         val stepX = (width / sampleGridSize).coerceAtLeast(1)
         val stepY = (height / sampleGridSize).coerceAtLeast(1)
@@ -88,18 +85,17 @@ class FrameDiffEngine(
             for (x in 0 until sampleGridSize) {
                 val sampleX = (x * stepX).coerceAtMost(width - 1)
                 if (excludedRect != null && excludedRect.contains(sampleX, sampleY)) {
-                    samples[idx++] = -1L
+                    currentSampleHash[idx++] = -1L
                 } else {
                     val pixel = bitmap.getPixel(sampleX, sampleY)
-                    samples[idx++] = pixel.toLong() and 0xFFFFFFFFL
+                    currentSampleHash[idx++] = pixel.toLong() and 0xFFFFFFFFL
                 }
             }
         }
-        return samples
     }
 
     fun reset() {
-        previousSampleHash = null
+        hasValidPrevious = false
         previousWidth = 0
         previousHeight = 0
     }

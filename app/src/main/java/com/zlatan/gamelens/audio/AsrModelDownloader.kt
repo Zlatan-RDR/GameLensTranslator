@@ -294,6 +294,11 @@ object AsrModelDownloader {
 
                                 if (!entry.isDirectory && isTarget) {
                                     val targetFile = File(outputDir, entryName)
+                                    val canonicalDest = targetFile.canonicalPath
+                                    val canonicalTargetDir = outputDir.canonicalPath + File.separator
+                                    if (!canonicalDest.startsWith(canonicalTargetDir)) {
+                                        throw SecurityException("Malicious archive entry traversal detected: ${entry.name}")
+                                    }
                                     FileOutputStream(targetFile).use { fos ->
                                         tarIn.copyTo(fos)
                                     }

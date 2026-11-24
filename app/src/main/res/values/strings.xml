@@ -127,7 +127,7 @@
 
     <!-- Subtitle History -->
     <string name="subtitle_history_title">سجل الحوارات المترجمة</string>
-    <string name="btn_export_history">تصدير (JSON / SRT)</string>
+    <string name="btn_export_history">تصدير (JSON/SRT)</string>
     <string name="btn_copy_history">نسخ</string>
     <string name="btn_clear_history">مسح</string>
 </resources>

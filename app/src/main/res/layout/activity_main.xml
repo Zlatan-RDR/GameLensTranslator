@@ -184,27 +184,27 @@
                             android:textSize="14sp"
                             android:textStyle="bold" />
 
+                        <!-- Full-width Game Profile Spinner -->
+                        <Spinner
+                            android:id="@+id/spGameProfiles"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:layout_marginTop="8dp"
+                            android:background="#FF1E293B"
+                            android:popupBackground="#FF1E293B" />
+
+                        <!-- Action Buttons Row -->
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
-                            android:orientation="horizontal"
-                            android:gravity="center_vertical">
-
-                            <!-- Light text on #1E293B surface Spinner -->
-                            <Spinner
-                                android:id="@+id/spGameProfiles"
-                                android:layout_width="0dp"
-                                android:layout_height="44dp"
-                                android:layout_weight="1"
-                                android:background="#FF1E293B"
-                                android:popupBackground="#FF1E293B" />
+                            android:orientation="horizontal">
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/btnSaveNewProfile"
-                                android:layout_width="wrap_content"
+                                android:layout_width="0dp"
                                 android:layout_height="44dp"
-                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
                                 android:text="@string/btn_new_profile"
                                 android:textColor="#0D111A"
                                 android:textSize="12sp"
@@ -214,9 +214,10 @@
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/btnDeleteProfile"
-                                android:layout_width="wrap_content"
+                                android:layout_width="0dp"
                                 android:layout_height="44dp"
-                                android:layout_marginStart="6dp"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
                                 android:text="@string/btn_delete_profile"
                                 android:textColor="#FFFFFF"
                                 android:textSize="12sp"
@@ -906,7 +907,7 @@
                                 android:id="@+id/btnExportSubtitleHistory"
                                 android:layout_width="0dp"
                                 android:layout_height="36dp"
-                                android:layout_weight="1"
+                                android:layout_weight="1.35"
                                 android:text="@string/btn_export_history"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11sp"
@@ -918,7 +919,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="36dp"
                                 android:layout_marginStart="6dp"
-                                android:layout_weight="1"
+                                android:layout_weight="0.95"
                                 android:text="@string/btn_copy_history"
                                 android:textColor="@color/text_primary"
                                 android:textSize="11sp"

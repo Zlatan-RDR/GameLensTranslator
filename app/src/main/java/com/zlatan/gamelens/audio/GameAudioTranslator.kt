@@ -435,7 +435,7 @@ class GameAudioTranslator(
         lastMatchedPatchTargetNormalized = ""
         lastMatchedPatchTimestampMs = 0L
 
-        audioScope.cancel()
+        audioScope.coroutineContext.cancelChildren()
         DiagnosticLogger.log("GameAudio: Stopped and released")
         onStateChanged?.invoke()
     }

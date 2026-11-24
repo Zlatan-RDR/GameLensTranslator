@@ -15,6 +15,7 @@ import com.google.mlkit.nl.translate.TranslatorOptions
 import com.zlatan.gamelens.db.TranslationCacheManager
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.glossary.GlossaryManager
+import com.zlatan.gamelens.security.SecureApiKeyStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -112,7 +113,7 @@ class TranslationManager(
         .retryOnConnectionFailure(true)
         .build()
 
-    private val fastMemoryCache = LruCache<String, String>(256)
+    private val fastMemoryCache = LruCache<String, String>(500)
 
     private val modelManager = RemoteModelManager.getInstance()
     private val arabicModel = TranslateRemoteModel.Builder(TranslateLanguage.ARABIC).build()
@@ -675,6 +676,13 @@ class TranslationManager(
                 put("messages", messagesArray)
             }
 
+            val (isEndpointValid, validationError) = SecureApiKeyStorage.isValidEndpointUrl(config.apiEndpoint)
+            if (!isEndpointValid) {
+                Log.w(TAG, "Blocked insecure endpoint: $validationError")
+                DiagnosticLogger.log("Translation: Blocked endpoint ($validationError)")
+                return@withContext null
+            }
+
             val endpointUrl = if (config.apiEndpoint.endsWith("/chat/completions")) {
                 config.apiEndpoint
             } else {
@@ -694,7 +702,7 @@ class TranslationManager(
                 return@withContext null
             }
 
-            val responseBody = response.body?.string() ?: return@withContext null
+            val responseBody = response.body?.use { it.string() } ?: return@withContext null
             val responseJson = JSONObject(responseBody)
             val choices = responseJson.optJSONArray("choices") ?: return@withContext null
             if (choices.length() == 0) return@withContext null
@@ -708,6 +716,14 @@ class TranslationManager(
             Log.e(TAG, "Error translating via OpenAI API: ${e.message}", e)
             null
         }
+    }
+
+    fun trimMemory() {
+        try {
+            fastMemoryCache.evictAll()
+            cacheManager.trimMemory()
+            Log.d(TAG, "TranslationManager memory trimmed")
+        } catch (_: Throwable) {}
     }
 
     fun close() {

@@ -18,6 +18,9 @@ class FastPixelDiffGate(
     private var lastWidth: Int = 0
     private var lastHeight: Int = 0
 
+    private var reusableRowPixels = IntArray(0)
+    private var reusableCurrentSamples = ByteArray(0)
+
     /**
      * Computes the luminance difference ratio between the provided bitmap and the last committed frame.
      * Retains samples in pending state until committed.
@@ -30,9 +33,16 @@ class FastPixelDiffGate(
         val samplesX = (w + stride - 1) / stride
         val samplesY = (h + stride - 1) / stride
         val totalSamples = samplesX * samplesY
-        val currentSamples = ByteArray(totalSamples)
 
-        val rowPixels = IntArray(w)
+        if (reusableCurrentSamples.size < totalSamples) {
+            reusableCurrentSamples = ByteArray(totalSamples)
+        }
+        val currentSamples = reusableCurrentSamples
+
+        if (reusableRowPixels.size < w) {
+            reusableRowPixels = IntArray(w)
+        }
+        val rowPixels = reusableRowPixels
         var sampleIdx = 0
 
         for (y in 0 until h step stride) {
@@ -50,7 +60,9 @@ class FastPixelDiffGate(
             }
         }
 
-        pendingSamples = currentSamples
+        val pending = ByteArray(sampleIdx)
+        System.arraycopy(currentSamples, 0, pending, 0, sampleIdx)
+        pendingSamples = pending
         val prev = lastLuminanceSamples
         if (prev == null || lastWidth != w || lastHeight != h || prev.size != sampleIdx) {
             return 1.0f

@@ -35,6 +35,13 @@ class OcrEngine {
         private const val TAG = "OcrEngine"
         private const val MIN_CONFIDENCE_THRESHOLD = 0.78f
         private val STANDALONE_NUMBER_OR_SYMBOL_REGEX = Regex("^[0-9\\s.,/:\\-+%$#@!&*()_=\\[\\]{}|<>?~^]+$")
+        private val WHITESPACE_REGEX = Regex("\\s+")
+        private val NON_ALPHANUMERIC_REGEX = Regex("[^a-z0-9]+")
+        private val PUNCT_FOLLOWED_BY_LETTERS_REGEX = Regex("[.!?][A-Za-z]{2,}")
+        private val BARCODE_RUN_REGEX = Regex("^[a-z]*([a-z])\\1{2,}[a-z0-9.]*$", RegexOption.IGNORE_CASE)
+        private val ALPHANUMERIC_GLITCH_REGEX = Regex("^[a-z]+\\d+[a-z0-9]*$", RegexOption.IGNORE_CASE)
+        private val BANNER_POPUP_REGEX = Regex("(?i)^A\\s+[A-Za-z]{4,12}$")
+        private val DOMAIN_OR_FILE_REGEX = Regex("^[a-z]{2,}\\.[a-z]{2,}$")
         private val SHORT_VALID_WORDS = setOf(
             "a", "i", "to", "in", "on", "at", "by", "of", "or", "is", "it",
             "no", "go", "up", "we", "he", "me", "my", "do", "so", "ok", "am", "an", "as"
@@ -47,13 +54,13 @@ class OcrEngine {
 
         fun stripBackgroundTextureGarbage(text: String): String {
             if (text.isBlank()) return ""
-            val tokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+            val tokens = text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
             val cleanTokens = tokens.filterNot { token ->
                 val clean = token.trimEnd('.', ',', '!', '?', ';', ':', '"', '\'').lowercase(java.util.Locale.US)
                 if (EXCLUDED_INTERJECTIONS.contains(clean)) return@filterNot false
                 // Obvious non-English barcode tokens: 3+ identical letters run (e.g. sss, sss.sste) or alphanumeric glitch (e.g. s8t8, tet8a)
-                val isBarcodeRun = Regex("^[a-z]*([a-z])\\1{2,}[a-z0-9.]*$", RegexOption.IGNORE_CASE).matches(clean)
-                val isAlphanumericGlitch = Regex("^[a-z]+\\d+[a-z0-9]*$", RegexOption.IGNORE_CASE).matches(clean)
+                val isBarcodeRun = BARCODE_RUN_REGEX.matches(clean)
+                val isAlphanumericGlitch = ALPHANUMERIC_GLITCH_REGEX.matches(clean)
                 isBarcodeRun || isAlphanumericGlitch
             }
             if (cleanTokens.isEmpty() && tokens.isNotEmpty()) {
@@ -101,7 +108,7 @@ class OcrEngine {
         fun scoreOcrQuality(text: String): Float {
             val trimmed = text.trim()
             if (trimmed.isEmpty()) return 0.0f
-            val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+            val tokens = trimmed.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
             if (tokens.isEmpty()) return 0.0f
 
             var score = 1.0f
@@ -169,7 +176,7 @@ class OcrEngine {
 
             // 1. Terminal glued punctuation check: e.g. "Exactly. Good luck 47.RROBERTRow"
             // Punctuation immediately followed by >=2 letters with no whitespace is an OCR gluing artifact / credit pollution
-            if (Regex("[.!?][A-Za-z]{2,}").containsMatchIn(newTrim)) {
+            if (PUNCT_FOLLOWED_BY_LETTERS_REGEX.containsMatchIn(newTrim)) {
                 return SupersetVerdict.CREDIT_POLLUTION
             }
 
@@ -197,8 +204,8 @@ class OcrEngine {
                 matched = true
             } else {
                 // Token-level sliding window match
-                val cWords = oldTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
-                val nWords = newTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+                val cWords = oldTrim.lowercase(java.util.Locale.US).split(NON_ALPHANUMERIC_REGEX).filter { it.isNotBlank() }
+                val nWords = newTrim.lowercase(java.util.Locale.US).split(NON_ALPHANUMERIC_REGEX).filter { it.isNotBlank() }
                 if (cWords.size >= 2 && nWords.size > cWords.size) {
                     val windowSize = cWords.size
                     var bestWindow = -1
@@ -226,8 +233,8 @@ class OcrEngine {
 
             if (!matched || (addedPrefix.isEmpty() && addedSuffix.isEmpty())) {
                 // Check if high word recall (>= 65%) with non-matching extra tokens indicates credit/dossier pollution
-                val oldWords = oldTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
-                val newWords = newTrim.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+                val oldWords = oldTrim.lowercase(java.util.Locale.US).split(NON_ALPHANUMERIC_REGEX).filter { it.isNotBlank() }
+                val newWords = newTrim.lowercase(java.util.Locale.US).split(NON_ALPHANUMERIC_REGEX).filter { it.isNotBlank() }
 
                 if (oldWords.isNotEmpty() && newWords.isNotEmpty()) {
                     val matchingCount = oldWords.count { ow -> newWords.contains(ow) }
@@ -237,7 +244,7 @@ class OcrEngine {
                         val extraTokens = newWords.filter { nw -> !oldWords.contains(nw) }
                         if (extraTokens.isNotEmpty()) {
                             val extraString = extraTokens.joinToString(" ")
-                            val rawNewTokens = newTrim.split(Regex("\\s+")).filter { it.isNotBlank() }
+                            val rawNewTokens = newTrim.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
                             val rawExtraTokens = rawNewTokens.filter { nt ->
                                 val cleanNt = nt.lowercase(java.util.Locale.US).filter { it.isLetterOrDigit() }
                                 extraTokens.contains(cleanNt)
@@ -267,7 +274,7 @@ class OcrEngine {
 
             // 3. Left-edge pollution guards: newly introduced prefixes
             if (addedPrefix.isNotEmpty()) {
-                val prefixTokens = addedPrefix.split(Regex("\\s+")).filter { it.isNotBlank() }
+                val prefixTokens = addedPrefix.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
                 val oldStartsWithCapital = oldTrim.firstOrNull()?.isUpperCase() == true
                 if (uppercaseRatio(addedPrefix) >= 0.45f ||
                     scoreOcrQuality(addedPrefix) < 0.75f ||
@@ -528,7 +535,7 @@ class OcrEngine {
      * valid English vowel/consonant letter patterns (>= 3 letters) or known short English words.
      */
     private fun passesEnglishTokenRatioFilter(text: String): Boolean {
-        val tokens = text.split(Regex("\\s+")).map { it.trim() }.filter { it.isNotBlank() }
+        val tokens = text.split(WHITESPACE_REGEX).map { it.trim() }.filter { it.isNotBlank() }
         if (tokens.isEmpty()) return false
 
         var validCount = 0
@@ -675,7 +682,7 @@ class OcrEngine {
                             }
 
                             // 4. Reject Clipped Single-Word HUD Action Prompts & Unpunctuated Single-Word Garbage
-                            val clusterTokens = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+                            val clusterTokens = text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
                             if (clusterTokens.size == 1) {
                                 val word = clusterTokens[0]
                                 val coreLetters = word.filter { it.isLetter() }.lowercase(java.util.Locale.US)
@@ -687,7 +694,7 @@ class OcrEngine {
                                     return@filter false
                                 }
                             }
-                            if (Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(text)) {
+                            if (BANNER_POPUP_REGEX.matches(text)) {
                                 val hasTerminal = text.endsWith(".") || text.endsWith("!") || text.endsWith("?")
                                 if (!hasTerminal && PatchManager.lookup(text) == null) {
                                     return@filter false
@@ -734,11 +741,11 @@ class OcrEngine {
                         val normalizedJoined = OcrTextCleaner.normalizeOcrArtifacts(joined)
                         val strippedJoined = stripBackgroundTextureGarbage(normalizedJoined)
                         val totalLetters = strippedJoined.count { it.isLetter() }
-                        val realWords = strippedJoined.split(Regex("\\s+")).filter { w ->
+                        val realWords = strippedJoined.split(WHITESPACE_REGEX).filter { w ->
                             val lettersOnly = w.filter { it.isLetter() }
                             lettersOnly.length >= 2 && !OcrTextCleaner.HUD_ACTION_STEMS.contains(lettersOnly.lowercase(java.util.Locale.US))
                         }
-                        val joinedTokens = strippedJoined.split(Regex("\\s+")).filter { it.isNotBlank() }
+                        val joinedTokens = strippedJoined.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
                         val isSingleWordHudFragment = joinedTokens.size == 1 && run {
                             val word = joinedTokens[0]
                             val coreLetters = word.filter { it.isLetter() }.lowercase(java.util.Locale.US)
@@ -759,14 +766,14 @@ class OcrEngine {
                         val hasGluedDotOrCorruptedDiacritics = (joinedTokens.size in 1..3) && run {
                             val hasGluedDot = joinedTokens.any { token ->
                                 val clean = token.trimEnd('.', ',', '!', '?', ';', ':')
-                                Regex("^[a-z]{2,}\\.[a-z]{2,}$").matches(clean) &&
+                                DOMAIN_OR_FILE_REGEX.matches(clean) &&
                                         !clean.endsWith(".com") && !clean.endsWith(".org") && !clean.endsWith(".net")
                             }
                             val corruptedDiacritics = setOf('ř', 'č', 'š', 'ž', 'ť', 'ď', 'ň', 'ů', 'ł', 'Ř', 'Č', 'Š', 'Ž', 'Ť', 'Ď', 'Ň', 'Ů', 'Ł')
                             val hasCorruptedDiacritic = strippedJoined.any { it in corruptedDiacritics }
                             (hasGluedDot || hasCorruptedDiacritic) && PatchManager.lookup(strippedJoined) == null
                         }
-                        val isBannerPopup = Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(strippedJoined) &&
+                        val isBannerPopup = BANNER_POPUP_REGEX.matches(strippedJoined) &&
                                 !strippedJoined.endsWith(".") && !strippedJoined.endsWith("!") &&
                                 PatchManager.lookup(strippedJoined) == null
 

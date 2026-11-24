@@ -16,6 +16,9 @@ interface TranslationDao {
     @Query("SELECT COUNT(*) FROM translations")
     suspend fun getCount(): Int
 
+    @Query("DELETE FROM translations WHERE id NOT IN (SELECT id FROM translations ORDER BY id DESC LIMIT 5000)")
+    suspend fun pruneOldEntries(): Int
+
     @Query("DELETE FROM translations")
     suspend fun clearAll()
 }
