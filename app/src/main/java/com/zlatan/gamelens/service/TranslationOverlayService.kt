@@ -202,6 +202,7 @@ class TranslationOverlayService : Service() {
             glossaryManager = GlossaryManager(this)
             val config = loadTranslationConfigFromPreferences()
             translationManager = TranslationManager(this, cacheManager, glossaryManager, config)
+            com.zlatan.gamelens.ocr.EnglishWordRepairer.init(applicationContext)
 
             // Initialize Seamless Full-Screen Overlay Renderer
             seamlessOverlayRenderer = SeamlessOverlayRenderer(this)
@@ -520,9 +521,9 @@ class TranslationOverlayService : Service() {
 
         val (screenW, screenH, dpi) = getRealScreenDimensions()
 
-        // 1. Auto-pause in Portrait or when GameLens is in the foreground
+        // 1. Auto-pause during rapid display resize transition or when GameLens is in the foreground
         val nowRealtime = android.os.SystemClock.elapsedRealtime()
-        if (screenH > screenW || (nowRealtime - lastResizeTimestampMs < 500L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
+        if ((nowRealtime - lastResizeTimestampMs < 650L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
             if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
@@ -552,7 +553,7 @@ class TranslationOverlayService : Service() {
             lastResizeTimestampMs = android.os.SystemClock.elapsedRealtime()
         }
 
-        if (curH > curW || (android.os.SystemClock.elapsedRealtime() - lastResizeTimestampMs < 500L)) {
+        if (android.os.SystemClock.elapsedRealtime() - lastResizeTimestampMs < 650L) {
             seamlessOverlayRenderer?.clear()
             lastDisplayedEnglishText = ""
             candidateEnglishText = ""
@@ -730,13 +731,24 @@ class TranslationOverlayService : Service() {
         lastSubtitleVisibleOnScreenMs = now
         seamlessOverlayRenderer?.keepSubtitleAlive()
 
-        // Jitter Gate: skip if >= 88% similar to currently displayed text (0ms, zero flicker)
-        if (lastDisplayedEnglishText.isNotEmpty() && com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(mergedEnglish, lastDisplayedEnglishText, 0.88f)) {
-            Log.d(TAG, "OCR skipped [jitter/dedup]: \"$mergedEnglish\" (matches displayed: \"$lastDisplayedEnglishText\")")
+        // Spaceless Jitter Gate: compare with currently displayed subtitle
+        if (lastDisplayedEnglishText.isNotEmpty() && com.zlatan.gamelens.ocr.OcrTextCleaner.isSameActiveSubtitle(lastDisplayedEnglishText, mergedEnglish)) {
             consecutiveEmptyRoiCount = 0
             lastSubtitleVisibleOnScreenMs = now
             seamlessOverlayRenderer?.keepSubtitleAlive()
-            return
+
+            // Quality-Upgrade Only Rule: skip re-translation UNLESS candidate genuinely upgrades dictionary coverage
+            val allowUpgrade = !lastDisplayWasPatch && run {
+                val candidateCov = com.zlatan.gamelens.ocr.EnglishWordRepairer.dictionaryCoverage(mergedEnglish)
+                val displayedCov = com.zlatan.gamelens.ocr.EnglishWordRepairer.dictionaryCoverage(lastDisplayedEnglishText)
+                (candidateCov - displayedCov) >= 0.12f
+            }
+
+            if (!allowUpgrade) {
+                Log.d(TAG, "OCR skipped [spaceless-jitter/quality-gate]: \"$mergedEnglish\" (matches displayed: \"$lastDisplayedEnglishText\")")
+                return
+            }
+            Log.d(TAG, "OCR quality-upgrade allowed for active subtitle: \"$lastDisplayedEnglishText\" -> \"$mergedEnglish\"")
         }
 
         // Prefix/subset overwrite guard: ignore new OCR strings that are shorter subsets/prefixes (>= 75% token overlap) of the currently displayed sentence within 5000ms
@@ -830,7 +842,8 @@ class TranslationOverlayService : Service() {
             val nowMs = android.os.SystemClock.uptimeMillis()
             val isCandidateMatch = candidateEnglishText.isNotEmpty() &&
                     (nowMs - candidateTimestamp <= 1000L) &&
-                    com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(promptNormalized, candidateEnglishText, 0.80f)
+                    (com.zlatan.gamelens.ocr.OcrTextCleaner.isSameActiveSubtitle(candidateEnglishText, promptNormalized) ||
+                     com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilarForCache(promptNormalized, candidateEnglishText, 0.80f))
 
             if (!isCandidateMatch) {
                 // First frame of low-confidence candidate: store and force instant pass on the very next 140ms poll
@@ -854,7 +867,7 @@ class TranslationOverlayService : Service() {
         val (finalW, finalH, _) = getRealScreenDimensions()
         val (finalCurW, finalCurH) = captureMgr.getDimensions()
         val finalRealtime = android.os.SystemClock.elapsedRealtime()
-        if (finalH > finalW || finalCurH > finalCurW || (finalRealtime - lastResizeTimestampMs < 500L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
+        if ((finalRealtime - lastResizeTimestampMs < 650L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
             return
         }
 

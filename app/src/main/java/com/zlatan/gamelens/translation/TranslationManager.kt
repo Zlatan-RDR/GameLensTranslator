@@ -104,16 +104,12 @@ class TranslationManager(
         }
     }
 
-    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+    private val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectionPool(okhttp3.ConnectionPool(4, 2L, TimeUnit.MINUTES))
         .connectTimeout(1200L, TimeUnit.MILLISECONDS)
-        .readTimeout(1200L, TimeUnit.MILLISECONDS)
-        .writeTimeout(1200L, TimeUnit.MILLISECONDS)
-        .build()
-
-    private val googleHttpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(900L, TimeUnit.MILLISECONDS)
-        .readTimeout(900L, TimeUnit.MILLISECONDS)
-        .writeTimeout(900L, TimeUnit.MILLISECONDS)
+        .readTimeout(1400L, TimeUnit.MILLISECONDS)
+        .callTimeout(1600L, TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val fastMemoryCache = LruCache<String, String>(256)
@@ -164,7 +160,7 @@ class TranslationManager(
     fun findFuzzyMemoryCacheMatch(text: String, threshold: Float = 0.90f): String? {
         val snapshot = fastMemoryCache.snapshot()
         for ((cachedEn, cachedAr) in snapshot) {
-            if (com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(text, cachedEn, threshold)) {
+            if (com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilarForCache(text, cachedEn, threshold)) {
                 return cachedAr
             }
         }
@@ -196,7 +192,7 @@ class TranslationManager(
                 .get()
                 .build()
 
-            googleHttpClient.newCall(request).execute().use { response ->
+            sharedHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
                 val bodyStr = response.body?.string() ?: return@withContext null
                 val jsonArray = JSONArray(bodyStr)
@@ -686,7 +682,7 @@ class TranslationManager(
                 .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
-            val response = httpClient.newCall(request).execute()
+            val response = sharedHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 Log.w(TAG, "OpenAI translation failed with HTTP code: ${response.code}")
                 return@withContext null

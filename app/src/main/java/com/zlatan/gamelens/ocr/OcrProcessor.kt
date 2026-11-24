@@ -210,7 +210,7 @@ object OcrTextCleaner {
      */
     fun normalizeOcrArtifacts(text: String): String {
         if (text.isBlank()) return ""
-        var s = text.trim()
+        var s = EnglishWordRepairer.repair(text.trim())
 
         // Split-word and spacing repairs
         s = s.replace(Regex("(?i)\\bBenj\\s+amin\\b"), "Benjamin")
@@ -516,11 +516,10 @@ object OcrTextCleaner {
     }
 
     /**
-     * Calculates token similarity between two strings to avoid re-translating jitter (>= threshold).
-     * Enforces exact word count match and rejects matches where any differing alphabetic word
-     * of length >= 4 has Levenshtein distance > 1.
+     * Strict word-count + Levenshtein <= 1 matching exclusively for TranslationManager cache hits
+     * (ensuring distinct nouns like "gardener" != "guard" never collide in cache).
      */
-    fun isSimilar(s1: String, s2: String, threshold: Float = 0.88f): Boolean {
+    fun isSimilarForCache(s1: String, s2: String, threshold: Float = 0.90f): Boolean {
         if (s1.equals(s2, ignoreCase = true)) return true
         val n1 = s1.trim().lowercase(Locale.US).replace(Regex("[^a-z0-9 ]"), "")
         val n2 = s2.trim().lowercase(Locale.US).replace(Regex("[^a-z0-9 ]"), "")
@@ -544,6 +543,27 @@ object OcrTextCleaner {
         if (maxLen == 0) return true
         val dist = levenshtein(n1, n2)
         val similarity = 1.0f - (dist.toFloat() / maxLen.toFloat())
+        return similarity >= threshold
+    }
+
+    fun isSimilar(s1: String, s2: String, threshold: Float = 0.88f): Boolean = isSimilarForCache(s1, s2, threshold)
+
+    /**
+     * Active-Screen Spaceless Jitter Gate:
+     * Compares two subtitle strings after stripping whitespace and punctuation.
+     * Prevents re-translating jitter when spaces fluctuate (e.g. "Don'tact so high" vs "Don't act sohigh").
+     */
+    fun isSameActiveSubtitle(displayedEn: String, candidateEn: String): Boolean {
+        if (displayedEn.equals(candidateEn, ignoreCase = true)) return true
+        val s1 = displayedEn.lowercase(Locale.US).filter { it.isLetterOrDigit() }
+        val s2 = candidateEn.lowercase(Locale.US).filter { it.isLetterOrDigit() }
+        if (s1 == s2) return true
+        if (s1.isEmpty() || s2.isEmpty()) return false
+
+        val maxLen = maxOf(s1.length, s2.length)
+        val dist = levenshtein(s1, s2)
+        val similarity = 1.0f - (dist.toFloat() / maxLen.toFloat())
+        val threshold = if (maxLen >= 30) 0.88f else 0.92f
         return similarity >= threshold
     }
 
