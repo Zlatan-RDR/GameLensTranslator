@@ -52,6 +52,8 @@ android {
             val unified = signingConfigs.findByName("unified")
             if (unified != null) {
                 signingConfig = unified
+            } else {
+                signingConfig = signingConfigs.getByName("debug")
             }
             isMinifyEnabled = false
             proguardFiles(

@@ -644,6 +644,7 @@
                                 android:layout_height="34dp"
                                 android:layout_weight="1"
                                 android:text="@string/preset_bottom_subtitles"
+                                android:textColor="#F8FAFC"
                                 android:textSize="10sp"
                                 app:backgroundTint="#FF1E293B"
                                 app:cornerRadius="6dp" />
@@ -655,6 +656,7 @@
                                 android:layout_marginStart="4dp"
                                 android:layout_weight="1"
                                 android:text="@string/preset_center_dialog"
+                                android:textColor="#F8FAFC"
                                 android:textSize="10sp"
                                 app:backgroundTint="#FF1E293B"
                                 app:cornerRadius="6dp" />
@@ -666,6 +668,7 @@
                                 android:layout_marginStart="4dp"
                                 android:layout_weight="1"
                                 android:text="@string/preset_full_screen"
+                                android:textColor="#F8FAFC"
                                 android:textSize="10sp"
                                 app:backgroundTint="#FF1E293B"
                                 app:cornerRadius="6dp" />
@@ -932,9 +935,9 @@
                                 android:layout_height="36dp"
                                 android:layout_marginStart="6dp"
                                 android:text="@string/btn_clear_history"
-                                android:textColor="#FFEF4444"
+                                android:textColor="#FCA5A5"
                                 android:textSize="11sp"
-                                app:backgroundTint="#FF1E293B"
+                                app:backgroundTint="#3B1C1C"
                                 app:cornerRadius="6dp" />
                         </LinearLayout>
 

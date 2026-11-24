@@ -1089,7 +1089,7 @@ class MainActivity : AppCompatActivity() {
             val input = EditText(this).apply {
                 hint = getString(R.string.dialog_new_profile_hint)
             }
-            AlertDialog.Builder(this)
+            val dialog = AlertDialog.Builder(this)
                 .setTitle(R.string.dialog_new_profile_title)
                 .setView(input)
                 .setPositiveButton(R.string.btn_create) { _, _ ->
@@ -1124,7 +1124,10 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 .setNegativeButton(R.string.btn_cancel, null)
-                .show()
+                .create()
+            dialog.show()
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.parseColor("#34D399"))
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Color.parseColor("#CBD5E1"))
         }
 
         binding.btnDeleteProfile.setOnClickListener {
