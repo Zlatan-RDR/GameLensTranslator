@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/cardQuickMenuRoot"
+    android:layout_width="320dp"
+    android:layout_height="wrap_content"
+    android:layout_gravity="center"
+    app:cardBackgroundColor="#FF0D111A"
+    app:cardCornerRadius="14dp"
+    app:cardElevation="8dp"
+    app:strokeColor="#FF2A3547"
+    app:strokeWidth="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="قائمة الإجراءات السريعة"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btnQuickClose"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:gravity="center"
+                android:text="✕"
+                android:textColor="#94A3B8"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:background="?android:attr/selectableItemBackgroundBorderless" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="10dp"
+            android:layout_marginBottom="12dp"
+            android:background="#FF1E293B" />
+
+        <!-- 1. Pause / Resume OCR -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnQuickPauseResume"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:text="إيقاف مؤقت للترجمة"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            app:backgroundTint="#FF1E293B"
+            app:cornerRadius="8dp"
+            app:strokeColor="#FF334155"
+            app:strokeWidth="1dp" />
+
+        <!-- 2. Recent 5 Subtitles -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnQuickRecentSubtitles"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="8dp"
+            android:text="آخر 5 حوارات مترجمة"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            app:backgroundTint="#FF1E293B"
+            app:cornerRadius="8dp"
+            app:strokeColor="#FF334155"
+            app:strokeWidth="1dp" />
+
+        <!-- Recent Subtitles Text Container (expandable) -->
+        <TextView
+            android:id="@+id/tvQuickRecentSubs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:maxLines="8"
+            android:scrollbars="vertical"
+            android:background="#FF111827"
+            android:padding="8dp"
+            android:textColor="#E2E8F0"
+            android:textSize="11sp"
+            android:visibility="gone" />
+
+        <!-- 3. Toggle Display Mode (Offset Above / Opaque Cover) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnQuickToggleDisplayMode"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="8dp"
+            android:text="تبديل نمط العرض (فوق الحوار / غطاء معتم)"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            app:backgroundTint="#FF1E293B"
+            app:cornerRadius="8dp"
+            app:strokeColor="#FF334155"
+            app:strokeWidth="1dp" />
+
+        <!-- 4. Quick ROI Recalibration -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnQuickRecalibrate"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="8dp"
+            android:text="معايرة سريعة لمنطقة القراءة (ROI)"
+            android:textColor="#0D111A"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            app:backgroundTint="#FF10B981"
+            app:cornerRadius="8dp" />
+
+    </LinearLayout>
+</androidx.cardview.widget.CardView>

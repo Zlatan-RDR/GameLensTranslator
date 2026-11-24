@@ -51,7 +51,11 @@ class EnglishWordRepairerTest {
             "Disgu ise" to "Disguise",
             "Inst inct" to "Instinct",
             "unsi lenced" to "unsilenced",
-            "LoW" to "low"
+            "LoW" to "low",
+            "Salt! Shameon you" to "Salt! Shame on you",
+            "appointa" to "appoint a",
+            "clienton" to "client on",
+            "suppliedinformation" to "supplied information"
         )
 
         for ((input, expected) in cases) {

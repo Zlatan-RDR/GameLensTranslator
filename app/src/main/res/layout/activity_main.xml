@@ -327,6 +327,36 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="11sp" />
 
+                <!-- Switch: Typewriter Mode -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="8dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="وضع النص المتدفق (JRPG / Visual Novels)"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp" />
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switchTypewriterMode"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="تثبيت الحوارات المتدفقة تدريجياً لمدة 350ms قبل ترجمتها لمنع الوميض والترجمة الجزئية"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnSaveSettings"
                     android:layout_width="wrap_content"
@@ -635,6 +665,55 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
+                <!-- Per-Game Profile Selector Row -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="ملف تعريف اللعبة (Game Profile):"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginTop="4dp">
+
+                    <Spinner
+                        android:id="@+id/spGameProfiles"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:background="#263238" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnSaveNewProfile"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginStart="4dp"
+                        android:minWidth="40dp"
+                        android:text="+ جديد"
+                        android:textSize="11sp"
+                        app:backgroundTint="@color/accent"
+                        android:textColor="@color/background_dark"
+                        app:cornerRadius="6dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnDeleteProfile"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:layout_marginStart="4dp"
+                        android:minWidth="40dp"
+                        android:text="حذف"
+                        android:textSize="11sp"
+                        app:backgroundTint="#B71C1C"
+                        android:textColor="@android:color/white"
+                        app:cornerRadius="6dp" />
+                </LinearLayout>
+
                 <!-- RadioGroup for Cover Mode -->
                 <RadioGroup
                     android:id="@+id/rgCoverMode"
@@ -805,6 +884,21 @@
                         android:textColor="@color/text_primary"
                         android:textSize="14sp"
                         android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnExportSubtitleHistory"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:minWidth="48dp"
+                        android:minHeight="36dp"
+                        android:text="تصدير"
+                        android:textColor="@color/accent"
+                        android:textSize="12sp"
+                        app:backgroundTint="@android:color/transparent"
+                        app:elevation="0dp"
+                        app:strokeWidth="0dp"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnCopySubtitleHistory"

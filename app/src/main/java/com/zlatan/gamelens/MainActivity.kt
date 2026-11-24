@@ -33,6 +33,8 @@ import com.zlatan.gamelens.diag.SubtitleHistoryManager
 import com.zlatan.gamelens.glossary.GlossaryManager
 import com.zlatan.gamelens.overlay.CalibrationOverlay
 import com.zlatan.gamelens.patch.PatchManager
+import com.zlatan.gamelens.profile.GameProfile
+import com.zlatan.gamelens.profile.GameProfileManager
 import com.zlatan.gamelens.service.ModelDownloadService
 import com.zlatan.gamelens.service.TranslationOverlayService
 import com.zlatan.gamelens.translation.ModelStatus
@@ -55,6 +57,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_ONLINE_TRANSLATE_ENHANCED = "key_online_translate_enhanced"
         const val KEY_SUBTITLE_FONT_SIZE_SP = "key_subtitle_font_size_sp"
         const val DEFAULT_FONT_SIZE_SP = 18f
+        const val KEY_TYPEWRITER_MODE = "typewriter_mode_enabled"
         const val MODE_OPAQUE_COVER = "opaque_cover"
         const val MODE_OFFSET_ABOVE = "offset_above"
         const val KEY_MIGRATED_OFFSET_ABOVE_V2 = "migrated_offset_above_v2"
@@ -73,6 +76,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var translationManager: TranslationManager
 
     private var isServiceRunning = false
+    private var isUpdatingProfileUi = false
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -490,10 +494,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.switchOnlineEnhanced.isChecked = prefs.getBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, false)
+        binding.switchTypewriterMode.isChecked = prefs.getBoolean(KEY_TYPEWRITER_MODE, false)
 
         val fontSizeSp = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
         binding.sliderFontSize.progress = (fontSizeSp - 14f).toInt().coerceIn(0, 10)
         binding.tvFontSizeValue.text = "${fontSizeSp.toInt()} sp"
+
+        if (!isUpdatingProfileUi) {
+            setupGameProfileSelector()
+        }
     }
 
     private fun setupListeners() {
@@ -719,6 +728,116 @@ class MainActivity : AppCompatActivity() {
             DiagnosticLogger.clear()
             refreshDiagnosticLogs()
             Toast.makeText(this, "تم مسح السجل", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.switchTypewriterMode.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_TYPEWRITER_MODE, isChecked).apply()
+            val curProfile = GameProfileManager.getActiveProfile(this)
+            GameProfileManager.saveProfile(this, curProfile.copy(typewriterMode = isChecked))
+            Toast.makeText(this, if (isChecked) "تم تفعيل وضع النص المتدفق (350ms)" else "تم إيقاف وضع النص المتدفق (استجابة فورية)", Toast.LENGTH_SHORT).show()
+        }
+
+        binding.btnExportSubtitleHistory.setOnClickListener {
+            if (SubtitleHistoryManager.historyFlow.value.isEmpty()) {
+                Toast.makeText(this, "لا توجد حوارات مسجلة بعد للتصدير", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val options = arrayOf("JSON Patch (تعديل اللعبة والمشاركة)", "SRT Subtitles (ملف ترجمة مرئي)")
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("تصدير الحوارات المسجلة")
+                .setItems(options) { _, which ->
+                    val format = if (which == 0) SubtitleHistoryManager.ExportFormat.JSON else SubtitleHistoryManager.ExportFormat.SRT
+                    val savedFileName = SubtitleHistoryManager.exportSessionToDownloads(this, format)
+                    if (savedFileName != null) {
+                        Toast.makeText(this, "تم الحفظ بنجاح: $savedFileName في مجلد Downloads/GameLens/Exports/", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this, "تعذر حفظ الملف", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .setNegativeButton("إلغاء", null)
+                .show()
+        }
+    }
+
+    private fun setupGameProfileSelector() {
+        val profiles = GameProfileManager.getProfiles(this)
+        val profileNames = profiles.map { it.name }
+        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, profileNames)
+        binding.spGameProfiles.adapter = adapter
+
+        val activeProfileId = GameProfileManager.getActiveProfileId(this)
+        val activeIndex = profiles.indexOfFirst { it.id == activeProfileId }.coerceAtLeast(0)
+        binding.spGameProfiles.setSelection(activeIndex)
+
+        binding.spGameProfiles.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (isUpdatingProfileUi) return
+                val selectedProfile = profiles.getOrNull(position) ?: return
+                if (selectedProfile.id != GameProfileManager.getActiveProfileId(this@MainActivity)) {
+                    GameProfileManager.applyProfile(this@MainActivity, selectedProfile.id)
+                    isUpdatingProfileUi = true
+                    loadSettings()
+                    isUpdatingProfileUi = false
+                    Toast.makeText(this@MainActivity, "تم تطبيق ملف: ${selectedProfile.name}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+
+        binding.btnSaveNewProfile.setOnClickListener {
+            val input = android.widget.EditText(this).apply {
+                hint = "اسم ملف اللعبة (مثال: Witcher 3)"
+            }
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("حفظ ملف تعريف جديد")
+                .setView(input)
+                .setPositiveButton("حفظ") { _, _ ->
+                    val name = input.text.toString().trim()
+                    if (name.isNotEmpty()) {
+                        val calRect = CalibrationOverlay.getCalibratedRect(prefs)
+                        val displayMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OFFSET_ABOVE) ?: MODE_OFFSET_ABOVE
+                        val fontSize = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
+                        val typewriter = prefs.getBoolean(KEY_TYPEWRITER_MODE, false)
+                        val newId = "profile_" + System.currentTimeMillis()
+                        val newProfile = GameProfile(
+                            id = newId,
+                            name = name,
+                            roiLeft = calRect.left,
+                            roiTop = calRect.top,
+                            roiRight = calRect.right,
+                            roiBottom = calRect.bottom,
+                            displayMode = displayMode,
+                            fontSizeSp = fontSize,
+                            typewriterMode = typewriter
+                        )
+                        GameProfileManager.saveProfile(this, newProfile)
+                        GameProfileManager.applyProfile(this, newId)
+                        setupGameProfileSelector()
+                        Toast.makeText(this, "تم إنشاء وحفظ ملف: $name", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .setNegativeButton("إلغاء", null)
+                .show()
+        }
+
+        binding.btnDeleteProfile.setOnClickListener {
+            val curId = GameProfileManager.getActiveProfileId(this)
+            if (curId == "default") {
+                Toast.makeText(this, "لا يمكن حذف الملف الافتراضي", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val curProfile = GameProfileManager.getActiveProfile(this)
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("تأكيد الحذف")
+                .setMessage("هل تريد بالتأكيد حذف ملف: ${curProfile.name}؟")
+                .setPositiveButton("حذف") { _, _ ->
+                    GameProfileManager.deleteProfile(this, curId)
+                    setupGameProfileSelector()
+                    loadSettings()
+                    Toast.makeText(this, "تم حذف الملف", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("إلغاء", null)
+                .show()
         }
     }
 

@@ -305,7 +305,11 @@ class OcrEngine {
     private data class ElementCluster(
         val text: String,
         val top: Int,
+        val bottom: Int = 0,
+        val left: Int = 0,
+        val right: Int = 0,
         val centerX: Float,
+        val centerY: Float = 0f,
         val isCentered: Boolean
     )
 
@@ -629,13 +633,19 @@ class OcrEngine {
                             val cLeft = c.mapNotNull { it.boundingBox?.left }.minOrNull() ?: (line.boundingBox?.left ?: 0)
                             val cRight = c.mapNotNull { it.boundingBox?.right }.maxOrNull() ?: (line.boundingBox?.right ?: 0)
                             val cTop = c.mapNotNull { it.boundingBox?.top }.minOrNull() ?: (line.boundingBox?.top ?: 0)
+                            val cBottom = c.mapNotNull { it.boundingBox?.bottom }.maxOrNull() ?: (line.boundingBox?.bottom ?: (cTop + 24))
                             val cCenterX = (cLeft + cRight) / 2f
+                            val cCenterY = (cTop + cBottom) / 2f
                             val cxRatio = if (roiWidth > 0f) cCenterX / roiWidth else 0.5f
                             allClusters.add(
                                 ElementCluster(
                                     text = cText,
                                     top = cTop,
+                                    bottom = cBottom,
+                                    left = cLeft,
+                                    right = cRight,
                                     centerX = cCenterX,
+                                    centerY = cCenterY,
                                     isCentered = cxRatio in 0.18f..0.82f
                                 )
                             )
@@ -644,7 +654,7 @@ class OcrEngine {
 
                     val hasCenteredCluster = allClusters.any { it.isCentered && it.text.any { ch -> ch.isLetter() } }
 
-                    val lines = allClusters
+                    val filteredClusters = allClusters
                         .mapNotNull { cluster ->
                             val stripped = stripBackgroundTextureGarbage(cluster.text)
                             if (stripped.isBlank()) null else cluster.copy(text = stripped)
@@ -691,8 +701,33 @@ class OcrEngine {
                             !OcrTextCleaner.isGarbledDocumentNoise(text) &&
                             !OcrTextCleaner.isDiacriticSelfOcrGarble(text)
                         }
-                        .sortedBy { it.top }
-                        .map { OcrTextCleaner.normalizeOcrArtifacts(it.text.trim()) }
+
+                    // Sort detected OCR lines strictly by line-center Y buckets (rowThreshold = medianLineHeight * 0.55f),
+                    // then left-to-right by boundingBox.left inside each row bucket, so a fragment from Line 2 can NEVER jump into Line 1.
+                    val sortedClusters = run {
+                        if (filteredClusters.isEmpty()) return@run emptyList<ElementCluster>()
+                        val heights = filteredClusters.map { (it.bottom - it.top).coerceAtLeast(1) }.sorted()
+                        val medianLineHeight = heights[heights.size / 2].toFloat().coerceAtLeast(12f)
+                        val rowThreshold = medianLineHeight * 0.55f
+
+                        val sortedByCenterY = filteredClusters.sortedBy { it.centerY }
+                        val rows = mutableListOf<MutableList<ElementCluster>>()
+                        for (cluster in sortedByCenterY) {
+                            val matchingRow = rows.firstOrNull { row ->
+                                val rowAvgY = row.map { it.centerY }.average().toFloat()
+                                kotlin.math.abs(rowAvgY - cluster.centerY) <= rowThreshold
+                            }
+                            if (matchingRow != null) {
+                                matchingRow.add(cluster)
+                            } else {
+                                rows.add(mutableListOf(cluster))
+                            }
+                        }
+                        rows.sortedBy { row -> row.map { it.centerY }.average() }
+                            .flatMap { row -> row.sortedBy { it.left } }
+                    }
+
+                    val lines = sortedClusters.map { OcrTextCleaner.normalizeOcrArtifacts(it.text.trim()) }
 
                     val validLines = if (lines.isNotEmpty()) {
                         val joined = lines.joinToString(" ")

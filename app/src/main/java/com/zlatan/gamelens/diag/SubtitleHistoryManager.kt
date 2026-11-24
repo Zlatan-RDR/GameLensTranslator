@@ -1,11 +1,22 @@
 package com.zlatan.gamelens.diag
 
+import android.content.ContentValues
+import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.ConcurrentLinkedDeque
 
 /**
@@ -91,5 +102,99 @@ object SubtitleHistoryManager {
 
     fun flush(context: android.content.Context) {
         com.zlatan.gamelens.patch.PatchManager.flushPendingSession(context)
+    }
+
+    enum class ExportFormat { JSON, SRT }
+
+    /**
+     * Exports the current translated dialogue session to Downloads/GameLens/Exports/
+     * via MediaStore (Scoped-Storage compliant on Android 10-16, zero runtime permissions needed).
+     */
+    fun exportSessionToDownloads(context: Context, format: ExportFormat): String? {
+        val list = entries.toList()
+        if (list.isEmpty()) return null
+
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val fileName = when (format) {
+            ExportFormat.JSON -> "gamelens_patch_$timeStamp.json"
+            ExportFormat.SRT -> "gamelens_subs_$timeStamp.srt"
+        }
+
+        val contentBytes = when (format) {
+            ExportFormat.JSON -> {
+                val jsonObject = JSONObject()
+                for (entry in list) {
+                    if (entry.source.isNotBlank() && entry.arabic.isNotBlank()) {
+                        jsonObject.put(entry.source.trim(), entry.arabic.trim())
+                    }
+                }
+                jsonObject.toString(2).toByteArray(Charsets.UTF_8)
+            }
+            ExportFormat.SRT -> {
+                val sb = StringBuilder()
+                var index = 1
+                for (entry in list) {
+                    val startMs = entry.recordTimeMs
+                    val endMs = startMs + 3000L
+                    val startTimeStr = formatSrtTime(startMs)
+                    val endTimeStr = formatSrtTime(endMs)
+                    sb.append(index).append("\n")
+                    sb.append(startTimeStr).append(" --> ").append(endTimeStr).append("\n")
+                    sb.append(entry.arabic.trim()).append("\n\n")
+                    index++
+                }
+                sb.toString().toByteArray(Charsets.UTF_8)
+            }
+        }
+
+        return saveToMediaStore(context, fileName, contentBytes)
+    }
+
+    private fun formatSrtTime(timeMs: Long): String {
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        cal.timeInMillis = timeMs
+        val hours = cal.get(Calendar.HOUR_OF_DAY)
+        val minutes = cal.get(Calendar.MINUTE)
+        val seconds = cal.get(Calendar.SECOND)
+        val millis = cal.get(Calendar.MILLISECOND)
+        return String.format(Locale.US, "%02d:%02d:%02d,%03d", hours, minutes, seconds, millis)
+    }
+
+    private fun saveToMediaStore(context: Context, fileName: String, bytes: ByteArray): String? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val resolver = context.contentResolver
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, if (fileName.endsWith(".json")) "application/json" else "text/plain")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/GameLens/Exports")
+                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                    ?: return null
+                resolver.openOutputStream(uri, "wt")?.use { os ->
+                    os.write(bytes)
+                }
+                DiagnosticLogger.log("Exported session to MediaStore: $fileName")
+                fileName
+            } else {
+                val pubDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (pubDownloads != null) {
+                    val exportDir = File(pubDownloads, "GameLens/Exports")
+                    exportDir.mkdirs()
+                    val targetFile = File(exportDir, fileName)
+                    FileOutputStream(targetFile).use { fos ->
+                        fos.write(bytes)
+                    }
+                    DiagnosticLogger.log("Exported session to legacy Downloads: $fileName")
+                    fileName
+                } else {
+                    null
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e("SubtitleHistoryManager", "Failed to export: ${t.message}", t)
+            DiagnosticLogger.log("Export failed: ${t.message}")
+            null
+        }
     }
 }

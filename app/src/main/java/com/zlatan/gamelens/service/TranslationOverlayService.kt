@@ -74,6 +74,7 @@ class TranslationOverlayService : Service() {
         const val ACTION_UPDATE_PROJECTION = "com.zlatan.gamelens.ACTION_UPDATE_PROJECTION"
         const val ACTION_UPDATE_FONT_SIZE = "com.zlatan.gamelens.ACTION_UPDATE_FONT_SIZE"
         const val ACTION_TEST_OVERLAY = "com.zlatan.gamelens.ACTION_TEST_OVERLAY"
+        const val ACTION_RELOAD_SETTINGS = "com.zlatan.gamelens.ACTION_RELOAD_SETTINGS"
         const val EXTRA_RESULT_CODE = "extra_result_code"
         const val EXTRA_RESULT_DATA = "extra_result_data"
         const val EXTRA_AUTO_START_AUDIO = "extra_auto_start_audio"
@@ -82,7 +83,7 @@ class TranslationOverlayService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "gamelens_translation_channel"
         private const val NOTIFICATION_ID = 1001
         private const val CLICK_DRAG_TOLERANCE = 15f
-        private const val LONG_PRESS_TIMEOUT_MS = 750L
+        private const val LONG_PRESS_TIMEOUT_MS = 500L
         private const val FRAME_INTERVAL_MS = 120L // 120ms for fast subtitle responsiveness
         private const val ANTI_FEEDBACK_VSYNC_DELAY_MS = 35L
         private val ARABIC_REGEX = Regex("[\\u0600-\\u06FF]")
@@ -108,6 +109,11 @@ class TranslationOverlayService : Service() {
     private var isCalibrationActive = false
 
     private var calibrationOverlay: com.zlatan.gamelens.overlay.CalibrationOverlay? = null
+    private var quickMenuView: View? = null
+    private var quickMenuParams: WindowManager.LayoutParams? = null
+
+    private var typewriterPendingText = ""
+    private var typewriterLastGrowthTime = 0L
 
     @Volatile
     private var forceInstantPass = true
@@ -364,6 +370,15 @@ class TranslationOverlayService : Service() {
             ACTION_TEST_OVERLAY -> {
                 seamlessOverlayRenderer?.renderTestOverlay()
                 showToast("جاري اختبار عرض طبقة الترجمة لمدة 3 ثوانٍ")
+            }
+            ACTION_RELOAD_SETTINGS -> {
+                val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                val fontSize = intent.getFloatExtra(EXTRA_FONT_SIZE_SP, prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, MainActivity.DEFAULT_FONT_SIZE_SP))
+                seamlessOverlayRenderer?.updateFontSize(fontSize)
+                val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
+                ocrEngine.updateCalibration(calRect)
+                updateBubbleVisualState()
+                DiagnosticLogger.log("Reloaded profile settings in service: ROI=$calRect, font=${fontSize}sp")
             }
         }
         return START_NOT_STICKY
@@ -804,6 +819,42 @@ class TranslationOverlayService : Service() {
             }
         }
 
+        // Typewriter / Streaming Text Mode (JRPG / Visual Novels)
+        val prefs = getSharedPreferences(com.zlatan.gamelens.MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+        val isTypewriterEnabled = prefs.getBoolean(com.zlatan.gamelens.MainActivity.KEY_TYPEWRITER_MODE, false)
+        if (isTypewriterEnabled && PatchManager.lookup(mergedEnglish) == null) {
+            val hasTerminal = mergedEnglish.endsWith(".") || mergedEnglish.endsWith("!") || mergedEnglish.endsWith("?") ||
+                    mergedEnglish.endsWith(".\"") || mergedEnglish.endsWith("!\"") || mergedEnglish.endsWith("?\"") ||
+                    mergedEnglish.endsWith(".'") || mergedEnglish.endsWith("!'") || mergedEnglish.endsWith("?'")
+
+            val prefixLen = minOf(12, typewriterPendingText.length)
+            val isGrowthExtension = typewriterPendingText.isNotEmpty() &&
+                    mergedEnglish.length > typewriterPendingText.length &&
+                    (prefixLen == 0 || mergedEnglish.startsWith(typewriterPendingText.take(prefixLen), ignoreCase = true))
+
+            if (isGrowthExtension) {
+                typewriterPendingText = mergedEnglish
+                typewriterLastGrowthTime = now
+                forceInstantPass = true
+                Log.d(TAG, "Typewriter growth detected, holding translation: \"$mergedEnglish\"")
+                return
+            } else if (typewriterPendingText.isNotEmpty()) {
+                val growthIdle = now - typewriterLastGrowthTime
+                val holdDuration = if (hasTerminal) 150L else 350L
+                if (growthIdle < holdDuration) {
+                    forceInstantPass = true
+                    return
+                }
+                typewriterPendingText = ""
+            } else if (!hasTerminal) {
+                typewriterPendingText = mergedEnglish
+                typewriterLastGrowthTime = now
+                forceInstantPass = true
+                Log.d(TAG, "Typewriter initial chunk buffered: \"$mergedEnglish\"")
+                return
+            }
+        }
+
         // 7. Normalization, Patch Matching (0ms snap) and Candidate Handling
         val promptNormalized = translationManager.normalizeControllerPrompts(mergedEnglish)
         val patchMatch = PatchManager.lookup(promptNormalized)
@@ -991,8 +1042,7 @@ class TranslationOverlayService : Service() {
 
             val longPressRunnable = Runnable {
                 isLongPressed = true
-                showToast("جاري إيقاف خدمة الترجمة...")
-                stopSelf()
+                showQuickActionMenu()
             }
 
             bubbleView?.setOnTouchListener { _, event ->
@@ -1010,7 +1060,8 @@ class TranslationOverlayService : Service() {
                     MotionEvent.ACTION_MOVE -> {
                         val deltaX = event.rawX - initialTouchX
                         val deltaY = event.rawY - initialTouchY
-                        if (Math.abs(deltaX) > CLICK_DRAG_TOLERANCE || Math.abs(deltaY) > CLICK_DRAG_TOLERANCE) {
+                        val clickTolerance = 12f * resources.displayMetrics.density
+                        if (Math.abs(deltaX) > clickTolerance || Math.abs(deltaY) > clickTolerance) {
                             if (!isMoved) {
                                 isMoved = true
                                 mainHandler.removeCallbacks(longPressRunnable)
@@ -1352,9 +1403,114 @@ class TranslationOverlayService : Service() {
         }
     }
 
+    private fun showQuickActionMenu() {
+        mainHandler.post {
+            dismissQuickActionMenu()
+            try {
+                val inflater = LayoutInflater.from(this)
+                val view = inflater.inflate(R.layout.overlay_quick_menu, null)
+                val density = resources.displayMetrics.density
+
+                val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_PHONE
+                }
+
+                val params = WindowManager.LayoutParams(
+                    (320 * density).toInt(),
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    layoutType,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                    PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = Gravity.CENTER
+                }
+
+                val btnClose = view.findViewById<View>(R.id.btnQuickClose)
+                val btnPauseResume = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnQuickPauseResume)
+                val btnRecentSubs = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnQuickRecentSubtitles)
+                val tvRecentSubs = view.findViewById<TextView>(R.id.tvQuickRecentSubs)
+                val btnToggleDisplayMode = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnQuickToggleDisplayMode)
+                val btnRecalibrate = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnQuickRecalibrate)
+
+                // 1. Pause / Resume state
+                btnPauseResume.text = if (isAutoTranslationActive) "إيقاف مؤقت للترجمة" else "استئناف الترجمة"
+                btnPauseResume.setOnClickListener {
+                    isAutoTranslationActive = !isAutoTranslationActive
+                    updateBubbleVisualState()
+                    btnPauseResume.text = if (isAutoTranslationActive) "إيقاف مؤقت للترجمة" else "استئناف الترجمة"
+                    showToast(if (isAutoTranslationActive) "تم استئناف الترجمة" else "تم إيقاف الترجمة مؤقتاً")
+                }
+
+                // 2. Recent Subtitles
+                btnRecentSubs.setOnClickListener {
+                    if (tvRecentSubs.visibility == View.VISIBLE) {
+                        tvRecentSubs.visibility = View.GONE
+                    } else {
+                        val recent = com.zlatan.gamelens.diag.SubtitleHistoryManager.historyFlow.value.takeLast(5)
+                        tvRecentSubs.text = if (recent.isEmpty()) "لا توجد حوارات مسجلة بعد" else recent.joinToString("\n\n") { "[${it.timestamp}]\nEN: ${it.source}\nAR: ${it.arabic}" }
+                        tvRecentSubs.visibility = View.VISIBLE
+                    }
+                }
+
+                // 3. Display Mode Toggle
+                val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+                val curMode = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) ?: MainActivity.MODE_OFFSET_ABOVE
+                var isCover = curMode == MainActivity.MODE_OPAQUE_COVER
+                btnToggleDisplayMode.text = if (isCover) "نمط العرض: غطاء معتم (انقر للتبديل)" else "نمط العرض: فوق الحوار (انقر للتبديل)"
+                btnToggleDisplayMode.setOnClickListener {
+                    isCover = !isCover
+                    val newMode = if (isCover) MainActivity.MODE_OPAQUE_COVER else MainActivity.MODE_OFFSET_ABOVE
+                    prefs.edit().putString(MainActivity.KEY_OVERLAY_RENDER_MODE, newMode).apply()
+                    btnToggleDisplayMode.text = if (isCover) "نمط العرض: غطاء معتم (انقر للتبديل)" else "نمط العرض: فوق الحوار (انقر للتبديل)"
+                    showToast(if (isCover) "تم تفعيل نمط الغطاء المعتم (Cover)" else "تم تفعيل نمط فوق الحوار (Offset)")
+                }
+
+                // 4. Quick ROI Recalibration
+                btnRecalibrate.setOnClickListener {
+                    dismissQuickActionMenu()
+                    startVisualCalibration()
+                }
+
+                btnClose.setOnClickListener {
+                    dismissQuickActionMenu()
+                }
+
+                view.setOnTouchListener { _, event ->
+                    if (event.action == MotionEvent.ACTION_OUTSIDE) {
+                        dismissQuickActionMenu()
+                        true
+                    } else false
+                }
+
+                quickMenuView = view
+                quickMenuParams = params
+                windowManager.addView(view, params)
+                Log.d(TAG, "Quick action floating menu displayed")
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to display quick action menu: ${t.message}", t)
+            }
+        }
+    }
+
+    private fun dismissQuickActionMenu() {
+        mainHandler.post {
+            quickMenuView?.let {
+                try {
+                    windowManager.removeView(it)
+                } catch (_: Exception) {}
+                quickMenuView = null
+                quickMenuParams = null
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         DiagnosticLogger.log("Service: onDestroy")
+        dismissQuickActionMenu()
         captureJob?.cancel()
         serviceScope.cancel()
 

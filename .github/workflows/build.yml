@@ -86,6 +86,9 @@ jobs:
           "
           ls -lh app/libs/
 
+      - name: Run Unit Tests
+        run: gradle testDebugUnitTest --no-daemon --stacktrace
+
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
 

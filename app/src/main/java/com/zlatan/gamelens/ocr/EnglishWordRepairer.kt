@@ -26,8 +26,10 @@ object EnglishWordRepairer {
                 context.assets.open(ASSET_FILE).use { stream ->
                     loadDictionary(stream)
                 }
+                com.zlatan.gamelens.diag.DiagnosticLogger.log("EnglishWordRepairer: loaded ${dictionaryMap.size} words")
             } catch (t: Throwable) {
                 Log.w(TAG, "Failed to load $ASSET_FILE from assets: ${t.message}")
+                com.zlatan.gamelens.diag.DiagnosticLogger.log("EnglishWordRepairer: failed to load assets: ${t.message}")
             }
         }
     }
@@ -213,7 +215,14 @@ object EnglishWordRepairer {
             }
 
             // Skip pure proper nouns: TitleCase token not at index 0 without internal gluing
-            if (idx > 0 && core[0].isUpperCase() && core.substring(1).all { it.isLowerCase() }) {
+            // Do NOT skip if it follows sentence-ending punctuation (., !, ?) so "Salt! Shameon you" repairs cleanly
+            val followsPunctuation = idx > 0 && run {
+                val prev = rejoinedTokens[idx - 1]
+                prev.endsWith(".") || prev.endsWith("!") || prev.endsWith("?") ||
+                        prev.endsWith(".\"") || prev.endsWith("!\"") || prev.endsWith("?\"") ||
+                        prev.endsWith(".'") || prev.endsWith("!'") || prev.endsWith("?'")
+            }
+            if (idx > 0 && !followsPunctuation && core[0].isUpperCase() && core.substring(1).all { it.isLowerCase() }) {
                 finalTokens.add(tok)
                 continue
             }
@@ -236,8 +245,8 @@ object EnglishWordRepairer {
                 if (maxOf(w1.length, w2.length) < 3) continue
                 val r1 = dictionaryMap[w1] ?: continue
                 val r2 = dictionaryMap[w2] ?: continue
-                if (r1 <= 10000 && r2 <= 10000) {
-                    val cost = ln(r1 + 10.0) + ln(r2 + 10.0) + 4.5
+                if (r1 <= 16000 && r2 <= 16000) {
+                    val cost = ln(r1 + 10.0) + ln(r2 + 10.0) + 3.6
                     if (cost < bestCost) {
                         bestCost = cost
                         bestSplit = listOf(w1, w2)
@@ -258,8 +267,8 @@ object EnglishWordRepairer {
                     val r1 = dictionaryMap[w1] ?: continue
                     val r2 = dictionaryMap[w2] ?: continue
                     val r3 = dictionaryMap[w3] ?: continue
-                    if (r1 <= 10000 && r2 <= 10000 && r3 <= 10000) {
-                        val cost = ln(r1 + 10.0) + ln(r2 + 10.0) + ln(r3 + 10.0) + 9.0
+                    if (r1 <= 16000 && r2 <= 16000 && r3 <= 16000) {
+                        val cost = ln(r1 + 10.0) + ln(r2 + 10.0) + ln(r3 + 10.0) + 7.2
                         if (cost < bestCost) {
                             bestCost = cost
                             bestSplit = listOf(w1, w2, w3)
