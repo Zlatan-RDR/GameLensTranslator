@@ -1068,7 +1068,7 @@ object PatchManager {
 
         val arMap = mutableMapOf<String, String>()
         val arList = mutableListOf<String>()
-        for (m in regexTag.findAll(arContent)) {
+        for (m in XML_TAG_REGEX.findAll(arContent)) {
             val k = m.groupValues[1].trim()
             val v = m.groupValues[2].trim().replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
             if (k.isNotBlank() && v.isNotBlank()) {

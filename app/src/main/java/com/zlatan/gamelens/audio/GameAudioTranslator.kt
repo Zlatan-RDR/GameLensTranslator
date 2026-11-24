@@ -23,6 +23,7 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.translation.TranslationManager
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

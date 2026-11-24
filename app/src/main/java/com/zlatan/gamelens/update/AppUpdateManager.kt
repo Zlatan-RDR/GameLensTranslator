@@ -169,11 +169,6 @@ object AppUpdateManager {
             UpdateCheckResult.Error("Failed to parse release: ${t.message}")
         }
     }
-            Log.e(TAG, err, t)
-            DiagnosticLogger.log("Update check error: ${t.javaClass.simpleName} - ${t.message}")
-            UpdateCheckResult.Error(err)
-        }
-    }
 
     /**
      * Strict semantic version comparison:
