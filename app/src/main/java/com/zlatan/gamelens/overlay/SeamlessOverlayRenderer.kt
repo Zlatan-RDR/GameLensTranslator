@@ -29,6 +29,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
     companion object {
         private const val TAG = "SeamlessRenderer"
+        private const val EMERGENCY_FAILSAFE_TIMEOUT_MS = 25_000L
         private val FALLBACK_SCHEME = SampledColorScheme(Color.argb(255, 5, 7, 11), Color.WHITE)
     }
 
@@ -627,10 +628,8 @@ class SeamlessOverlayRenderer(private val context: Context) {
             if (isAlreadyShowing) {
                 // Idempotent Zero-Blink: do not re-animate, clear, or touch background alpha; keep frozen
                 mainHandler.removeCallbacks(hideSubtitleRunnable)
-                val wordCount = arabicText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
-                val holdMs = maxOf(2000L + arabicText.length * 70L, 2000L + wordCount * 400L).coerceIn(3000L, 10500L)
-                subtitleHoldUntilMs = SystemClock.elapsedRealtime() + holdMs
-                mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
+                subtitleHoldUntilMs = SystemClock.elapsedRealtime() + EMERGENCY_FAILSAFE_TIMEOUT_MS
+                mainHandler.postDelayed(hideSubtitleRunnable, EMERGENCY_FAILSAFE_TIMEOUT_MS)
                 return@post
             }
 
@@ -720,10 +719,18 @@ class SeamlessOverlayRenderer(private val context: Context) {
             sub.visibility = View.VISIBLE
             com.zlatan.gamelens.diag.SubtitleHistoryManager.recordOrUpgradeStreaming(englishText, arabicText)
             mainHandler.removeCallbacks(hideSubtitleRunnable)
-            val wordCount = arabicText.trim().split(Regex("\\s+")).count { it.isNotEmpty() }
-            val holdMs = maxOf(2000L + arabicText.length * 70L, 2000L + wordCount * 400L).coerceIn(3000L, 10500L)
-            subtitleHoldUntilMs = SystemClock.elapsedRealtime() + holdMs
-            mainHandler.postDelayed(hideSubtitleRunnable, holdMs)
+            subtitleHoldUntilMs = SystemClock.elapsedRealtime() + EMERGENCY_FAILSAFE_TIMEOUT_MS
+            mainHandler.postDelayed(hideSubtitleRunnable, EMERGENCY_FAILSAFE_TIMEOUT_MS)
+        }
+    }
+
+    fun keepSubtitleAlive() {
+        mainHandler.post {
+            if (subtitleView?.visibility == View.VISIBLE) {
+                mainHandler.removeCallbacks(hideSubtitleRunnable)
+                subtitleHoldUntilMs = SystemClock.elapsedRealtime() + EMERGENCY_FAILSAFE_TIMEOUT_MS
+                mainHandler.postDelayed(hideSubtitleRunnable, EMERGENCY_FAILSAFE_TIMEOUT_MS)
+            }
         }
     }
 
@@ -744,6 +751,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
         mainHandler.post {
             clearOcrViews()
             _hasPinnedCards = false
+            mainHandler.removeCallbacks(hideSubtitleRunnable)
             subtitleHoldUntilMs = 0L
             subtitleView?.visibility = View.GONE
         }

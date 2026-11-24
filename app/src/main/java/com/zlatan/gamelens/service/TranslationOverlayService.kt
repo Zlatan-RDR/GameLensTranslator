@@ -597,8 +597,8 @@ class TranslationOverlayService : Service() {
         // 4. Stage 2: Settle-Then-Translate Pixel-Diff Gate (~1.5ms) & Heartbeat Scan
         val isOverlayShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
         val timeSinceLastOcr = now - lastOcrTimestamp
-        val forceClearCheck = isOverlayShowing && (timeSinceLastOcr >= 420L)
-        val forceHeartbeat = timeSinceLastOcr >= 560L || isOverlayShowing // Keep heartbeat active while a subtitle is displayed
+        val forceClearCheck = isOverlayShowing && (timeSinceLastOcr >= 350L)
+        val forceHeartbeat = if (isOverlayShowing) (timeSinceLastOcr >= 350L) else (timeSinceLastOcr >= 560L) // 350ms heartbeat while subtitle is displayed
 
         val delta = fastPixelDiffGate.computeDiffRatio(croppedRoi)
         if (isRoiSettling && !forceInstantPass) {
@@ -670,8 +670,11 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log(dropMsg)
             }
             consecutiveEmptyRoiCount++
+            if (consecutiveEmptyRoiCount == 1) {
+                forceInstantPass = true
+            }
             val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
-            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 4 && (now - lastSubtitleVisibleOnScreenMs >= 750L)) {
+            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2 && (now - lastSubtitleVisibleOnScreenMs >= 250L)) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -679,6 +682,7 @@ class TranslationOverlayService : Service() {
                 streamingStartTime = 0L
                 lastDisplayWasPatch = false
                 lastPatchEnglishText = ""
+                consecutiveEmptyRoiCount = 0
             }
             return
         }
@@ -704,8 +708,11 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log("OCR skipped [$dropReason]: \"$mergedRaw\"")
             }
             consecutiveEmptyRoiCount++
+            if (consecutiveEmptyRoiCount == 1) {
+                forceInstantPass = true
+            }
             val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
-            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 4 && (now - lastSubtitleVisibleOnScreenMs >= 750L)) {
+            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2 && (now - lastSubtitleVisibleOnScreenMs >= 250L)) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -713,6 +720,7 @@ class TranslationOverlayService : Service() {
                 streamingStartTime = 0L
                 lastDisplayWasPatch = false
                 lastPatchEnglishText = ""
+                consecutiveEmptyRoiCount = 0
             }
             return
         }
@@ -720,12 +728,14 @@ class TranslationOverlayService : Service() {
         // Subtitle detected: reset empty counter and update last visible timestamp
         consecutiveEmptyRoiCount = 0
         lastSubtitleVisibleOnScreenMs = now
+        seamlessOverlayRenderer?.keepSubtitleAlive()
 
         // Jitter Gate: skip if >= 88% similar to currently displayed text (0ms, zero flicker)
         if (lastDisplayedEnglishText.isNotEmpty() && com.zlatan.gamelens.ocr.OcrTextCleaner.isSimilar(mergedEnglish, lastDisplayedEnglishText, 0.88f)) {
             Log.d(TAG, "OCR skipped [jitter/dedup]: \"$mergedEnglish\" (matches displayed: \"$lastDisplayedEnglishText\")")
             consecutiveEmptyRoiCount = 0
             lastSubtitleVisibleOnScreenMs = now
+            seamlessOverlayRenderer?.keepSubtitleAlive()
             return
         }
 
@@ -737,6 +747,7 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log(dropMsg)
                 consecutiveEmptyRoiCount = 0
                 lastSubtitleVisibleOnScreenMs = now
+                seamlessOverlayRenderer?.keepSubtitleAlive()
                 return
             }
         }
@@ -750,6 +761,9 @@ class TranslationOverlayService : Service() {
                 val dropMsg = "OCR skipped [credit-polluted-superset]: \"$mergedEnglish\" (polluted re-read of: \"$lastDisplayedEnglishText\")"
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
+                consecutiveEmptyRoiCount = 0
+                lastSubtitleVisibleOnScreenMs = now
+                seamlessOverlayRenderer?.keepSubtitleAlive()
                 return
             }
 
@@ -796,6 +810,7 @@ class TranslationOverlayService : Service() {
                         DiagnosticLogger.log(dropMsg)
                         consecutiveEmptyRoiCount = 0
                         lastSubtitleVisibleOnScreenMs = now
+                        seamlessOverlayRenderer?.keepSubtitleAlive()
                         return
                     }
                 }
@@ -827,6 +842,7 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log(dropMsg)
                 consecutiveEmptyRoiCount = 0
                 lastSubtitleVisibleOnScreenMs = now
+                seamlessOverlayRenderer?.keepSubtitleAlive()
                 return
             }
             // 2nd frame confirmed within 1000ms! Clear candidate and proceed to translate

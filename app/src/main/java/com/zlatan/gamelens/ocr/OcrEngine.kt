@@ -717,6 +717,20 @@ class OcrEngine {
                                     word.endsWith(".'") || word.endsWith("!'") || word.endsWith("?'")
                             !hasTerminalPunctuation && PatchManager.lookup(strippedJoined) == null
                         }
+                        val isLowercaseInitialSingleWord = joinedTokens.size == 1 && run {
+                            val firstLetter = joinedTokens[0].firstOrNull { it.isLetter() }
+                            firstLetter != null && firstLetter.isLowerCase() && PatchManager.lookup(strippedJoined) == null
+                        }
+                        val hasGluedDotOrCorruptedDiacritics = (joinedTokens.size in 1..3) && run {
+                            val hasGluedDot = joinedTokens.any { token ->
+                                val clean = token.trimEnd('.', ',', '!', '?', ';', ':')
+                                Regex("^[a-z]{2,}\\.[a-z]{2,}$").matches(clean) &&
+                                        !clean.endsWith(".com") && !clean.endsWith(".org") && !clean.endsWith(".net")
+                            }
+                            val corruptedDiacritics = setOf('ř', 'č', 'š', 'ž', 'ť', 'ď', 'ň', 'ů', 'ł', 'Ř', 'Č', 'Š', 'Ž', 'Ť', 'Ď', 'Ň', 'Ů', 'Ł')
+                            val hasCorruptedDiacritic = strippedJoined.any { it in corruptedDiacritics }
+                            (hasGluedDot || hasCorruptedDiacritic) && PatchManager.lookup(strippedJoined) == null
+                        }
                         val isBannerPopup = Regex("(?i)^A\\s+[A-Za-z]{4,12}$").matches(strippedJoined) &&
                                 !strippedJoined.endsWith(".") && !strippedJoined.endsWith("!") &&
                                 PatchManager.lookup(strippedJoined) == null
@@ -726,6 +740,8 @@ class OcrEngine {
                             (realWords.isEmpty() && PatchManager.lookup(strippedJoined) == null) -> "realWords.isEmpty()"
                             isSingleWordHudFragment -> "single-word-hud ($strippedJoined)"
                             isUnpunctuatedSingleWord -> "unpunctuated-single-word ($strippedJoined)"
+                            isLowercaseInitialSingleWord -> "lowercase-single-word ($strippedJoined)"
+                            hasGluedDotOrCorruptedDiacritics -> "glued-dot-or-corrupted-diacritic ($strippedJoined)"
                             isBannerPopup -> "banner-popup ($strippedJoined)"
                             !passesEnglishTokenRatioFilter(strippedJoined) -> "english-token-ratio < 60% ($strippedJoined)"
                             OcrTextCleaner.isGarbledDocumentNoise(strippedJoined) -> "garbled-doc ($strippedJoined)"
