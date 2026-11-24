@@ -30,6 +30,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -376,7 +377,6 @@ class TranslationOverlayService : Service() {
                 val fontSize = intent.getFloatExtra(EXTRA_FONT_SIZE_SP, prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, MainActivity.DEFAULT_FONT_SIZE_SP))
                 seamlessOverlayRenderer?.updateFontSize(fontSize)
                 val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
-                ocrEngine.updateCalibration(calRect)
                 updateBubbleVisualState()
                 DiagnosticLogger.log("Reloaded profile settings in service: ROI=$calRect, font=${fontSize}sp")
             }
@@ -820,7 +820,6 @@ class TranslationOverlayService : Service() {
         }
 
         // Typewriter / Streaming Text Mode (JRPG / Visual Novels)
-        val prefs = getSharedPreferences(com.zlatan.gamelens.MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
         val isTypewriterEnabled = prefs.getBoolean(com.zlatan.gamelens.MainActivity.KEY_TYPEWRITER_MODE, false)
         if (isTypewriterEnabled && PatchManager.lookup(mergedEnglish) == null) {
             val hasTerminal = mergedEnglish.endsWith(".") || mergedEnglish.endsWith("!") || mergedEnglish.endsWith("?") ||
