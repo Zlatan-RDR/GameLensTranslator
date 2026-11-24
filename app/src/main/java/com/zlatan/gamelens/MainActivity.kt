@@ -130,42 +130,80 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            val count = PatchManager.loadPatchFromUri(this, uri)
-            if (count > 0) {
-                Toast.makeText(this, "تم تحميل الباتش بنجاح (${count} سطر حوار)", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "تعذر قراءة ملف الباتش أو الملف فارغ", Toast.LENGTH_SHORT).show()
+            val fileName = getFileNameFromUri(uri)
+            lifecycleScope.launch {
+                val count = PatchManager.loadPatchFromUri(this@MainActivity, uri, fileName)
+                if (count > 0) {
+                    Toast.makeText(this@MainActivity, "تم تحميل الباتش بنجاح (${count} سطر حوار)", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "تعذر قراءة ملف الباتش أو الملف فارغ", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
 
-    private var pendingEnglishUri: Uri? = null
-
     private val pairArabicFilePickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { arabicUri ->
-        val engUri = pendingEnglishUri
-        if (engUri != null && arabicUri != null) {
-            val count = PatchManager.pairAndMergeDualFiles(this, engUri, arabicUri)
-            pendingEnglishUri = null
-            if (count > 0) {
-                Toast.makeText(this, getString(R.string.patch_pair_success, count.toString()), Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(this, "تعذر مطابقة الملفين أو لا توجد أسطر متوافقة", Toast.LENGTH_SHORT).show()
+    ) { arUri ->
+        if (arUri != null && PatchManager.hasPendingEnglishFile()) {
+            val enName = PatchManager.cachedPendingEnglishFileName ?: "english_source"
+            val arName = getFileNameFromUri(arUri)
+            lifecycleScope.launch {
+                Toast.makeText(this@MainActivity, "جاري دمج ملفات الباتش ($enName + $arName)...", Toast.LENGTH_SHORT).show()
+                val count = PatchManager.pairAndLoadWithCachedEnglish(this@MainActivity, arUri, arName)
+                if (count > 0) {
+                    Toast.makeText(this@MainActivity, getString(R.string.patch_pair_success, count.toString()), Toast.LENGTH_LONG).show()
+                } else {
+                    val err = PatchManager.lastPairingError
+                    val msg = if (!err.isNullOrBlank()) "فشل الدمج: $err" else "تعذر مطابقة الملفين أو لا توجد أسطر متوافقة"
+                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                }
             }
         } else {
-            pendingEnglishUri = null
+            PatchManager.clearPendingEnglishFile()
+            Toast.makeText(this, "تم إلغاء اختيار الملف العربي", Toast.LENGTH_SHORT).show()
         }
     }
 
     private val pairEnglishFilePickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { englishUri ->
-        if (englishUri != null) {
-            pendingEnglishUri = englishUri
-            Toast.makeText(this, getString(R.string.patch_pick_arabic_prompt), Toast.LENGTH_SHORT).show()
-            pairArabicFilePickerLauncher.launch(arrayOf("*/*"))
+    ) { enUri ->
+        if (enUri != null) {
+            val enName = getFileNameFromUri(enUri)
+            lifecycleScope.launch(Dispatchers.IO) {
+                val bytes = try {
+                    contentResolver.openInputStream(enUri)?.use { it.readBytes() }
+                } catch (_: Exception) { null }
+
+                if (bytes != null && bytes.isNotEmpty()) {
+                    PatchManager.setPendingEnglishFile(enName, bytes)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, getString(R.string.patch_pick_arabic_prompt), Toast.LENGTH_SHORT).show()
+                        pairArabicFilePickerLauncher.launch(arrayOf("*/*"))
+                    }
+                } else {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "تعذر قراءة الملف الإنجليزي", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        } else {
+            PatchManager.clearPendingEnglishFile()
+            Toast.makeText(this, "تم إلغاء اختيار الملف الإنجليزي", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun getFileNameFromUri(uri: Uri): String {
+        var name = "game_patch"
+        try {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && cursor.moveToFirst()) {
+                    name = cursor.getString(nameIndex)
+                }
+            }
+        } catch (_: Exception) {}
+        return name
     }
 
     private val mediaProjectionLauncher = registerForActivityResult(
@@ -217,7 +255,7 @@ class MainActivity : AppCompatActivity() {
         checkUpdatesThrottled()
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleUpdateIntent(intent)
     }
@@ -984,7 +1022,7 @@ class MainActivity : AppCompatActivity() {
                 lifecycleScope.launch {
                     val downloadedApk = AppUpdateManager.downloadApk(this@MainActivity, release.downloadUrl) { down, total ->
                         val pct = if (total > 0) (down * 100 / total).toInt() else 0
-                        withContext(Dispatchers.Main) {
+                        runOnUiThread {
                             dialog.setMessage("جاري التنزيل: %d%% (%.1f MB / %.1f MB)".format(java.util.Locale.US, pct, down / (1024.0 * 1024.0), total / (1024.0 * 1024.0)))
                         }
                     }

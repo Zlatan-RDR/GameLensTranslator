@@ -114,7 +114,11 @@ object AppUpdateManager {
                 return@withContext UpdateCheckResult.Error(err)
             }
 
-            val currentVersion = BuildConfig.VERSION_NAME
+            val currentVersion = try {
+                BuildConfig.VERSION_NAME
+            } catch (_: Throwable) {
+                "1.0.0"
+            }
             val isNewer = isNewerVersion(tagName, currentVersion)
 
             Log.d(TAG, "Update check: local=$currentVersion, remote=$tagName, isNewer=$isNewer")
