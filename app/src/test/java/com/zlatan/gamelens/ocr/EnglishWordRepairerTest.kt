@@ -17,7 +17,9 @@ class EnglishWordRepairerTest {
             val possiblePaths = listOf(
                 File("app/src/main/assets/en_dict.txt"),
                 File("src/main/assets/en_dict.txt"),
-                File("../app/src/main/assets/en_dict.txt")
+                File("../app/src/main/assets/en_dict.txt"),
+                File("assets/en_dict.txt"),
+                File("../assets/en_dict.txt")
             )
             val dictFile = possiblePaths.firstOrNull { it.exists() }
                 ?: error("Could not find en_dict.txt in candidate paths: $possiblePaths")

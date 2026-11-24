@@ -47,7 +47,9 @@ object EnglishWordRepairer {
             }
         }
         isInitialized = true
-        Log.i(TAG, "Loaded ${dictionaryMap.size} words into EnglishWordRepairer dictionary.")
+        try {
+            Log.i(TAG, "Loaded ${dictionaryMap.size} words into EnglishWordRepairer dictionary.")
+        } catch (_: Throwable) {}
     }
 
     @Synchronized
