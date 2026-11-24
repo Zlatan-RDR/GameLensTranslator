@@ -120,5 +120,19 @@
             app:backgroundTint="#FF10B981"
             app:cornerRadius="8dp" />
 
+        <!-- 5. Toggle Game Audio ASR -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnQuickToggleAudio"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="8dp"
+            android:text="ترجمة صوت اللعبة (ASR)"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            app:backgroundTint="#FF1E293B"
+            app:cornerRadius="8dp"
+            app:strokeColor="#FF334155"
+            app:strokeWidth="1dp" />
+
     </LinearLayout>
 </androidx.cardview.widget.CardView>

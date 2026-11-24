@@ -376,6 +376,7 @@ class TranslationOverlayService : Service() {
                 val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
                 val fontSize = intent.getFloatExtra(EXTRA_FONT_SIZE_SP, prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, MainActivity.DEFAULT_FONT_SIZE_SP))
                 seamlessOverlayRenderer?.updateFontSize(fontSize)
+                seamlessOverlayRenderer?.reloadAppearanceSettings()
                 val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
                 updateBubbleVisualState()
                 DiagnosticLogger.log("Reloaded profile settings in service: ROI=$calRect, font=${fontSize}sp")
@@ -1077,16 +1078,7 @@ class TranslationOverlayService : Service() {
                     MotionEvent.ACTION_UP -> {
                         mainHandler.removeCallbacks(longPressRunnable)
                         if (!isMoved && !isLongPressed) {
-                            val now = System.currentTimeMillis()
-                            if (now - lastTapTimestamp <= DOUBLE_TAP_TIMEOUT_MS) {
-                                // Double Tap detected: cancel single tap action and toggle Audio Mode
-                                mainHandler.removeCallbacks(singleTapRunnable)
-                                lastTapTimestamp = 0L
-                                handleDoubleTap()
-                            } else {
-                                lastTapTimestamp = now
-                                mainHandler.postDelayed(singleTapRunnable, DOUBLE_TAP_TIMEOUT_MS)
-                            }
+                            handleSingleTap()
                         }
                         true
                     }
@@ -1471,6 +1463,14 @@ class TranslationOverlayService : Service() {
                 btnRecalibrate.setOnClickListener {
                     dismissQuickActionMenu()
                     startVisualCalibration()
+                }
+
+                // 5. Toggle Game Audio ASR
+                val btnToggleAudio = view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnQuickToggleAudio)
+                btnToggleAudio?.text = if (isAudioModeActive) "إيقاف ترجمة صوت اللعبة" else "تفعيل ترجمة صوت اللعبة"
+                btnToggleAudio?.setOnClickListener {
+                    toggleAudioMode()
+                    btnToggleAudio.text = if (isAudioModeActive) "إيقاف ترجمة صوت اللعبة" else "تفعيل ترجمة صوت اللعبة"
                 }
 
                 btnClose.setOnClickListener {

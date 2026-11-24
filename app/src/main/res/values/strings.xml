@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">GameLens Translator</string>
+    <string name="app_name_short">GameLens</string>
     <string name="app_subtitle">مترجم الألعاب المباشر بتقنية الرؤية الحاسوبية الخالية من الحظر</string>
     <string name="service_running_title">GameLens Translator قيد التشغيل</string>
     <string name="service_running_desc">الترجمة الفورية لشاشة اللعبة نشطة في الخلفية</string>
@@ -75,4 +76,58 @@
     <string name="preset_center_dialog">وسط الشاشة</string>
     <string name="preset_bottom_subtitles">شريط سفلي</string>
     <string name="btn_test_overlay">فحص ظهور الترجمة السينمائية (3 ثوانٍ)</string>
+
+    <!-- 3-Tab Material 3 Navigation -->
+    <string name="tab_home">الرئيسية</string>
+    <string name="tab_appearance">المظهر والباتشات</string>
+    <string name="tab_history">السجل والتحديثات</string>
+
+    <!-- Compact Permissions Banner -->
+    <string name="perm_banner_granted">كافة الأذونات الأساسية ممنوحة والخدمة جاهزة للعمل</string>
+    <string name="perm_banner_missing">يلزم منح أذونات الظهور والالتقاط لبدء الترجمة</string>
+
+    <!-- Game Profiles -->
+    <string name="profile_selector_title">الملف المخصص للعبة (Game Profile)</string>
+    <string name="btn_new_profile">+ جديد</string>
+    <string name="btn_delete_profile">حذف</string>
+    <string name="dialog_new_profile_title">إنشاء ملف لعبة جديد</string>
+    <string name="dialog_new_profile_hint">اسم اللعبة (مثلاً: Hitman, Cyberpunk)</string>
+    <string name="btn_create">إنشاء</string>
+    <string name="btn_cancel">إلغاء</string>
+
+    <!-- Translation Engines -->
+    <string name="engine_auto_cloud_offline">سحابي ذكي + محلي تلقائي (مهلة 1.5s)</string>
+    <string name="engine_ai_custom">ذكاء اصطناعي مخصص (OpenAI / Local LLM)</string>
+    <string name="custom_base_url_hint">Base URL (افتراضي: https://api.openai.com/v1)</string>
+    <string name="model_name_hint">اسم النموذج (مثال: gpt-4o-mini / llama3)</string>
+    <string name="toggle_typewriter">نمط الآلة الكاتبة / البث المتدفق (Typewriter)</string>
+
+    <!-- Subtitle Appearance Customizer -->
+    <string name="subtitle_appearance_title">تخصيص مظهر ونمط الترجمة</string>
+    <string name="font_size_label">حجم الخط: %1$dsp</string>
+    <string name="text_color_label">لون النص المترجم</string>
+    <string name="bg_opacity_label">شفافية الخلفية: %1$d%%</string>
+    <string name="text_shadow_switch">إظهار حدود وظل سينمائي للنص (Border &amp; Shadow)</string>
+    <string name="live_preview_title">معاينة حية للمظهر:</string>
+    <string name="live_preview_sample">مرحباً 47، الهدف أمامك مباشرة في الطابق الأرضي.</string>
+    <string name="color_white">أبيض</string>
+    <string name="color_gold">ذهبي</string>
+    <string name="color_cyan">سماوي</string>
+
+    <!-- App Updates & About -->
+    <string name="updates_title">تحديثات التطبيق والمعلومات</string>
+    <string name="current_version_label">الإصدار الحالي: %1$s</string>
+    <string name="btn_check_updates">التحقق من التحديثات</string>
+    <string name="checking_updates">جاري التحقق من توفر تحديثات...</string>
+    <string name="app_up_to_date">أنت تستخدم أحدث إصدار من GameLens (%1$s)</string>
+    <string name="update_dialog_title">تحديث جديد متوفر (%1$s)</string>
+    <string name="btn_update_now">تحديث وتثبيت الآن</string>
+    <string name="repo_link">مستودع المشروع على GitHub (Zlatan-RDR/GameLensTranslator)</string>
+    <string name="developer_mode">وضع المطور (إظهار سجل التشخيص المباشر)</string>
+
+    <!-- Subtitle History -->
+    <string name="subtitle_history_title">سجل الحوارات المترجمة</string>
+    <string name="btn_export_history">تصدير (JSON / SRT)</string>
+    <string name="btn_copy_history">نسخ</string>
+    <string name="btn_clear_history">مسح</string>
 </resources>

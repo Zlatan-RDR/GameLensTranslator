@@ -8,16 +8,25 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
-import android.graphics.RectF
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
+import android.widget.EditText
+import android.widget.ProgressBar
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -31,6 +40,7 @@ import com.zlatan.gamelens.db.TranslationCacheManager
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.diag.SubtitleHistoryManager
 import com.zlatan.gamelens.glossary.GlossaryManager
+import com.zlatan.gamelens.ocr.EnglishWordRepairer
 import com.zlatan.gamelens.overlay.CalibrationOverlay
 import com.zlatan.gamelens.patch.PatchManager
 import com.zlatan.gamelens.profile.GameProfile
@@ -41,6 +51,10 @@ import com.zlatan.gamelens.translation.ModelStatus
 import com.zlatan.gamelens.translation.TranslationConfig
 import com.zlatan.gamelens.translation.TranslationManager
 import com.zlatan.gamelens.translation.TranslationMode
+import com.zlatan.gamelens.update.AppUpdateManager
+import com.zlatan.gamelens.update.ReleaseInfo
+import com.zlatan.gamelens.update.UpdateCheckResult
+import com.zlatan.gamelens.update.UpdateCheckWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,10 +66,15 @@ class MainActivity : AppCompatActivity() {
         const val KEY_TRANSLATION_MODE = "key_translation_mode"
         const val KEY_API_KEY = "key_api_key"
         const val KEY_API_ENDPOINT = "key_api_endpoint"
+        const val KEY_MODEL_NAME = "key_model_name"
         const val KEY_GAME_AUDIO_ENABLED = "key_game_audio_enabled"
         const val KEY_OVERLAY_RENDER_MODE = "overlay_render_mode"
         const val KEY_ONLINE_TRANSLATE_ENHANCED = "key_online_translate_enhanced"
         const val KEY_SUBTITLE_FONT_SIZE_SP = "key_subtitle_font_size_sp"
+        const val KEY_SUBTITLE_TEXT_COLOR = "key_subtitle_text_color"
+        const val KEY_SUBTITLE_BG_OPACITY = "key_subtitle_bg_opacity"
+        const val KEY_SUBTITLE_TEXT_SHADOW = "key_subtitle_text_shadow"
+        const val KEY_DEVELOPER_MODE = "key_developer_mode"
         const val DEFAULT_FONT_SIZE_SP = 18f
         const val KEY_TYPEWRITER_MODE = "typewriter_mode_enabled"
         const val MODE_OPAQUE_COVER = "opaque_cover"
@@ -64,6 +83,7 @@ class MainActivity : AppCompatActivity() {
 
         const val MODE_OFFLINE = "mode_offline"
         const val MODE_CLOUD = "mode_cloud"
+        const val MODE_AUTO = "mode_auto"
 
         @Volatile
         var isAppInForeground: Boolean = false
@@ -88,7 +108,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (!isGranted) {
-            Toast.makeText(this, "إشعار الخدمة مطلوب لضمان استمرار التشغيل في الخلفية", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "إشعار الخدمة مطلوب لإبقاء الترجمة نشطة بالخلفية", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -98,63 +118,11 @@ class MainActivity : AppCompatActivity() {
         if (isGranted) {
             prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, true).putBoolean("audio_translation_enabled", true).apply()
             binding.switchGameAudio.isChecked = true
-            Toast.makeText(this, "تم تفعيل الترجمة الصوتية الداخلية للألعاب", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "تم منح إذن الميكروفون وتفعيل الترجمة الصوتية", Toast.LENGTH_SHORT).show()
         } else {
             binding.switchGameAudio.isChecked = false
             prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).putBoolean("audio_translation_enabled", false).apply()
-            Toast.makeText(this, "إذن تسجيل الصوت مطلوب لترجمة صوت الألعاب", Toast.LENGTH_SHORT).show()
-        }
-        updateAudioModelStatus()
-    }
-
-    private val pairArabicFilePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { arUri ->
-        if (arUri != null && PatchManager.hasPendingEnglishFile()) {
-            val enName = PatchManager.cachedPendingEnglishFileName ?: "english_source"
-            val arName = getFileNameFromUri(arUri)
-            lifecycleScope.launch {
-                Toast.makeText(this@MainActivity, "جاري دمج ملفات الباتش ($enName + $arName)...", Toast.LENGTH_SHORT).show()
-                val count = PatchManager.pairAndLoadWithCachedEnglish(this@MainActivity, arUri, arName)
-                if (count > 0) {
-                    Toast.makeText(this@MainActivity, "تم دمج وتفعيل باتش اللعبة بنجاح ($count زوج مترجم)", Toast.LENGTH_SHORT).show()
-                } else {
-                    val err = PatchManager.lastPairingError
-                    val msg = if (!err.isNullOrBlank()) "فشل الدمج: $err" else "تعذر دمج الملفين أو لا توجد نصوص متطابقة"
-                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
-                }
-            }
-        } else {
-            PatchManager.clearPendingEnglishFile()
-            Toast.makeText(this, "تم إلغاء اختيار الملف العربي", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private val pairEnglishFilePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { enUri ->
-        if (enUri != null) {
-            val enName = getFileNameFromUri(enUri)
-            lifecycleScope.launch(Dispatchers.IO) {
-                val bytes = try {
-                    contentResolver.openInputStream(enUri)?.use { it.readBytes() }
-                } catch (_: Exception) { null }
-
-                if (bytes != null && bytes.isNotEmpty()) {
-                    PatchManager.setPendingEnglishFile(enName, bytes)
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, getString(R.string.patch_pick_arabic_prompt), Toast.LENGTH_LONG).show()
-                        pairArabicFilePickerLauncher.launch(arrayOf("*/*"))
-                    }
-                } else {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@MainActivity, "تعذر قراءة الملف الإنجليزي", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        } else {
-            PatchManager.clearPendingEnglishFile()
-            Toast.makeText(this, "تم إلغاء اختيار الملف الإنجليزي", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "يلزم إذن التسجيل لتفريغ وترجمة أصوات اللعبة", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -162,29 +130,42 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            val fileName = getFileNameFromUri(uri)
-            lifecycleScope.launch {
-                val count = PatchManager.loadPatchFromUri(this@MainActivity, uri, fileName)
-                if (count > 0) {
-                    Toast.makeText(this@MainActivity, "تم تحميل باتش اللعبة بنجاح ($count نص)", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this@MainActivity, "تعذر قراءة نصوص الترجمة من الملف المختار", Toast.LENGTH_LONG).show()
-                }
+            val count = PatchManager.loadPatchFromUri(this, uri)
+            if (count > 0) {
+                Toast.makeText(this, "تم تحميل الباتش بنجاح (${count} سطر حوار)", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "تعذر قراءة ملف الباتش أو الملف فارغ", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    private fun getFileNameFromUri(uri: Uri): String {
-        var name = "game_patch"
-        try {
-            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (nameIndex != -1 && cursor.moveToFirst()) {
-                    name = cursor.getString(nameIndex)
-                }
+    private var pendingEnglishUri: Uri? = null
+
+    private val pairArabicFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { arabicUri ->
+        val engUri = pendingEnglishUri
+        if (engUri != null && arabicUri != null) {
+            val count = PatchManager.pairAndMergeDualFiles(this, engUri, arabicUri)
+            pendingEnglishUri = null
+            if (count > 0) {
+                Toast.makeText(this, getString(R.string.patch_pair_success, count.toString()), Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "تعذر مطابقة الملفين أو لا توجد أسطر متوافقة", Toast.LENGTH_SHORT).show()
             }
-        } catch (_: Exception) {}
-        return name
+        } else {
+            pendingEnglishUri = null
+        }
+    }
+
+    private val pairEnglishFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { englishUri ->
+        if (englishUri != null) {
+            pendingEnglishUri = englishUri
+            Toast.makeText(this, getString(R.string.patch_pick_arabic_prompt), Toast.LENGTH_SHORT).show()
+            pairArabicFilePickerLauncher.launch(arrayOf("*/*"))
+        }
     }
 
     private val mediaProjectionLauncher = registerForActivityResult(
@@ -204,15 +185,24 @@ class MainActivity : AppCompatActivity() {
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+        // Idempotent dictionary loading for instant OCR repair across all lifecycles
+        EnglishWordRepairer.init(applicationContext)
+
+        // Clean stale update APKs & schedule 24h background update check
+        AppUpdateManager.cleanStaleUpdates(this)
+        UpdateCheckWorker.schedulePeriodicCheck(this)
+
         cacheManager = TranslationCacheManager(this)
         glossaryManager = GlossaryManager(this)
         val initialConfig = TranslationConfig(
-            mode = if (prefs.getString(KEY_TRANSLATION_MODE, MODE_OFFLINE) == MODE_CLOUD) TranslationMode.CLOUD_OPENAI else TranslationMode.OFFLINE_MLKIT,
+            mode = if (prefs.getString(KEY_TRANSLATION_MODE, MODE_AUTO) == MODE_OFFLINE) TranslationMode.OFFLINE_MLKIT else TranslationMode.CLOUD_OPENAI,
             apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
-            apiEndpoint = prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions") ?: ""
+            apiEndpoint = prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1") ?: "https://api.openai.com/v1",
+            modelName = prefs.getString(KEY_MODEL_NAME, "gpt-4o-mini") ?: "gpt-4o-mini"
         )
         translationManager = TranslationManager(this, cacheManager, glossaryManager, initialConfig)
 
+        setupBottomNavigation()
         loadSettings()
         setupListeners()
         requestNotificationPermissionIfNeeded()
@@ -222,6 +212,58 @@ class MainActivity : AppCompatActivity() {
         observeModelDownloadState()
         observePatchStatus()
         PatchManager.init(this)
+
+        handleUpdateIntent(intent)
+        checkUpdatesThrottled()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        handleUpdateIntent(intent)
+    }
+
+    private fun handleUpdateIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(AppUpdateManager.EXTRA_OPEN_UPDATE_DIALOG, false) == true) {
+            val tag = intent.getStringExtra("release_tag") ?: return
+            val body = intent.getStringExtra("release_body") ?: ""
+            val url = intent.getStringExtra("release_url") ?: return
+            val size = intent.getLongExtra("release_size", 0L)
+            showUpdateDialog(ReleaseInfo(tag, body, url, size))
+        }
+    }
+
+    private fun checkUpdatesThrottled() {
+        val lastCheckMs = prefs.getLong(AppUpdateManager.PREFS_KEY_LAST_CHECK_MS, 0L)
+        val now = System.currentTimeMillis()
+        if (now - lastCheckMs >= 12 * 60 * 60 * 1000L) {
+            checkForUpdates(manual = false)
+        }
+    }
+
+    private fun setupBottomNavigation() {
+        binding.bottomNav.setOnItemSelectedListener { item ->
+            when (item.itemId) {
+                R.id.tab_home -> {
+                    binding.layoutTabHome.visibility = View.VISIBLE
+                    binding.layoutTabAppearance.visibility = View.GONE
+                    binding.layoutTabHistory.visibility = View.GONE
+                    true
+                }
+                R.id.tab_appearance -> {
+                    binding.layoutTabHome.visibility = View.GONE
+                    binding.layoutTabAppearance.visibility = View.VISIBLE
+                    binding.layoutTabHistory.visibility = View.GONE
+                    true
+                }
+                R.id.tab_history -> {
+                    binding.layoutTabHome.visibility = View.GONE
+                    binding.layoutTabAppearance.visibility = View.GONE
+                    binding.layoutTabHistory.visibility = View.VISIBLE
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     override fun onResume() {
@@ -379,7 +421,7 @@ class MainActivity : AppCompatActivity() {
                             binding.pbAsrDownload.visibility = View.GONE
                             binding.tvAsrDownloadProgress.visibility = View.GONE
                             updateAudioModelStatus()
-                            Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح! يمكنك تفعيله من المفتاح أدناه.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this@MainActivity, "تم اكتمال تنزيل وتثبيت نموذج صوت الألعاب بنجاح!", Toast.LENGTH_SHORT).show()
                             binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
                             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO)
                                 != PackageManager.PERMISSION_GRANTED
@@ -464,17 +506,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadSettings() {
-        val mode = prefs.getString(KEY_TRANSLATION_MODE, MODE_OFFLINE)
-        if (mode == MODE_CLOUD) {
-            binding.rbCloudOpenAi.isChecked = true
-            binding.layoutCloudSettings.visibility = View.VISIBLE
-        } else {
-            binding.rbOfflineMlKit.isChecked = true
-            binding.layoutCloudSettings.visibility = View.GONE
+        val mode = prefs.getString(KEY_TRANSLATION_MODE, MODE_AUTO)
+        when (mode) {
+            MODE_CLOUD -> {
+                binding.rbCloudOpenAi.isChecked = true
+                binding.layoutCloudSettings.visibility = View.VISIBLE
+            }
+            MODE_OFFLINE -> {
+                binding.rbOfflineMlKit.isChecked = true
+                binding.layoutCloudSettings.visibility = View.GONE
+            }
+            else -> {
+                binding.rbAutoCloudOffline.isChecked = true
+                binding.layoutCloudSettings.visibility = View.VISIBLE
+            }
         }
 
         binding.etApiKey.setText(prefs.getString(KEY_API_KEY, ""))
-        binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1/chat/completions"))
+        binding.etApiEndpoint.setText(prefs.getString(KEY_API_ENDPOINT, "https://api.openai.com/v1"))
+        binding.etModelName.setText(prefs.getString(KEY_MODEL_NAME, "gpt-4o-mini"))
 
         binding.switchGameAudio.isChecked = prefs.getBoolean(KEY_GAME_AUDIO_ENABLED, false)
 
@@ -496,22 +546,119 @@ class MainActivity : AppCompatActivity() {
         binding.switchOnlineEnhanced.isChecked = prefs.getBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, false)
         binding.switchTypewriterMode.isChecked = prefs.getBoolean(KEY_TYPEWRITER_MODE, false)
 
+        // Subtitle Appearance Customizer Settings
         val fontSizeSp = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
-        binding.sliderFontSize.progress = (fontSizeSp - 14f).toInt().coerceIn(0, 10)
-        binding.tvFontSizeValue.text = "${fontSizeSp.toInt()} sp"
+        binding.sliderFontSize.progress = (fontSizeSp - 14f).toInt().coerceIn(0, 14)
+        binding.tvFontSizeValue.text = getString(R.string.font_size_label, fontSizeSp.toInt())
+
+        val colorHex = prefs.getString(KEY_SUBTITLE_TEXT_COLOR, "#FFFFFF") ?: "#FFFFFF"
+        when (colorHex) {
+            "#FDE047" -> binding.rbColorGold.isChecked = true
+            "#67E8F9" -> binding.rbColorCyan.isChecked = true
+            else -> binding.rbColorWhite.isChecked = true
+        }
+
+        val opacity = prefs.getInt(KEY_SUBTITLE_BG_OPACITY, 88)
+        binding.sliderBgOpacity.progress = (opacity - 40).coerceIn(0, 60)
+        binding.tvBgOpacityValue.text = getString(R.string.bg_opacity_label, opacity)
+
+        binding.switchTextShadow.isChecked = prefs.getBoolean(KEY_SUBTITLE_TEXT_SHADOW, true)
+
+        // Developer Mode
+        val devMode = prefs.getBoolean(KEY_DEVELOPER_MODE, false)
+        binding.switchDeveloperMode.isChecked = devMode
+        binding.layoutDiagnosticConsole.visibility = if (devMode) View.VISIBLE else View.GONE
+
+        // App Version
+        binding.tvCurrentVersion.text = getString(R.string.current_version_label, BuildConfig.VERSION_NAME)
+
+        updateSubtitlePreview()
 
         if (!isUpdatingProfileUi) {
             setupGameProfileSelector()
         }
     }
 
+    private fun updateSubtitlePreview() {
+        val fontSize = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
+        val textColorHex = prefs.getString(KEY_SUBTITLE_TEXT_COLOR, "#FFFFFF") ?: "#FFFFFF"
+        val bgOpacity = prefs.getInt(KEY_SUBTITLE_BG_OPACITY, 88)
+        val hasShadow = prefs.getBoolean(KEY_SUBTITLE_TEXT_SHADOW, true)
+        val isOpaqueCover = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OFFSET_ABOVE) == MODE_OPAQUE_COVER
+
+        binding.tvPreviewSubtitleText.textSize = fontSize
+        try {
+            binding.tvPreviewSubtitleText.setTextColor(Color.parseColor(textColorHex))
+        } catch (_: Exception) {
+            binding.tvPreviewSubtitleText.setTextColor(Color.WHITE)
+        }
+
+        if (hasShadow) {
+            binding.tvPreviewSubtitleText.setShadowLayer(6f, 0f, 2f, Color.BLACK)
+        } else {
+            binding.tvPreviewSubtitleText.setShadowLayer(0f, 0f, 0f, 0)
+        }
+
+        val bgAlpha = (bgOpacity * 255 / 100).coerceIn(40, 255)
+        val bgDrawable = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 8f * resources.displayMetrics.density
+            val colorBase = if (isOpaqueCover) Color.parseColor("#05070B") else Color.parseColor("#0D111A")
+            setColor(Color.argb(bgAlpha, Color.red(colorBase), Color.green(colorBase), Color.blue(colorBase)))
+            if (hasShadow && !isOpaqueCover) {
+                setStroke((1.5f * resources.displayMetrics.density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+            } else {
+                setStroke(0, 0)
+            }
+        }
+        binding.tvPreviewSubtitleText.background = bgDrawable
+
+        if (isServiceRunning) {
+            val intent = Intent(this, TranslationOverlayService::class.java).apply {
+                action = TranslationOverlayService.ACTION_RELOAD_SETTINGS
+                putExtra(TranslationOverlayService.EXTRA_FONT_SIZE_SP, fontSize)
+            }
+            startService(intent)
+        }
+    }
+
+    private fun autoSaveTranslationConfig() {
+        val selectedMode = when {
+            binding.rbAutoCloudOffline.isChecked -> MODE_AUTO
+            binding.rbCloudOpenAi.isChecked -> MODE_CLOUD
+            else -> MODE_OFFLINE
+        }
+        val apiKey = binding.etApiKey.text?.toString()?.trim() ?: ""
+        val apiEndpoint = binding.etApiEndpoint.text?.toString()?.trim() ?: ""
+        val modelName = binding.etModelName.text?.toString()?.trim() ?: "gpt-4o-mini"
+
+        prefs.edit()
+            .putString(KEY_TRANSLATION_MODE, selectedMode)
+            .putString(KEY_API_KEY, apiKey)
+            .putString(KEY_API_ENDPOINT, if (apiEndpoint.isBlank()) "https://api.openai.com/v1" else apiEndpoint)
+            .putString(KEY_MODEL_NAME, if (modelName.isBlank()) "gpt-4o-mini" else modelName)
+            .putBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, binding.switchOnlineEnhanced.isChecked)
+            .apply()
+
+        translationManager.updateConfig(
+            TranslationConfig(
+                mode = if (selectedMode == MODE_OFFLINE) TranslationMode.OFFLINE_MLKIT else TranslationMode.CLOUD_OPENAI,
+                apiKey = apiKey,
+                apiEndpoint = if (apiEndpoint.isBlank()) "https://api.openai.com/v1" else apiEndpoint,
+                modelName = if (modelName.isBlank()) "gpt-4o-mini" else modelName
+            )
+        )
+    }
+
     private fun setupListeners() {
+        // Translation Engine Selection (Auto-Saved)
         binding.rgTranslationMode.setOnCheckedChangeListener { _, checkedId ->
-            val isCloud = (checkedId == R.id.rbCloudOpenAi)
-            binding.layoutCloudSettings.visibility = if (isCloud) View.VISIBLE else View.GONE
+            val showCloud = (checkedId == R.id.rbCloudOpenAi || checkedId == R.id.rbAutoCloudOffline)
+            binding.layoutCloudSettings.visibility = if (showCloud) View.VISIBLE else View.GONE
+            autoSaveTranslationConfig()
 
             if (!isServiceRunning) {
-                if (!isCloud) {
+                if (checkedId == R.id.rbOfflineMlKit) {
                     val isReady = (translationManager.modelStatusFlow.value == ModelStatus.READY)
                     binding.btnToggleService.isEnabled = isReady
                     binding.btnToggleService.alpha = if (isReady) 1.0f else 0.5f
@@ -522,48 +669,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.btnSaveSettings.setOnClickListener {
-            val selectedMode = if (binding.rbCloudOpenAi.isChecked) MODE_CLOUD else MODE_OFFLINE
-            val apiKey = binding.etApiKey.text?.toString()?.trim() ?: ""
-            val apiEndpoint = binding.etApiEndpoint.text?.toString()?.trim() ?: ""
-
-            prefs.edit()
-                .putString(KEY_TRANSLATION_MODE, selectedMode)
-                .putString(KEY_API_KEY, apiKey)
-                .putString(KEY_API_ENDPOINT, if (apiEndpoint.isBlank()) "https://api.openai.com/v1/chat/completions" else apiEndpoint)
-                .putBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, binding.switchOnlineEnhanced.isChecked)
-                .apply()
-
-            translationManager.updateConfig(
-                TranslationConfig(
-                    mode = if (selectedMode == MODE_CLOUD) TranslationMode.CLOUD_OPENAI else TranslationMode.OFFLINE_MLKIT,
-                    apiKey = apiKey,
-                    apiEndpoint = if (apiEndpoint.isBlank()) "https://api.openai.com/v1/chat/completions" else apiEndpoint
-                )
-            )
-
-            Toast.makeText(this, getString(R.string.settings_saved), Toast.LENGTH_SHORT).show()
+        val autoSaveWatcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                autoSaveTranslationConfig()
+            }
+            override fun afterTextChanged(s: Editable?) {}
         }
-
-        binding.btnDownloadModel.setOnClickListener {
-            Toast.makeText(this, "جاري بدء تحميل نموذج الترجمة الإنجليزية -> العربية...", Toast.LENGTH_SHORT).show()
-            DiagnosticLogger.log("User triggered offline model download")
-            translationManager.downloadOfflineModel(
-                onSuccess = {
-                    Toast.makeText(this, "اكتمل تنزيل نموذج الترجمة بنجاح!", Toast.LENGTH_SHORT).show()
-                    DiagnosticLogger.log("Offline translation model ready")
-                },
-                onFailure = { e ->
-                    Toast.makeText(this, "فشل تنزيل النموذج: ${e.message}", Toast.LENGTH_LONG).show()
-                    DiagnosticLogger.log("Model download failed: ${e.message}")
-                }
-            )
-        }
+        binding.etApiEndpoint.addTextChangedListener(autoSaveWatcher)
+        binding.etApiKey.addTextChangedListener(autoSaveWatcher)
+        binding.etModelName.addTextChangedListener(autoSaveWatcher)
 
         binding.switchOnlineEnhanced.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, isChecked).apply()
-            val msg = if (isChecked) "تم تفعيل الترجمة السحابية المحسّنة (مع عودة تلقائية للأوفلاين 900ms)" else "تم الرجوع للترجمة المحلية بدون إنترنت بالكامل"
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            autoSaveTranslationConfig()
         }
 
         binding.switchGameAudio.setOnCheckedChangeListener { _, isChecked ->
@@ -585,6 +704,94 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putBoolean(KEY_GAME_AUDIO_ENABLED, false).putBoolean("audio_translation_enabled", false).apply()
                 Toast.makeText(this, "تم إيقاف الترجمة الصوتية", Toast.LENGTH_SHORT).show()
             }
+        }
+
+        // Subtitle Appearance: Display Mode
+        binding.rgCoverMode.setOnCheckedChangeListener { _, checkedId ->
+            val mode = if (checkedId == R.id.rbOffsetAbove) MODE_OFFSET_ABOVE else MODE_OPAQUE_COVER
+            prefs.edit().putString(KEY_OVERLAY_RENDER_MODE, mode).apply()
+            updateSubtitlePreview()
+        }
+
+        // Subtitle Appearance: Font Size Slider
+        binding.sliderFontSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val fontSize = 14f + progress
+                binding.tvFontSizeValue.text = getString(R.string.font_size_label, fontSize.toInt())
+                if (fromUser) {
+                    prefs.edit().putFloat(KEY_SUBTITLE_FONT_SIZE_SP, fontSize).apply()
+                    updateSubtitlePreview()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        // Subtitle Appearance: Text Color Presets
+        binding.rgTextColorPresets.setOnCheckedChangeListener { _, checkedId ->
+            val colorHex = when (checkedId) {
+                R.id.rbColorGold -> "#FDE047"
+                R.id.rbColorCyan -> "#67E8F9"
+                else -> "#FFFFFF"
+            }
+            prefs.edit().putString(KEY_SUBTITLE_TEXT_COLOR, colorHex).apply()
+            updateSubtitlePreview()
+        }
+
+        // Subtitle Appearance: Background Opacity Slider
+        binding.sliderBgOpacity.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val opacity = 40 + progress
+                binding.tvBgOpacityValue.text = getString(R.string.bg_opacity_label, opacity)
+                if (fromUser) {
+                    prefs.edit().putInt(KEY_SUBTITLE_BG_OPACITY, opacity).apply()
+                    updateSubtitlePreview()
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        // Subtitle Appearance: Border / Shadow Toggle
+        binding.switchTextShadow.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_SUBTITLE_TEXT_SHADOW, isChecked).apply()
+            updateSubtitlePreview()
+        }
+
+        // Developer Mode Toggle
+        binding.switchDeveloperMode.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_DEVELOPER_MODE, isChecked).apply()
+            binding.layoutDiagnosticConsole.visibility = if (isChecked) View.VISIBLE else View.GONE
+        }
+
+        // App Updates Check
+        binding.btnCheckUpdates.setOnClickListener {
+            checkForUpdates(manual = true)
+        }
+
+        // GitHub Repo Link
+        binding.btnGithubRepo.setOnClickListener {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/Zlatan-RDR/GameLensTranslator"))
+                startActivity(intent)
+            } catch (t: Throwable) {
+                Toast.makeText(this, "تعذر فتح الرابط: ${t.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        binding.btnDownloadModel.setOnClickListener {
+            Toast.makeText(this, "جاري بدء تحميل نموذج الترجمة الإنجليزية -> العربية...", Toast.LENGTH_SHORT).show()
+            DiagnosticLogger.log("User triggered offline model download")
+            translationManager.downloadOfflineModel(
+                onSuccess = {
+                    Toast.makeText(this, "اكتمل تنزيل نموذج الترجمة بنجاح!", Toast.LENGTH_SHORT).show()
+                    DiagnosticLogger.log("Offline translation model ready")
+                },
+                onFailure = { e ->
+                    Toast.makeText(this, "فشل تنزيل النموذج: ${e.message}", Toast.LENGTH_LONG).show()
+                    DiagnosticLogger.log("Model download failed: ${e.message}")
+                }
+            )
         }
 
         binding.btnDownloadAsrPack.setOnClickListener {
@@ -612,11 +819,6 @@ class MainActivity : AppCompatActivity() {
         binding.btnClearPatch.setOnClickListener {
             PatchManager.clearPatch(this)
             Toast.makeText(this, "تم إلغاء الباتش والعودة للترجمة التلقائية", Toast.LENGTH_SHORT).show()
-        }
-
-        binding.rgCoverMode.setOnCheckedChangeListener { _, checkedId ->
-            val mode = if (checkedId == R.id.rbOffsetAbove) MODE_OFFSET_ABOVE else MODE_OPAQUE_COVER
-            prefs.edit().putString(KEY_OVERLAY_RENDER_MODE, mode).apply()
         }
 
         binding.btnCalibrateBox.setOnClickListener {
@@ -687,25 +889,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.sliderFontSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val fontSize = 14f + progress
-                binding.tvFontSizeValue.text = "${fontSize.toInt()} sp"
-                if (fromUser) {
-                    prefs.edit().putFloat(KEY_SUBTITLE_FONT_SIZE_SP, fontSize).apply()
-                    if (isServiceRunning) {
-                        val intent = Intent(this@MainActivity, TranslationOverlayService::class.java).apply {
-                            action = TranslationOverlayService.ACTION_UPDATE_FONT_SIZE
-                            putExtra(TranslationOverlayService.EXTRA_FONT_SIZE_SP, fontSize)
-                        }
-                        startService(intent)
-                    }
-                }
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-
         binding.btnCopySubtitleHistory.setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("GameLens Subtitles", SubtitleHistoryManager.getFormattedHistory()))
@@ -743,7 +926,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             val options = arrayOf("JSON Patch (تعديل اللعبة والمشاركة)", "SRT Subtitles (ملف ترجمة مرئي)")
-            androidx.appcompat.app.AlertDialog.Builder(this)
+            AlertDialog.Builder(this)
                 .setTitle("تصدير الحوارات المسجلة")
                 .setItems(options) { _, which ->
                     val format = if (which == 0) SubtitleHistoryManager.ExportFormat.JSON else SubtitleHistoryManager.ExportFormat.SRT
@@ -759,18 +942,87 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun checkForUpdates(manual: Boolean) {
+        if (manual) {
+            Toast.makeText(this, getString(R.string.checking_updates), Toast.LENGTH_SHORT).show()
+        }
+        lifecycleScope.launch {
+            when (val result = AppUpdateManager.checkForUpdate()) {
+                is UpdateCheckResult.UpdateAvailable -> {
+                    showUpdateDialog(result.release)
+                }
+                is UpdateCheckResult.UpToDate -> {
+                    if (manual) {
+                        Toast.makeText(this@MainActivity, getString(R.string.app_up_to_date, BuildConfig.VERSION_NAME), Toast.LENGTH_SHORT).show()
+                    }
+                }
+                is UpdateCheckResult.Error -> {
+                    if (manual) {
+                        Toast.makeText(this@MainActivity, "خطأ في التحقق من التحديثات: ${result.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showUpdateDialog(release: ReleaseInfo) {
+        val sizeMb = release.apkSizeBytes / (1024.0 * 1024.0)
+        val view = layoutInflater.inflate(android.R.layout.simple_list_item_1, null)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.update_dialog_title, release.tagName))
+            .setMessage("الحجم: %.1f MB\n\nالمميزات والإصلاحات:\n%s".format(java.util.Locale.US, sizeMb, release.releaseNotes))
+            .setPositiveButton(R.string.btn_update_now, null)
+            .setNegativeButton("لاحقاً", null)
+            .create()
+
+        dialog.setOnShowListener {
+            val positiveBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            positiveBtn.setOnClickListener {
+                positiveBtn.isEnabled = false
+                dialog.setMessage("جاري تنزيل التحديث (%s)... يرجى الانتظار.".format(release.tagName))
+
+                lifecycleScope.launch {
+                    val downloadedApk = AppUpdateManager.downloadApk(this@MainActivity, release.downloadUrl) { down, total ->
+                        val pct = if (total > 0) (down * 100 / total).toInt() else 0
+                        withContext(Dispatchers.Main) {
+                            dialog.setMessage("جاري التنزيل: %d%% (%.1f MB / %.1f MB)".format(java.util.Locale.US, pct, down / (1024.0 * 1024.0), total / (1024.0 * 1024.0)))
+                        }
+                    }
+
+                    if (downloadedApk != null && downloadedApk.exists()) {
+                        dialog.dismiss()
+                        AppUpdateManager.installApk(this@MainActivity, downloadedApk)
+                    } else {
+                        Toast.makeText(this@MainActivity, "فشل تنزيل ملف التحديث، يرجى المحاولة ثانية", Toast.LENGTH_LONG).show()
+                        positiveBtn.isEnabled = true
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+    }
+
     private fun setupGameProfileSelector() {
         val profiles = GameProfileManager.getProfiles(this)
         val profileNames = profiles.map { it.name }
-        val adapter = android.widget.ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, profileNames)
+
+        // Light text (#F1F5F9) on dark slate (#1E293B) custom spinner layouts
+        val adapter = ArrayAdapter(
+            this,
+            R.layout.item_spinner_game_profile,
+            profileNames
+        ).apply {
+            setDropDownViewResource(R.layout.item_spinner_game_profile_dropdown)
+        }
         binding.spGameProfiles.adapter = adapter
 
         val activeProfileId = GameProfileManager.getActiveProfileId(this)
         val activeIndex = profiles.indexOfFirst { it.id == activeProfileId }.coerceAtLeast(0)
         binding.spGameProfiles.setSelection(activeIndex)
 
-        binding.spGameProfiles.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+        binding.spGameProfiles.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (isUpdatingProfileUi) return
                 val selectedProfile = profiles.getOrNull(position) ?: return
                 if (selectedProfile.id != GameProfileManager.getActiveProfileId(this@MainActivity)) {
@@ -781,23 +1033,26 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, "تم تطبيق ملف: ${selectedProfile.name}", Toast.LENGTH_SHORT).show()
                 }
             }
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
         binding.btnSaveNewProfile.setOnClickListener {
-            val input = android.widget.EditText(this).apply {
-                hint = "اسم ملف اللعبة (مثال: Witcher 3)"
+            val input = EditText(this).apply {
+                hint = getString(R.string.dialog_new_profile_hint)
             }
-            androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("حفظ ملف تعريف جديد")
+            AlertDialog.Builder(this)
+                .setTitle(R.string.dialog_new_profile_title)
                 .setView(input)
-                .setPositiveButton("حفظ") { _, _ ->
+                .setPositiveButton(R.string.btn_create) { _, _ ->
                     val name = input.text.toString().trim()
                     if (name.isNotEmpty()) {
                         val calRect = CalibrationOverlay.getCalibratedRect(prefs)
                         val displayMode = prefs.getString(KEY_OVERLAY_RENDER_MODE, MODE_OFFSET_ABOVE) ?: MODE_OFFSET_ABOVE
                         val fontSize = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
                         val typewriter = prefs.getBoolean(KEY_TYPEWRITER_MODE, false)
+                        val textColor = prefs.getString(KEY_SUBTITLE_TEXT_COLOR, "#FFFFFF") ?: "#FFFFFF"
+                        val bgOpacity = prefs.getInt(KEY_SUBTITLE_BG_OPACITY, 88)
+                        val shadow = prefs.getBoolean(KEY_SUBTITLE_TEXT_SHADOW, true)
                         val newId = "profile_" + System.currentTimeMillis()
                         val newProfile = GameProfile(
                             id = newId,
@@ -808,7 +1063,10 @@ class MainActivity : AppCompatActivity() {
                             roiBottom = calRect.bottom,
                             displayMode = displayMode,
                             fontSizeSp = fontSize,
-                            typewriterMode = typewriter
+                            typewriterMode = typewriter,
+                            textColorHex = textColor,
+                            bgOpacityPct = bgOpacity,
+                            textShadow = shadow
                         )
                         GameProfileManager.saveProfile(this, newProfile)
                         GameProfileManager.applyProfile(this, newId)
@@ -816,7 +1074,7 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this, "تم إنشاء وحفظ ملف: $name", Toast.LENGTH_SHORT).show()
                     }
                 }
-                .setNegativeButton("إلغاء", null)
+                .setNegativeButton(R.string.btn_cancel, null)
                 .show()
         }
 
@@ -827,14 +1085,14 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             val curProfile = GameProfileManager.getActiveProfile(this)
-            androidx.appcompat.app.AlertDialog.Builder(this)
+            AlertDialog.Builder(this)
                 .setTitle("تأكيد الحذف")
-                .setMessage("هل تريد بالتأكيد حذف ملف: ${curProfile.name}؟")
+                .setMessage("هل تريد بالتأكيد حذف ملف تعريف: ${curProfile.name}؟")
                 .setPositiveButton("حذف") { _, _ ->
                     GameProfileManager.deleteProfile(this, curId)
                     setupGameProfileSelector()
                     loadSettings()
-                    Toast.makeText(this, "تم حذف الملف", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "تم حذف الملف بنجاح", Toast.LENGTH_SHORT).show()
                 }
                 .setNegativeButton("إلغاء", null)
                 .show()
@@ -873,15 +1131,27 @@ class MainActivity : AppCompatActivity() {
     private fun updatePermissionStates() {
         val hasOverlay = Settings.canDrawOverlays(this)
         if (hasOverlay) {
-            binding.tvOverlayStatus.text = getString(R.string.permission_granted)
-            binding.tvOverlayStatus.setTextColor(ContextCompat.getColor(this, R.color.status_active))
-            binding.btnGrantOverlay.isEnabled = false
-            binding.btnGrantOverlay.alpha = 0.5f
+            binding.tvPermissionBannerBadge.text = getString(R.string.perm_banner_granted)
+            binding.tvPermissionBannerBadge.setTextColor(Color.parseColor("#10B981"))
+            binding.layoutPermissionButtons.visibility = View.GONE
         } else {
-            binding.tvOverlayStatus.text = "غير ممنوح"
-            binding.tvOverlayStatus.setTextColor(ContextCompat.getColor(this, R.color.status_inactive))
-            binding.btnGrantOverlay.isEnabled = true
-            binding.btnGrantOverlay.alpha = 1.0f
+            binding.tvPermissionBannerBadge.text = getString(R.string.perm_banner_missing)
+            binding.tvPermissionBannerBadge.setTextColor(Color.parseColor("#FF5252"))
+            binding.layoutPermissionButtons.visibility = View.VISIBLE
+        }
+
+        val mfg = Build.MANUFACTURER.lowercase(java.util.Locale.US)
+        if (mfg == "xiaomi" || mfg == "redmi" || mfg == "poco") {
+            binding.cardHyperOsPermission.visibility = if (hasOverlay) View.GONE else View.VISIBLE
+        } else {
+            binding.cardHyperOsPermission.visibility = View.GONE
+        }
+
+        if (!isServiceRunning) {
+            val isReady = (translationManager.modelStatusFlow.value == ModelStatus.READY) ||
+                    binding.rbCloudOpenAi.isChecked || binding.rbAutoCloudOffline.isChecked
+            binding.btnToggleService.isEnabled = isReady
+            binding.btnToggleService.alpha = if (isReady) 1.0f else 0.5f
         }
     }
 

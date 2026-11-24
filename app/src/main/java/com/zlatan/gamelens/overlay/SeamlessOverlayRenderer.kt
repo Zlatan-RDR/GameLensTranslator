@@ -637,7 +637,22 @@ class SeamlessOverlayRenderer(private val context: Context) {
             val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) == MainActivity.MODE_OPAQUE_COVER
             val calRect = CalibrationOverlay.getCalibratedRect(prefs)
             val fontSizeSp = prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, 18f)
+            val textColorHex = prefs.getString(MainActivity.KEY_SUBTITLE_TEXT_COLOR, "#FFFFFF") ?: "#FFFFFF"
+            val bgOpacityPct = prefs.getInt(MainActivity.KEY_SUBTITLE_BG_OPACITY, 88)
+            val hasShadow = prefs.getBoolean(MainActivity.KEY_SUBTITLE_TEXT_SHADOW, true)
+            val bgAlpha = (bgOpacityPct * 255 / 100).coerceIn(40, 255)
+
             sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSizeSp)
+            try {
+                sub.setTextColor(Color.parseColor(textColorHex))
+            } catch (_: Exception) {
+                sub.setTextColor(Color.WHITE)
+            }
+            if (hasShadow) {
+                sub.setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            } else {
+                sub.setShadowLayer(0f, 0f, 0f, 0)
+            }
 
             val metrics = context.resources.displayMetrics
             val screenW = metrics.widthPixels
@@ -663,16 +678,16 @@ class SeamlessOverlayRenderer(private val context: Context) {
                     }
                 }
 
-                // 100% solid opaque dark (0xFF05070B, alpha = 255) positioned directly over calibrated subtitle zone
+                // Custom opaque dark positioned directly over calibrated subtitle zone
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(Color.argb(255, 5, 7, 11)) // 0xFF05070B
+                    setColor(Color.argb(bgAlpha, 5, 7, 11)) // 0xFF05070B
                     cornerRadius = 8f * density
-                    alpha = 255
+                    alpha = bgAlpha
                 }
                 sub.background = bg
                 sub.alpha = 1.0f
-                sub.background?.alpha = 255
+                sub.background?.alpha = bgAlpha
                 sub.setPadding((16 * density).toInt(), (10 * density).toInt(), (16 * density).toInt(), (10 * density).toInt())
 
                 val opaqueTop = (calRect.top * screenH).toInt()
@@ -695,14 +710,18 @@ class SeamlessOverlayRenderer(private val context: Context) {
 
                 val bg = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
-                    setColor(Color.argb(255, 13, 17, 26)) // 100% solid opaque #FF0D111A
+                    setColor(Color.argb(bgAlpha, 13, 17, 26))
                     cornerRadius = 10f * density
-                    alpha = 255
-                    setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+                    alpha = bgAlpha
+                    if (hasShadow) {
+                        setStroke((1.5f * density).toInt().coerceAtLeast(1), Color.parseColor("#4DFFFFFF"))
+                    } else {
+                        setStroke(0, 0)
+                    }
                 }
                 sub.background = bg
                 sub.alpha = 1.0f
-                sub.background?.alpha = 255
+                sub.background?.alpha = bgAlpha
                 sub.setPadding((18 * density).toInt(), (8 * density).toInt(), (18 * density).toInt(), (8 * density).toInt())
 
                 val bottomAnchor = (screenH - zoneTop + gap4dp).coerceAtLeast(0)
@@ -739,6 +758,29 @@ class SeamlessOverlayRenderer(private val context: Context) {
     fun updateFontSize(fontSizeSp: Float) {
         mainHandler.post {
             subtitleView?.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSizeSp)
+        }
+    }
+
+    fun reloadAppearanceSettings() {
+        mainHandler.post {
+            val prefs = context.getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
+            val fontSize = prefs.getFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, 18f)
+            val textColorHex = prefs.getString(MainActivity.KEY_SUBTITLE_TEXT_COLOR, "#FFFFFF") ?: "#FFFFFF"
+            val hasShadow = prefs.getBoolean(MainActivity.KEY_SUBTITLE_TEXT_SHADOW, true)
+
+            subtitleView?.let { sub ->
+                sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSize)
+                try {
+                    sub.setTextColor(Color.parseColor(textColorHex))
+                } catch (_: Exception) {
+                    sub.setTextColor(Color.WHITE)
+                }
+                if (hasShadow) {
+                    sub.setShadowLayer(6f, 0f, 2f, Color.BLACK)
+                } else {
+                    sub.setShadowLayer(0f, 0f, 0f, 0)
+                }
+            }
         }
     }
 

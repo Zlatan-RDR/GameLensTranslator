@@ -1,1058 +1,1151 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.core.widget.NestedScrollView
+<androidx.constraintlayout.widget.ConstraintLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/background_dark"
-    android:fillViewport="true">
+    android:background="@color/background_dark">
 
-    <androidx.constraintlayout.widget.ConstraintLayout
+    <!-- Top App Header -->
+    <LinearLayout
+        android:id="@+id/layoutAppHeader"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="20dp">
+        android:orientation="vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="14dp"
+        android:paddingBottom="8dp"
+        android:gravity="center"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
 
-        <!-- Header Section -->
         <TextView
             android:id="@+id/tvAppTitle"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/app_name"
             android:textColor="@color/accent"
-            android:textSize="26sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            app:layout_constraintTop_toTopOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
+            android:textSize="22sp"
+            android:textStyle="bold" />
 
         <TextView
             android:id="@+id/tvAppSubtitle"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="2dp"
             android:text="@string/app_subtitle"
             android:textColor="@color/text_secondary"
-            android:textSize="14sp"
-            android:gravity="center"
-            app:layout_constraintTop_toBottomOf="@id/tvAppTitle"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
+            android:textSize="12sp"
+            android:gravity="center" />
+    </LinearLayout>
 
-        <!-- Card: Overlay Permission -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardOverlayPermission"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/tvAppSubtitle"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
+    <!-- Tab Content Container -->
+    <FrameLayout
+        android:id="@+id/tabContentContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toBottomOf="@id/layoutAppHeader"
+        app:layout_constraintBottom_toTopOf="@id/layoutPinnedBottomBar"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/permission_overlay_title"
-                        android:textColor="@color/text_primary"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/tvOverlayStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="غير ممنوح"
-                        android:textColor="@color/status_inactive"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/permission_overlay_desc"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnGrantOverlay"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/permission_grant_action"
-                    android:textColor="@color/background_dark"
-                    app:backgroundTint="@color/accent"
-                    app:cornerRadius="8dp" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Card: MediaProjection Status -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardMediaProjection"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardOverlayPermission"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
+        <!-- ======================================================== -->
+        <!-- TAB 1: HOME (الرئيسية)                                   -->
+        <!-- ======================================================== -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/layoutTabHome"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="visible">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="16dp">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/permission_media_title"
-                        android:textColor="@color/text_primary"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/tvMediaStatus"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="جاهز للطلب"
-                        android:textColor="@color/accent"
-                        android:textSize="13sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/permission_media_desc"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Card: HyperOS / Xiaomi Background Popup Permission -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardHyperOsPermission"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardMediaProjection"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/hyperos_perm_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/hyperos_perm_desc"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnHyperOsPerm"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/btn_hyperos_perm"
-                    android:textColor="@color/background_dark"
-                    app:backgroundTint="@color/accent"
-                    app:cornerRadius="8dp" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Card: Translation Engine Settings -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardTranslationSettings"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardHyperOsPermission"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/translation_settings_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <RadioGroup
-                    android:id="@+id/rgTranslationMode"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp">
-
-                    <RadioButton
-                        android:id="@+id/rbOfflineMlKit"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/engine_offline"
-                        android:textColor="@color/text_primary"
-                        android:checked="true" />
-
-                    <RadioButton
-                        android:id="@+id/rbCloudOpenAi"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/engine_cloud"
-                        android:textColor="@color/text_primary" />
-                </RadioGroup>
-
-                <LinearLayout
-                    android:id="@+id/layoutCloudSettings"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:visibility="gone"
-                    android:layout_marginTop="8dp">
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:hint="@string/api_key_hint"
-                        app:boxBackgroundColor="@color/background_dark"
-                        app:boxStrokeColor="@color/accent"
-                        app:hintTextColor="@color/accent"
-                        app:endIconMode="password_toggle">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etApiKey"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:inputType="textPassword"
-                            android:textColor="@color/text_primary"
-                            android:textSize="13sp" />
-                    </com.google.android.material.textfield.TextInputLayout>
-
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:hint="@string/endpoint_hint"
-                        app:boxBackgroundColor="@color/background_dark"
-                        app:boxStrokeColor="@color/accent"
-                        app:hintTextColor="@color/accent">
-
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etApiEndpoint"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:text="https://api.openai.com/v1/chat/completions"
-                            android:textColor="@color/text_primary"
-                            android:textSize="13sp" />
-                    </com.google.android.material.textfield.TextInputLayout>
-                </LinearLayout>
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:layout_marginTop="12dp">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="ترجمة سحابية محسّنة (مع عودة تلقائية للأوفلاين)"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <com.google.android.material.switchmaterial.SwitchMaterial
-                        android:id="@+id/switchOnlineEnhanced"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="استخدام خدمة الترجمة الفورية المجانية عند توفر الإنترنت مع العودة للأوفلاين بحد أقصى 900ms"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
-
-                <!-- Switch: Typewriter Mode -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:layout_marginTop="8dp">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="وضع النص المتدفق (JRPG / Visual Novels)"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <com.google.android.material.switchmaterial.SwitchMaterial
-                        android:id="@+id/switchTypewriterMode"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
-                    android:text="تثبيت الحوارات المتدفقة تدريجياً لمدة 350ms قبل ترجمتها لمنع الوميض والترجمة الجزئية"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="11sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnSaveSettings"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="@string/save_settings"
-                    android:textColor="@color/background_dark"
-                    app:backgroundTint="@color/accent"
-                    app:cornerRadius="8dp" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Card: Offline Translation Model (EN -> AR) -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardOfflineModel"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardTranslationSettings"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/model_gate_title"
-                        android:textColor="@color/text_primary"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/tvModelStatusBadge"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/model_status_not_downloaded"
-                        android:textColor="@color/status_inactive"
-                        android:textSize="12sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/model_gate_desc"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-
-                <ProgressBar
-                    android:id="@+id/pbModelDownload"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:layout_width="match_parent"
-                    android:layout_height="4dp"
-                    android:layout_marginTop="8dp"
-                    android:indeterminate="true"
-                    android:visibility="gone" />
-
-                <TextView
-                    android:id="@+id/tvModelHint"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/model_download_hint"
-                    android:textColor="#FFB74D"
-                    android:textSize="11sp"
-                    android:visibility="gone" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnDownloadModel"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="@string/model_btn_download"
-                    android:textColor="@color/background_dark"
-                    app:backgroundTint="@color/accent"
-                    app:cornerRadius="8dp" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Card: Internal Game Audio Live Translation (Sherpa-ONNX) -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardGameAudio"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardOfflineModel"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/game_audio_title"
-                        android:textColor="@color/text_primary"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <com.google.android.material.switchmaterial.SwitchMaterial
-                        android:id="@+id/switchGameAudio"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/game_audio_desc"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/tvAudioModelStatus"
+                <!-- 1. Compact Permissions Banner -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardPermissionsBanner"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:text="@string/game_audio_status_ready"
-                    android:textColor="@color/accent"
-                    android:textSize="12sp" />
-
-                <ProgressBar
-                    android:id="@+id/pbAsrDownload"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:layout_width="match_parent"
-                    android:layout_height="6dp"
-                    android:layout_marginTop="8dp"
-                    android:max="100"
-                    android:progress="0"
-                    android:visibility="gone" />
-
-                <TextView
-                    android:id="@+id/tvAsrDownloadProgress"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:textColor="@color/accent"
-                    android:textSize="11sp"
-                    android:visibility="gone" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnDownloadAsrPack"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/btn_download_asr_pack"
-                    android:textColor="@color/background_dark"
-                    app:backgroundTint="@color/accent"
-                    app:cornerRadius="8dp"
-                    android:visibility="visible" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Card: Game Patch Engine (0ms human translations) -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardGamePatch"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardGameAudio"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/game_patch_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/game_patch_desc"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:id="@+id/tvActivePatchBadge"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/patch_badge_empty"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnLoadGamePatch"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/btn_load_game_patch"
-                        android:textSize="11sp"
-                        android:textColor="@color/background_dark"
-                        app:backgroundTint="@color/accent"
-                        app:cornerRadius="8dp" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnPairDualPatch"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:layout_marginStart="6dp"
-                        android:text="@string/btn_pair_dual_patch"
-                        android:textSize="11sp"
-                        android:textColor="@color/background_dark"
-                        app:backgroundTint="#00E5FF"
-                        app:cornerRadius="8dp" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnClearPatch"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
-                        android:text="@string/btn_clear_patch"
-                        android:textSize="11sp"
-                        android:textColor="@color/text_primary"
-                        app:backgroundTint="#37474F"
-                        app:cornerRadius="8dp"
-                        android:visibility="gone" />
-                </LinearLayout>
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Card: Visual Calibration & Opaque Cover Mode -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardCalibration"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardCornerRadius="14dp"
-            app:cardElevation="3dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:layout_constraintTop_toBottomOf="@id/cardGamePatch"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/calibration_title"
-                    android:textColor="@color/text_primary"
-                    android:textSize="15sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/calibration_desc"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp" />
-
-                <!-- Per-Game Profile Selector Row -->
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="ملف تعريف اللعبة (Game Profile):"
-                    android:textColor="@color/accent"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:layout_marginTop="4dp">
-
-                    <Spinner
-                        android:id="@+id/spGameProfiles"
-                        android:layout_width="0dp"
-                        android:layout_height="40dp"
-                        android:layout_weight="1"
-                        android:background="#263238" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnSaveNewProfile"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:layout_marginStart="4dp"
-                        android:minWidth="40dp"
-                        android:text="+ جديد"
-                        android:textSize="11sp"
-                        app:backgroundTint="@color/accent"
-                        android:textColor="@color/background_dark"
-                        app:cornerRadius="6dp" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnDeleteProfile"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:layout_marginStart="4dp"
-                        android:minWidth="40dp"
-                        android:text="حذف"
-                        android:textSize="11sp"
-                        app:backgroundTint="#B71C1C"
-                        android:textColor="@android:color/white"
-                        app:cornerRadius="6dp" />
-                </LinearLayout>
-
-                <!-- RadioGroup for Cover Mode -->
-                <RadioGroup
-                    android:id="@+id/rgCoverMode"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp">
-
-                    <RadioButton
-                        android:id="@+id/rbOpaqueCover"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/mode_opaque_cover"
-                        android:textColor="@color/text_primary"
-                        android:checked="true" />
-
-                    <RadioButton
-                        android:id="@+id/rbOffsetAbove"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="@string/mode_offset_above"
-                        android:textColor="@color/text_primary" />
-                </RadioGroup>
-
-                <!-- Subtitle Font Size Slider (14sp - 24sp) -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:layout_marginTop="10dp">
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal">
+                        android:orientation="vertical"
+                        android:padding="12dp">
 
                         <TextView
-                            android:layout_width="0dp"
+                            android:id="@+id/tvPermissionBannerBadge"
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="حجم خط الترجمة (Subtitle Font Size)"
+                            android:text="@string/perm_banner_missing"
+                            android:textColor="@color/status_inactive"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <!-- Expandable buttons if permission is missing -->
+                        <LinearLayout
+                            android:id="@+id/layoutPermissionButtons"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnGrantOverlay"
+                                android:layout_width="0dp"
+                                android:layout_height="40dp"
+                                android:layout_weight="1"
+                                android:text="@string/permission_grant_action"
+                                android:textColor="@color/text_primary"
+                                android:textSize="12sp"
+                                app:backgroundTint="@color/primary"
+                                app:cornerRadius="8dp" />
+
+                            <TextView
+                                android:id="@+id/tvOverlayStatus"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="8dp"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="12sp"
+                                android:visibility="gone" />
+
+                            <TextView
+                                android:id="@+id/tvMediaStatus"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:visibility="gone" />
+                        </LinearLayout>
+
+                        <!-- HyperOS specific guide (only shown on Xiaomi/Poco/Redmi) -->
+                        <LinearLayout
+                            android:id="@+id/cardHyperOsPermission"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/hyperos_perm_desc"
+                                android:textColor="#FDE047"
+                                android:textSize="11sp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnHyperOsPerm"
+                                android:layout_width="match_parent"
+                                android:layout_height="36dp"
+                                android:layout_marginTop="6dp"
+                                android:text="@string/btn_hyperos_perm"
+                                android:textColor="#0D111A"
+                                android:textSize="11sp"
+                                app:backgroundTint="#FDE047"
+                                app:cornerRadius="6dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 2. Active Game Profile Selector -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardGameProfiles"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/profile_selector_title"
+                            android:textColor="@color/accent"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <!-- Light text on #1E293B surface Spinner -->
+                            <Spinner
+                                android:id="@+id/spGameProfiles"
+                                android:layout_width="0dp"
+                                android:layout_height="44dp"
+                                android:layout_weight="1"
+                                android:background="#FF1E293B"
+                                android:popupBackground="#FF1E293B" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnSaveNewProfile"
+                                android:layout_width="wrap_content"
+                                android:layout_height="44dp"
+                                android:layout_marginStart="8dp"
+                                android:text="@string/btn_new_profile"
+                                android:textColor="#0D111A"
+                                android:textSize="12sp"
+                                android:textStyle="bold"
+                                app:backgroundTint="#FF10B981"
+                                app:cornerRadius="8dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnDeleteProfile"
+                                android:layout_width="wrap_content"
+                                android:layout_height="44dp"
+                                android:layout_marginStart="6dp"
+                                android:text="@string/btn_delete_profile"
+                                android:textColor="#FFFFFF"
+                                android:textSize="12sp"
+                                app:backgroundTint="#FFEF4444"
+                                app:cornerRadius="8dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 3. Translation Engine Selector (Auto-Saved) -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardTranslationSettings"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/translation_settings_title"
+                            android:textColor="@color/accent"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <RadioGroup
+                            android:id="@+id/rgTranslationMode"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp">
+
+                            <RadioButton
+                                android:id="@+id/rbAutoCloudOffline"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/engine_auto_cloud_offline"
+                                android:textColor="@color/text_primary"
+                                android:textSize="13sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbOfflineMlKit"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/engine_offline"
+                                android:textColor="@color/text_primary"
+                                android:textSize="13sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbCloudOpenAi"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="@string/engine_ai_custom"
+                                android:textColor="@color/text_primary"
+                                android:textSize="13sp" />
+                        </RadioGroup>
+
+                        <!-- Cloud / AI API Settings (visible only if AI/Cloud selected) -->
+                        <LinearLayout
+                            android:id="@+id/layoutCloudSettings"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <!-- Custom Base URL -->
+                            <EditText
+                                android:id="@+id/etApiEndpoint"
+                                android:layout_width="match_parent"
+                                android:layout_height="42dp"
+                                android:background="#FF1E293B"
+                                android:hint="@string/custom_base_url_hint"
+                                android:textColor="#FFFFFF"
+                                android:textColorHint="#64748B"
+                                android:textSize="12sp"
+                                android:inputType="textUri"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp" />
+
+                            <!-- Masked API Key -->
+                            <EditText
+                                android:id="@+id/etApiKey"
+                                android:layout_width="match_parent"
+                                android:layout_height="42dp"
+                                android:layout_marginTop="6dp"
+                                android:background="#FF1E293B"
+                                android:hint="@string/api_key_hint"
+                                android:textColor="#FFFFFF"
+                                android:textColorHint="#64748B"
+                                android:textSize="12sp"
+                                android:inputType="textPassword"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp" />
+
+                            <!-- Model Name -->
+                            <EditText
+                                android:id="@+id/etModelName"
+                                android:layout_width="match_parent"
+                                android:layout_height="42dp"
+                                android:layout_marginTop="6dp"
+                                android:background="#FF1E293B"
+                                android:hint="@string/model_name_hint"
+                                android:textColor="#FFFFFF"
+                                android:textColorHint="#64748B"
+                                android:textSize="12sp"
+                                android:inputType="text"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp" />
+
+                            <com.google.android.material.switchmaterial.SwitchMaterial
+                                android:id="@+id/switchOnlineEnhanced"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="6dp"
+                                android:text="تعزيز الترجمة السحابية بالقاموس المحلي"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <!-- Invisible button kept for backwards binding compatibility -->
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnSaveSettings"
+                            android:layout_width="0dp"
+                            android:layout_height="0dp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 4. Quick Toggles (Auto-Saved) -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardQuickToggles"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchTypewriterMode"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/toggle_typewriter"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
 
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchGameAudio"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/game_audio_switch"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+            </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
+
+        <!-- ======================================================== -->
+        <!-- TAB 2: APPEARANCE & PATCHES (المظهر والباتشات)           -->
+        <!-- ======================================================== -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/layoutTabAppearance"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="16dp">
+
+                <!-- 1. Subtitle Appearance Customizer -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardSubtitleAppearance"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
                         <TextView
-                            android:id="@+id/tvFontSizeValue"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="18 sp"
+                            android:text="@string/subtitle_appearance_title"
                             android:textColor="@color/accent"
-                            android:textSize="13sp"
+                            android:textSize="14sp"
                             android:textStyle="bold" />
+
+                        <!-- Live Mini-Preview Bar -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/live_preview_title"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
+
+                        <FrameLayout
+                            android:id="@+id/layoutPreviewContainer"
+                            android:layout_width="match_parent"
+                            android:layout_height="64dp"
+                            android:layout_marginTop="6dp"
+                            android:background="#FF05070B"
+                            android:padding="6dp">
+
+                            <TextView
+                                android:id="@+id/tvPreviewSubtitleText"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="center"
+                                android:background="#E00D111A"
+                                android:text="@string/live_preview_sample"
+                                android:textColor="#FFFFFF"
+                                android:textSize="16sp"
+                                android:textStyle="bold"
+                                android:paddingStart="12dp"
+                                android:paddingEnd="12dp"
+                                android:paddingTop="6dp"
+                                android:paddingBottom="6dp" />
+                        </FrameLayout>
+
+                        <!-- Display Mode RadioGroup -->
+                        <RadioGroup
+                            android:id="@+id/rgCoverMode"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <RadioButton
+                                android:id="@+id/rbOffsetAbove"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="فوق الحوار (Offset)"
+                                android:textColor="@color/text_primary"
+                                android:textSize="12sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbOpaqueCover"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="غطاء معتم (Cover)"
+                                android:textColor="@color/text_primary"
+                                android:textSize="12sp" />
+                        </RadioGroup>
+
+                        <!-- Font Size Slider (14sp - 28sp) -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:id="@+id/tvFontSizeValue"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="حجم الخط: 18sp"
+                                android:textColor="@color/text_primary"
+                                android:textSize="12sp" />
+
+                            <SeekBar
+                                android:id="@+id/sliderFontSize"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:max="14"
+                                android:progress="4" />
+                        </LinearLayout>
+
+                        <!-- Text Color Presets -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/text_color_label"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+
+                        <RadioGroup
+                            android:id="@+id/rgTextColorPresets"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:orientation="horizontal">
+
+                            <RadioButton
+                                android:id="@+id/rbColorWhite"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:checked="true"
+                                android:text="@string/color_white"
+                                android:textColor="#FFFFFF"
+                                android:textSize="12sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbColorGold"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="@string/color_gold"
+                                android:textColor="#FDE047"
+                                android:textSize="12sp" />
+
+                            <RadioButton
+                                android:id="@+id/rbColorCyan"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="@string/color_cyan"
+                                android:textColor="#67E8F9"
+                                android:textSize="12sp" />
+                        </RadioGroup>
+
+                        <!-- Background Opacity Slider (40% - 100%) -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical">
+
+                            <TextView
+                                android:id="@+id/tvBgOpacityValue"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="شفافية الخلفية: 88%"
+                                android:textColor="@color/text_primary"
+                                android:textSize="12sp" />
+
+                            <SeekBar
+                                android:id="@+id/sliderBgOpacity"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:max="60"
+                                android:progress="48" />
+                        </LinearLayout>
+
+                        <!-- Border & Shadow Switch -->
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchTextShadow"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:checked="true"
+                            android:text="@string/text_shadow_switch"
+                            android:textColor="@color/text_primary"
+                            android:textSize="12sp" />
+
+                        <!-- Action Buttons: ROI Calibration & 3s Overlay Preview -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnCalibrateBox"
+                                android:layout_width="0dp"
+                                android:layout_height="40dp"
+                                android:layout_weight="1"
+                                android:text="معايرة منطقة الشاشة (ROI)"
+                                android:textColor="#0D111A"
+                                android:textSize="11sp"
+                                android:textStyle="bold"
+                                app:backgroundTint="#FF10B981"
+                                app:cornerRadius="8dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnTestOverlay"
+                                android:layout_width="0dp"
+                                android:layout_height="40dp"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="معاينة الشاشة (3 ثوانٍ)"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11sp"
+                                app:backgroundTint="@color/primary"
+                                app:cornerRadius="8dp" />
+                        </LinearLayout>
+
+                        <!-- Presets row -->
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnPresetBottom"
+                                android:layout_width="0dp"
+                                android:layout_height="34dp"
+                                android:layout_weight="1"
+                                android:text="@string/preset_bottom_subtitles"
+                                android:textSize="10sp"
+                                app:backgroundTint="#FF1E293B"
+                                app:cornerRadius="6dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnPresetCenter"
+                                android:layout_width="0dp"
+                                android:layout_height="34dp"
+                                android:layout_marginStart="4dp"
+                                android:layout_weight="1"
+                                android:text="@string/preset_center_dialog"
+                                android:textSize="10sp"
+                                app:backgroundTint="#FF1E293B"
+                                app:cornerRadius="6dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnPresetFull"
+                                android:layout_width="0dp"
+                                android:layout_height="34dp"
+                                android:layout_marginStart="4dp"
+                                android:layout_weight="1"
+                                android:text="@string/preset_full_screen"
+                                android:textSize="10sp"
+                                app:backgroundTint="#FF1E293B"
+                                app:cornerRadius="6dp" />
+                        </LinearLayout>
                     </LinearLayout>
+                </androidx.cardview.widget.CardView>
 
-                    <SeekBar
-                        android:id="@+id/sliderFontSize"
+                <!-- 2. Community Patch Manager Card -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardGamePatch"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
+
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:max="10"
-                        android:progress="4"
-                        android:layout_marginTop="4dp" />
-                </LinearLayout>
+                        android:orientation="vertical"
+                        android:padding="14dp">
 
-                <!-- Preset Quick Buttons & Calibration Launcher -->
-                <LinearLayout
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/game_patch_title"
+                            android:textColor="@color/accent"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvActivePatchBadge"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="@string/patch_badge_empty"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnLoadGamePatch"
+                                android:layout_width="0dp"
+                                android:layout_height="38dp"
+                                android:layout_weight="1"
+                                android:text="تحميل باتش"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11sp"
+                                app:backgroundTint="@color/primary"
+                                app:cornerRadius="6dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnPairDualPatch"
+                                android:layout_width="0dp"
+                                android:layout_height="38dp"
+                                android:layout_marginStart="6dp"
+                                android:layout_weight="1"
+                                android:text="دمج ملفين"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11sp"
+                                app:backgroundTint="@color/primary"
+                                app:cornerRadius="6dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnClearPatch"
+                                android:layout_width="wrap_content"
+                                android:layout_height="38dp"
+                                android:layout_marginStart="6dp"
+                                android:text="مسح"
+                                android:textColor="#FFEF4444"
+                                android:textSize="11sp"
+                                app:backgroundTint="#FF1E293B"
+                                app:cornerRadius="6dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 3. Offline Models Status Card -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardOfflineModel"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="8dp">
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnCalibrateBox"
-                        android:layout_width="0dp"
+                    <LinearLayout
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/btn_calibrate_box"
-                        android:textColor="@color/background_dark"
-                        app:backgroundTint="@color/accent"
-                        app:cornerRadius="8dp" />
-                </LinearLayout>
+                        android:orientation="vertical"
+                        android:padding="14dp">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="6dp">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="حزم النماذج المحلية (Offline Models)"
+                            android:textColor="@color/accent"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnPresetFull"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:layout_marginEnd="4dp"
-                        android:textSize="11sp"
-                        android:text="@string/preset_full_screen"
-                        android:textColor="@color/text_primary"
-                        app:backgroundTint="#37474F"
-                        app:cornerRadius="6dp" />
+                        <!-- ML Kit -->
+                        <TextView
+                            android:id="@+id/tvModelStatusBadge"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="@string/model_status_not_downloaded"
+                            android:textColor="@color/status_inactive"
+                            android:textSize="12sp" />
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnPresetCenter"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:layout_marginEnd="4dp"
-                        android:textSize="11sp"
-                        android:text="@string/preset_center_dialog"
-                        android:textColor="@color/text_primary"
-                        app:backgroundTint="#37474F"
-                        app:cornerRadius="6dp" />
+                        <ProgressBar
+                            android:id="@+id/pbModelDownload"
+                            style="?android:attr/progressBarStyleHorizontal"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:indeterminate="true"
+                            android:visibility="gone" />
 
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnPresetBottom"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:textSize="11sp"
-                        android:text="@string/preset_bottom_subtitles"
-                        android:textColor="@color/text_primary"
-                        app:backgroundTint="#37474F"
-                        app:cornerRadius="6dp" />
-                </LinearLayout>
+                        <TextView
+                            android:id="@+id/tvModelHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="@string/model_download_hint"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="10sp"
+                            android:visibility="gone" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnTestOverlay"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="@string/btn_test_overlay"
-                    android:textColor="@color/accent"
-                    android:textSize="12sp"
-                    app:backgroundTint="#263238"
-                    app:strokeColor="@color/accent"
-                    app:strokeWidth="1dp"
-                    app:cornerRadius="6dp" />
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnDownloadModel"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            android:layout_marginTop="6dp"
+                            android:text="@string/model_btn_download"
+                            android:textColor="@color/text_primary"
+                            android:textSize="11sp"
+                            app:backgroundTint="@color/primary"
+                            app:cornerRadius="6dp" />
+
+                        <!-- Sherpa-ONNX ASR -->
+                        <TextView
+                            android:id="@+id/tvAudioModelStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:text="@string/game_audio_status_pending"
+                            android:textColor="@color/status_inactive"
+                            android:textSize="12sp" />
+
+                        <ProgressBar
+                            android:id="@+id/pbAsrDownload"
+                            style="?android:attr/progressBarStyleHorizontal"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:indeterminate="true"
+                            android:visibility="gone" />
+
+                        <TextView
+                            android:id="@+id/tvAsrDownloadProgress"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="10sp"
+                            android:visibility="gone" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnDownloadAsrPack"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            android:layout_marginTop="6dp"
+                            android:text="@string/btn_download_asr_pack"
+                            android:textColor="@color/text_primary"
+                            android:textSize="11sp"
+                            app:backgroundTint="@color/primary"
+                            app:cornerRadius="6dp" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
             </LinearLayout>
-        </androidx.cardview.widget.CardView>
+        </androidx.core.widget.NestedScrollView>
 
-        <!-- Clean Translated Dialogue History Card -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardSubtitleHistory"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:cardCornerRadius="12dp"
-            app:cardElevation="2dp"
-            app:layout_constraintTop_toBottomOf="@id/cardCalibration"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
+        <!-- ======================================================== -->
+        <!-- TAB 3: HISTORY, UPDATES & DEV (السجل والتحديثات)          -->
+        <!-- ======================================================== -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/layoutTabHistory"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:visibility="gone">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="16dp">
 
-                <LinearLayout
+                <!-- 1. Subtitle History Card -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardSubtitleHistory"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="سجل الحوارات المترجمة (Subtitle History)"
-                        android:textColor="@color/text_primary"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnExportSubtitleHistory"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:minWidth="48dp"
-                        android:minHeight="36dp"
-                        android:text="تصدير"
-                        android:textColor="@color/accent"
-                        android:textSize="12sp"
-                        app:backgroundTint="@android:color/transparent"
-                        app:elevation="0dp"
-                        app:strokeWidth="0dp"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnCopySubtitleHistory"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:minWidth="48dp"
-                        android:minHeight="36dp"
-                        android:text="نسخ"
-                        android:textColor="@color/accent"
-                        android:textSize="12sp"
-                        app:backgroundTint="@android:color/transparent"
-                        app:elevation="0dp"
-                        app:strokeWidth="0dp"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnClearSubtitleHistory"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:minWidth="48dp"
-                        android:minHeight="36dp"
-                        android:text="مسح"
-                        android:textColor="@color/status_inactive"
-                        android:textSize="12sp"
-                        app:backgroundTint="@android:color/transparent"
-                        app:elevation="0dp"
-                        app:strokeWidth="0dp"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp" />
-                </LinearLayout>
-
-                <androidx.core.widget.NestedScrollView
-                    android:layout_width="match_parent"
-                    android:layout_height="140dp"
                     android:layout_marginTop="8dp"
-                    android:background="#1A000000"
-                    android:padding="8dp">
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
 
-                    <TextView
-                        android:id="@+id/tvSubtitleHistory"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="لا توجد حوارات مترجمة مسجلة بعد"
-                        android:textColor="@color/text_primary"
-                        android:textSize="12sp"
-                        android:lineSpacingExtra="4dp" />
-                </androidx.core.widget.NestedScrollView>
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
+                        android:orientation="vertical"
+                        android:padding="14dp">
 
-        <!-- Diagnostic Live Logs Card -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/cardDiagnostics"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            app:cardBackgroundColor="@color/surface_card"
-            app:cardCornerRadius="12dp"
-            app:cardElevation="2dp"
-            app:layout_constraintTop_toBottomOf="@id/cardSubtitleHistory"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent">
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/subtitle_history_title"
+                            android:textColor="@color/accent"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:padding="16dp">
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal">
 
-                <LinearLayout
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnExportSubtitleHistory"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_weight="1"
+                                android:text="@string/btn_export_history"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11sp"
+                                app:backgroundTint="@color/primary"
+                                app:cornerRadius="6dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnCopySubtitleHistory"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_marginStart="6dp"
+                                android:layout_weight="1"
+                                android:text="@string/btn_copy_history"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11sp"
+                                app:backgroundTint="@color/primary"
+                                app:cornerRadius="6dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnClearSubtitleHistory"
+                                android:layout_width="wrap_content"
+                                android:layout_height="36dp"
+                                android:layout_marginStart="6dp"
+                                android:text="@string/btn_clear_history"
+                                android:textColor="#FFEF4444"
+                                android:textSize="11sp"
+                                app:backgroundTint="#FF1E293B"
+                                app:cornerRadius="6dp" />
+                        </LinearLayout>
+
+                        <androidx.core.widget.NestedScrollView
+                            android:layout_width="match_parent"
+                            android:layout_height="120dp"
+                            android:layout_marginTop="8dp"
+                            android:background="#1A000000"
+                            android:padding="8dp">
+
+                            <TextView
+                                android:id="@+id/tvSubtitleHistory"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:text="لا توجد حوارات مسجلة بعد"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+                        </androidx.core.widget.NestedScrollView>
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 2. App Updates & About Card -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardAppUpdates"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
 
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/diagnostic_log_title"
-                        android:textColor="@color/text_primary"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnCopyLog"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:minWidth="48dp"
-                        android:minHeight="36dp"
-                        android:text="@string/btn_copy_log"
-                        android:textColor="@color/accent"
-                        android:textSize="12sp"
-                        app:backgroundTint="@android:color/transparent"
-                        app:elevation="0dp"
-                        app:strokeWidth="0dp"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnClearLog"
-                        android:layout_width="wrap_content"
-                        android:layout_height="36dp"
-                        android:minWidth="48dp"
-                        android:minHeight="36dp"
-                        android:text="@string/btn_clear_log"
-                        android:textColor="@color/status_inactive"
-                        android:textSize="12sp"
-                        app:backgroundTint="@android:color/transparent"
-                        app:elevation="0dp"
-                        app:strokeWidth="0dp"
-                        android:paddingStart="8dp"
-                        android:paddingEnd="8dp" />
-                </LinearLayout>
-
-                <androidx.core.widget.NestedScrollView
-                    android:layout_width="match_parent"
-                    android:layout_height="140dp"
-                    android:layout_marginTop="8dp"
-                    android:background="#1A000000"
-                    android:padding="8dp">
-
-                    <TextView
-                        android:id="@+id/tvDiagnosticLogs"
+                    <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:fontFamily="monospace"
-                        android:text="@string/diagnostic_log_waiting"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="11sp" />
-                </androidx.core.widget.NestedScrollView>
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
+                        android:orientation="vertical"
+                        android:padding="14dp">
 
-        <!-- Master Action Button -->
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/updates_title"
+                            android:textColor="@color/accent"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tvCurrentVersion"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="الإصدار الحالي: 1.0.0"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnCheckUpdates"
+                            android:layout_width="match_parent"
+                            android:layout_height="40dp"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/btn_check_updates"
+                            android:textColor="#0D111A"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            app:backgroundTint="#FF10B981"
+                            app:cornerRadius="8dp" />
+
+                        <TextView
+                            android:id="@+id/btnGithubRepo"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="@string/repo_link"
+                            android:textColor="#38BDF8"
+                            android:textSize="11sp"
+                            android:gravity="center"
+                            android:padding="6dp"
+                            android:background="?android:attr/selectableItemBackground" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <!-- 3. Developer Mode & Diagnostic Log Card -->
+                <androidx.cardview.widget.CardView
+                    android:id="@+id/cardDiagnostics"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="2dp"
+                    app:cardBackgroundColor="@color/surface_card">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchDeveloperMode"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/developer_mode"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+
+                        <!-- Collapsible Diagnostic Console (hidden by default) -->
+                        <LinearLayout
+                            android:id="@+id/layoutDiagnosticConsole"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <LinearLayout
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="السجل الحي"
+                                    android:textColor="@color/accent"
+                                    android:textSize="12sp"
+                                    android:textStyle="bold" />
+
+                                <com.google.android.material.button.MaterialButton
+                                    android:id="@+id/btnCopyLog"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="32dp"
+                                    android:minWidth="44dp"
+                                    android:text="@string/btn_copy_log"
+                                    android:textColor="@color/accent"
+                                    android:textSize="11sp"
+                                    app:backgroundTint="@android:color/transparent"
+                                    app:elevation="0dp" />
+
+                                <com.google.android.material.button.MaterialButton
+                                    android:id="@+id/btnClearLog"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="32dp"
+                                    android:minWidth="44dp"
+                                    android:text="@string/btn_clear_log"
+                                    android:textColor="@color/status_inactive"
+                                    android:textSize="11sp"
+                                    app:backgroundTint="@android:color/transparent"
+                                    app:elevation="0dp" />
+                            </LinearLayout>
+
+                            <androidx.core.widget.NestedScrollView
+                                android:layout_width="match_parent"
+                                android:layout_height="140dp"
+                                android:layout_marginTop="4dp"
+                                android:background="#1A000000"
+                                android:padding="8dp">
+
+                                <TextView
+                                    android:id="@+id/tvDiagnosticLogs"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:fontFamily="monospace"
+                                    android:text="@string/diagnostic_log_waiting"
+                                    android:textColor="@color/text_secondary"
+                                    android:textSize="11sp" />
+                            </androidx.core.widget.NestedScrollView>
+                        </LinearLayout>
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+            </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
+    </FrameLayout>
+
+    <!-- Pinned Bottom Launch Bar + BottomNavigationView -->
+    <LinearLayout
+        android:id="@+id/layoutPinnedBottomBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#FF0F172A"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- Master Floating Service Toggle Bar (Always visible with 1 tap) -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnToggleService"
-            android:layout_width="0dp"
-            android:layout_height="56dp"
-            android:layout_marginTop="20dp"
-            android:layout_marginBottom="20dp"
+            android:layout_width="match_parent"
+            android:layout_height="50dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="16dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="4dp"
             android:text="@string/btn_start_service"
             android:textColor="@color/text_primary"
-            android:textSize="16sp"
+            android:textSize="15sp"
             android:textStyle="bold"
             app:backgroundTint="@color/primary"
-            app:cornerRadius="12dp"
+            app:cornerRadius="10dp"
             app:strokeColor="@color/accent"
-            app:strokeWidth="1.5dp"
-            app:layout_constraintTop_toBottomOf="@id/cardDiagnostics"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent" />
+            app:strokeWidth="1.5dp" />
 
-    </androidx.constraintlayout.widget.ConstraintLayout>
-</androidx.core.widget.NestedScrollView>
+        <!-- 3-Tab Bottom Navigation View -->
+        <com.google.android.material.bottomnavigation.BottomNavigationView
+            android:id="@+id/bottomNav"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="#FF0B1120"
+            app:itemIconTint="@color/bottom_nav_colors"
+            app:itemTextColor="@color/bottom_nav_colors"
+            app:labelVisibilityMode="labeled"
+            app:menu="@menu/bottom_nav_menu" />
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

@@ -131,9 +131,9 @@ object EnglishWordRepairer {
                     val w1Lower = p1.core.lowercase(Locale.US)
                     val w2Lower = p2.core.lowercase(Locale.US)
 
-                    // Merge ONLY IF merged is a valid word >= 5 chars AND at least one component is NOT a valid word
+                    // Merge ONLY IF merged is a valid word >= 5 chars AND at least one component is NOT a valid word, OR known split (e.g. steal thy -> stealthy)
                     if (merged.length >= 5 && dictionaryMap.containsKey(merged)) {
-                        if (!dictionaryMap.containsKey(w1Lower) || !dictionaryMap.containsKey(w2Lower)) {
+                        if (!dictionaryMap.containsKey(w1Lower) || !dictionaryMap.containsKey(w2Lower) || (w1Lower == "steal" && w2Lower == "thy")) {
                             val mergedCasing = if (p1.core[0].isUpperCase()) {
                                 merged.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
                             } else {
@@ -227,6 +227,35 @@ object EnglishWordRepairer {
             if (idx > 0 && !followsPunctuation && core[0].isUpperCase() && core.substring(1).all { it.isLowerCase() }) {
                 finalTokens.add(tok)
                 continue
+            }
+
+            // Possessive gluing: e.g. ofsecurity's -> of security's
+            if ((core.endsWith("'s") || core.endsWith("’s")) && lower !in KNOWN_CONTRACTIONS) {
+                val stem = core.dropLast(2)
+                val suffix = core.takeLast(2)
+                val stemLower = stem.lowercase(Locale.US)
+                if (dictionaryMap.containsKey(stemLower)) {
+                    finalTokens.add(p.leadingPunct + core + p.trailingPunct)
+                    continue
+                }
+                var stemSplit: List<String>? = null
+                for (sIdx in 1 until stemLower.length) {
+                    val w1 = stemLower.substring(0, sIdx)
+                    val w2 = stemLower.substring(sIdx)
+                    if ((w1.length == 1 && w1 != "a" && w1 != "i") || (w2.length == 1 && w2 != "a" && w2 != "i")) continue
+                    if (maxOf(w1.length, w2.length) < 3) continue
+                    val r1 = dictionaryMap[w1] ?: continue
+                    val r2 = dictionaryMap[w2] ?: continue
+                    if (r1 <= 16000 && r2 <= 16000) {
+                        stemSplit = listOf(w1, w2)
+                        break
+                    }
+                }
+                if (stemSplit != null) {
+                    val p1 = if (stem[0].isUpperCase()) stemSplit[0].replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() } else stemSplit[0]
+                    finalTokens.add(p.leadingPunct + p1 + " " + stemSplit[1] + suffix + p.trailingPunct)
+                    continue
+                }
             }
 
             if (lower.length < 5) {

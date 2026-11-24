@@ -19,7 +19,10 @@ data class GameProfile(
     val displayMode: String = MainActivity.MODE_OFFSET_ABOVE,
     val fontSizeSp: Float = MainActivity.DEFAULT_FONT_SIZE_SP,
     val typewriterMode: Boolean = false,
-    val patchName: String? = null
+    val patchName: String? = null,
+    val textColorHex: String = "#FFFFFF",
+    val bgOpacityPct: Int = 88,
+    val textShadow: Boolean = true
 ) {
     fun toJsonObject(): JSONObject {
         return JSONObject().apply {
@@ -33,6 +36,9 @@ data class GameProfile(
             put("fontSizeSp", fontSizeSp.toDouble())
             put("typewriterMode", typewriterMode)
             if (patchName != null) put("patchName", patchName)
+            put("textColorHex", textColorHex)
+            put("bgOpacityPct", bgOpacityPct)
+            put("textShadow", textShadow)
         }
     }
 
@@ -48,7 +54,10 @@ data class GameProfile(
                 displayMode = obj.optString("displayMode", MainActivity.MODE_OFFSET_ABOVE),
                 fontSizeSp = obj.optDouble("fontSizeSp", MainActivity.DEFAULT_FONT_SIZE_SP.toDouble()).toFloat(),
                 typewriterMode = obj.optBoolean("typewriterMode", false),
-                patchName = if (obj.has("patchName")) obj.optString("patchName") else null
+                patchName = if (obj.has("patchName")) obj.optString("patchName") else null,
+                textColorHex = obj.optString("textColorHex", "#FFFFFF"),
+                bgOpacityPct = obj.optInt("bgOpacityPct", 88),
+                textShadow = obj.optBoolean("textShadow", true)
             )
         }
     }
@@ -175,6 +184,9 @@ object GameProfileManager {
             .putString(MainActivity.KEY_OVERLAY_RENDER_MODE, profile.displayMode)
             .putFloat(MainActivity.KEY_SUBTITLE_FONT_SIZE_SP, profile.fontSizeSp)
             .putBoolean(MainActivity.KEY_TYPEWRITER_MODE, profile.typewriterMode)
+            .putString(MainActivity.KEY_SUBTITLE_TEXT_COLOR, profile.textColorHex)
+            .putInt(MainActivity.KEY_SUBTITLE_BG_OPACITY, profile.bgOpacityPct)
+            .putBoolean(MainActivity.KEY_SUBTITLE_TEXT_SHADOW, profile.textShadow)
             .apply()
 
         try {

@@ -11,3 +11,6 @@ local.properties
 app/build/
 build/
 app/libs/*.aar
+.agents/
+*.jks
+*.keystore

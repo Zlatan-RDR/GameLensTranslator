@@ -675,8 +675,14 @@ class TranslationManager(
                 put("messages", messagesArray)
             }
 
+            val endpointUrl = if (config.apiEndpoint.endsWith("/chat/completions")) {
+                config.apiEndpoint
+            } else {
+                "${config.apiEndpoint.trimEnd('/')}/chat/completions"
+            }
+
             val request = Request.Builder()
-                .url(config.apiEndpoint)
+                .url(endpointUrl)
                 .addHeader("Authorization", "Bearer ${config.apiKey}")
                 .addHeader("Content-Type", "application/json")
                 .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))

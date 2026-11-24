@@ -57,7 +57,12 @@ class EnglishWordRepairerTest {
             "Salt! Shameon you" to "Salt! Shame on you",
             "appointa" to "appoint a",
             "clienton" to "client on",
-            "suppliedinformation" to "supplied information"
+            "suppliedinformation" to "supplied information",
+            "yourscore" to "your score",
+            "playingon" to "playing on",
+            "steal thy" to "stealthy",
+            "ofsecurity's" to "of security's",
+            "thewitnesses" to "the witnesses"
         )
 
         for ((input, expected) in cases) {
