@@ -244,6 +244,10 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
+                            android:showText="false"
+                            app:showText="false"
+                            android:textOn=""
+                            android:textOff=""
                             android:text="وضع التباين العالي (Mort Filter)"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
@@ -472,6 +476,10 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="6dp"
+                                android:showText="false"
+                                app:showText="false"
+                                android:textOn=""
+                                android:textOff=""
                                 android:text="تعزيز الترجمة السحابية بالقاموس المحلي"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="12sp" />
@@ -506,6 +514,10 @@
                             android:id="@+id/switchTypewriterMode"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:showText="false"
+                            app:showText="false"
+                            android:textOn=""
+                            android:textOff=""
                             android:text="@string/toggle_typewriter"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
@@ -515,6 +527,10 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
+                            android:showText="false"
+                            app:showText="false"
+                            android:textOn=""
+                            android:textOff=""
                             android:text="@string/game_audio_switch"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />
@@ -731,16 +747,24 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="6dp"
                             android:checked="true"
+                            android:showText="false"
+                            app:showText="false"
+                            android:textOn=""
+                            android:textOff=""
                             android:text="@string/text_shadow_switch"
                             android:textColor="@color/text_primary"
                             android:textSize="12sp" />
 
                         <!-- Auto Subtitle Tracker Switch -->
-                        <com.google.android.material.materialswitch.MaterialSwitch
+                        <com.google.android.material.switchmaterial.SwitchMaterial
                             android:id="@+id/switchAutoSubtitleTracking"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
+                            android:showText="false"
+                            app:showText="false"
+                            android:textOn=""
+                            android:textOff=""
                             android:text="تتبع مكان الحوار تلقائياً (Auto-ROI)"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp"
@@ -1185,6 +1209,10 @@
                             android:id="@+id/switchDeveloperMode"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:showText="false"
+                            app:showText="false"
+                            android:textOn=""
+                            android:textOff=""
                             android:text="@string/developer_mode"
                             android:textColor="@color/text_primary"
                             android:textSize="13sp" />

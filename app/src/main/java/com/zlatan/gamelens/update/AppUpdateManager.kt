@@ -200,20 +200,31 @@ object AppUpdateManager {
     }
 
     /**
-     * Cleans up any previously downloaded update APKs from the cache directory.
+     * Cleans up any previously downloaded update APKs from the cache directory and externalCacheDir.
      */
     fun cleanStaleUpdates(context: Context) {
-        try {
-            val updateDir = File(context.cacheDir, "updates")
-            if (updateDir.exists()) {
-                updateDir.listFiles()?.forEach { file ->
+        val dirsToClean = listOfNotNull(
+            context.cacheDir,
+            context.externalCacheDir
+        )
+        for (baseDir in dirsToClean) {
+            try {
+                val updateDir = File(baseDir, "updates")
+                if (updateDir.exists()) {
+                    updateDir.listFiles()?.forEach { file ->
+                        try {
+                            file.delete()
+                        } catch (_: Exception) {}
+                    }
+                }
+                baseDir.listFiles { _, name -> name.endsWith(".apk", ignoreCase = true) }?.forEach { apkFile ->
                     try {
-                        file.delete()
+                        apkFile.delete()
                     } catch (_: Exception) {}
                 }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error cleaning stale updates in $baseDir: ${t.message}")
             }
-        } catch (t: Throwable) {
-            Log.w(TAG, "Error cleaning stale updates: ${t.message}")
         }
     }
 

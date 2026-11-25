@@ -243,7 +243,6 @@ class TranslationManager(
         private set
 
     init {
-        initMlKitTranslator()
         // Synchronously check if offline Arabic model is already downloaded to disk
         modelManager.isModelDownloaded(arabicModel)
             .addOnSuccessListener { downloaded ->
@@ -372,7 +371,7 @@ class TranslationManager(
                 _modelStatusFlow.value = ModelStatus.READY
                 isMlKitModelReady = true
                 modelStatusString = "جاهز للعمل أوفلاين (Ready Offline)"
-                initMlKitTranslator()
+                getOrCreateMlKitTranslator()
                 onSuccess()
             }
             .addOnFailureListener { e ->
@@ -383,13 +382,18 @@ class TranslationManager(
             }
     }
 
-    private fun initMlKitTranslator() {
-        val options = TranslatorOptions.Builder()
-            .setSourceLanguage(TranslateLanguage.ENGLISH)
-            .setTargetLanguage(TranslateLanguage.ARABIC)
-            .build()
-
-        mlKitTranslator = Translation.getClient(options)
+    @Synchronized
+    private fun getOrCreateMlKitTranslator(): Translator {
+        var translator = mlKitTranslator
+        if (translator == null) {
+            val options = TranslatorOptions.Builder()
+                .setSourceLanguage(TranslateLanguage.ENGLISH)
+                .setTargetLanguage(TranslateLanguage.ARABIC)
+                .build()
+            translator = Translation.getClient(options)
+            mlKitTranslator = translator
+        }
+        return translator
     }
 
     /**
@@ -765,7 +769,12 @@ class TranslationManager(
     }
 
     private suspend fun translateViaMlKit(text: String): String = suspendCancellableCoroutine { continuation ->
-        val translator = mlKitTranslator
+        val translator = try {
+            getOrCreateMlKitTranslator()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize ML Kit Translator: ${e.message}", e)
+            null
+        }
         if (translator == null) {
             DiagnosticLogger.log("ML Kit translation error: translator is null")
             continuation.resume(text)

@@ -19,6 +19,12 @@ import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import androidx.appcompat.widget.SwitchCompat
+import java.io.File
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.EditText
@@ -234,6 +240,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        sanitizeSwitchCompats(binding.root)
 
         prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -243,6 +250,11 @@ class MainActivity : AppCompatActivity() {
         // Clean stale update APKs & schedule 24h background update check
         AppUpdateManager.cleanStaleUpdates(this)
         UpdateCheckWorker.schedulePeriodicCheck(this)
+
+        // Background cache telemetry scan (non-blocking)
+        lifecycleScope.launch(Dispatchers.IO) {
+            logStartupCacheDiagnostics(applicationContext)
+        }
 
         cacheManager = TranslationCacheManager(this)
         glossaryManager = GlossaryManager(this)
@@ -1526,5 +1538,59 @@ class MainActivity : AppCompatActivity() {
         binding.btnToggleService.setBackgroundColor(ContextCompat.getColor(this, R.color.primary))
         binding.tvMediaStatus.text = "جاهز للطلب"
         binding.tvMediaStatus.setTextColor(ContextCompat.getColor(this, R.color.accent))
+    }
+
+    private fun sanitizeSwitchCompats(view: View) {
+        if (view is SwitchCompat) {
+            view.showText = false
+            if (view.textOn == null) view.textOn = ""
+            if (view.textOff == null) view.textOff = ""
+        } else if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                sanitizeSwitchCompats(view.getChildAt(i))
+            }
+        }
+    }
+
+    private fun logStartupCacheDiagnostics(context: Context) {
+        try {
+            val targets = listOfNotNull(
+                context.cacheDir to "cache",
+                context.codeCacheDir to "code_cache",
+                context.externalCacheDir to "ext_cache"
+            )
+            var totalBytes = 0L
+            val largeEntries = mutableListOf<String>()
+
+            fun computeDirSize(dir: File): Long {
+                var size = 0L
+                val files = dir.listFiles() ?: return 0L
+                for (f in files) {
+                    size += if (f.isDirectory) computeDirSize(f) else f.length()
+                }
+                return size
+            }
+
+            for ((dir, tag) in targets) {
+                if (!dir.exists()) continue
+                val entries = dir.listFiles() ?: continue
+                for (entry in entries) {
+                    val entrySize = if (entry.isDirectory) computeDirSize(entry) else entry.length()
+                    totalBytes += entrySize
+                    if (entrySize >= 1024 * 1024) {
+                        val sizeMb = entrySize.toDouble() / (1024.0 * 1024.0)
+                        largeEntries.add("$tag/${entry.name}=%.1fMB".format(Locale.US, sizeMb))
+                    }
+                }
+            }
+
+            val totalMb = totalBytes.toDouble() / (1024.0 * 1024.0)
+            val details = if (largeEntries.isEmpty()) "none >= 1MB" else largeEntries.joinToString(", ")
+            val logMsg = "StartupCache: total=%.1fMB [$details]".format(Locale.US, totalMb)
+            Log.i("MainActivity", logMsg)
+            DiagnosticLogger.log(logMsg)
+        } catch (t: Throwable) {
+            Log.w("MainActivity", "Failed to scan startup cache: ${t.message}")
+        }
     }
 }
