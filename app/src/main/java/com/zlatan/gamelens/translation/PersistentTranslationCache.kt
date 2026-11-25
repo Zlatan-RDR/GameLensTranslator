@@ -110,15 +110,27 @@ class PersistentTranslationCache(
         scheduleDebouncedFlush()
     }
 
-    fun switchProfile(profileId: String, customScope: CoroutineScope? = null) {
+    fun switchProfile(profileId: String, customScope: CoroutineScope? = null): Job {
         val targetProfile = sanitizeProfileId(profileId)
-        if (currentProfileId == targetProfile) return
+        if (currentProfileId == targetProfile) return Job().apply { complete() }
 
         flushDirty()
         val s = customScope ?: scope
-        s.launch {
+        return s.launch {
             loadProfile(targetProfile)
         }
+    }
+
+    private fun logD(msg: String) {
+        try {
+            Log.d(TAG, msg)
+        } catch (_: Throwable) {}
+    }
+
+    private fun logW(msg: String) {
+        try {
+            Log.w(TAG, msg)
+        } catch (_: Throwable) {}
     }
 
     suspend fun loadProfile(profileId: String) = withContext(Dispatchers.IO) {
@@ -139,9 +151,9 @@ class PersistentTranslationCache(
                         loaded[k] = v
                     }
                 }
-                Log.d(TAG, "Loaded ${loaded.size} cached translations for profile '$sanitized'")
+                logD("Loaded ${loaded.size} cached translations for profile '$sanitized'")
             } catch (t: Throwable) {
-                Log.w(TAG, "Failed to read cache for profile '$sanitized': ${t.message}")
+                logW("Failed to read cache for profile '$sanitized': ${t.message}")
             }
         }
 
@@ -192,14 +204,14 @@ class PersistentTranslationCache(
 
             tmpFile.writeText(json.toString(), Charsets.UTF_8)
             if (tmpFile.renameTo(targetFile)) {
-                Log.d(TAG, "Persisted ${snapshot.size} translations for profile '$profile'")
+                logD("Persisted ${snapshot.size} translations for profile '$profile'")
             } else {
                 // If rename fails (e.g. cross-filesystem), copy and delete tmp
                 tmpFile.copyTo(targetFile, overwrite = true)
                 tmpFile.delete()
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "Failed to flush cache to disk: ${t.message}")
+            logW("Failed to flush cache to disk: ${t.message}")
         }
     }
 

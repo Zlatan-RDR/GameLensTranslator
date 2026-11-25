@@ -67,8 +67,8 @@ object TranslationQualityPolisher {
         s = s.replace(Regex("ادخل\\s+يا\\s+طفل\\b"), "ادخلي يا طفلتي")
         s = s.replace(Regex("تعال\\s+يا\\s+طفل\\b"), "تعالي يا طفلتي")
 
-        s = s.replace(Regex("(?<=[.؟!،]\\s*)ادخل([.!]?)"), "ادخلي$1")
-        s = s.replace(Regex("(?<=[.؟!،]\\s*)تعال([.!]?)"), "تعالي$1")
+        s = s.replace(Regex("(?<=[.؟!،]\\s*)ادخل(?!ي)([.!؟]?)"), "ادخلي$1")
+        s = s.replace(Regex("(?<=[.؟!،]\\s*)تعال(?!ي)([.!؟]?)"), "تعالي$1")
 
         return s
     }

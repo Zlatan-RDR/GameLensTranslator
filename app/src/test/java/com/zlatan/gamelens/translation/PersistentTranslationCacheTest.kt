@@ -69,14 +69,13 @@ class PersistentTranslationCacheTest {
         val cache = PersistentTranslationCache(rootDir, maxEntries = 100)
 
         // Profile A
-        cache.switchProfile("profileA")
         cache.loadProfile("profileA")
         cache.put("FREE", "h", "Target", "الهدف")
         cache.flushDirty()
 
         // Switch to Profile B
-        cache.switchProfile("profileB")
-        cache.loadProfile("profileB")
+        val switchJob = cache.switchProfile("profileB")
+        switchJob.join()
         assertNull(cache.get("FREE", "h", "Target"))
 
         cache.put("FREE", "h", "Target", "نيشان")
