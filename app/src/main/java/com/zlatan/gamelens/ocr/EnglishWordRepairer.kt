@@ -114,7 +114,7 @@ object EnglishWordRepairer {
         var unknown = 0
         for (t in tokens) {
             val clean = t.filter { it.isLetter() }.lowercase(Locale.US)
-            if (clean.length >= 2 && !dictionaryMap.containsKey(clean) && !com.zlatan.gamelens.ocr.OcrEngine.SHORT_VALID_WORDS.contains(clean)) {
+            if (clean.length >= 2 && !isWord(clean) && !OcrTextCleaner.SHORT_VALID_WORDS.contains(clean)) {
                 unknown++
             }
         }
