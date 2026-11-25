@@ -307,6 +307,37 @@ class OcrEngine {
 
             return SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION
         }
+
+        /**
+         * Rejects gibberish strings and HUD noise by requiring at least 60% of tokens to have
+         * valid English vowel/consonant letter patterns (>= 3 letters) or known short English words.
+         */
+        fun passesEnglishTokenRatioFilter(text: String): Boolean {
+            val tokens = text.split(WHITESPACE_REGEX).map { it.trim() }.filter { it.isNotBlank() }
+            if (tokens.isEmpty()) return false
+
+            var validEnglishWordCount = 0
+            var numericCount = 0
+            for (token in tokens) {
+                val letters = token.filter { it.isLetter() }
+                if (letters.length >= 3) {
+                    val hasVowel = letters.any { it in "aeiouyAEIOUY" }
+                    val hasConsonant = letters.any { it in "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ" }
+                    if (hasVowel && hasConsonant) {
+                        validEnglishWordCount++
+                    }
+                } else if (letters.isNotEmpty() && SHORT_VALID_WORDS.contains(letters.lowercase())) {
+                    validEnglishWordCount++
+                } else if (letters.isEmpty() && token.any { it.isDigit() }) {
+                    numericCount++
+                }
+            }
+
+            // When at least one valid English word is present, numeric/currency/code tokens do not count as invalid
+            val effectiveValidCount = if (validEnglishWordCount > 0) validEnglishWordCount + numericCount else validEnglishWordCount
+            val ratio = effectiveValidCount.toDouble() / tokens.size.toDouble()
+            return ratio >= 0.60
+        }
     }
 
     private data class ElementCluster(
@@ -324,7 +355,9 @@ class OcrEngine {
 
     fun scoreOcrQuality(text: String): Float = Companion.scoreOcrQuality(text)
 
-    private val recognizer: TextRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    internal fun passesEnglishTokenRatioFilter(text: String): Boolean = Companion.passesEnglishTokenRatioFilter(text)
+
+    private val recognizer: TextRecognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     /**
      * Applies high-contrast ColorMatrix boost (contrast = 2.1f, brightness = -35f)
@@ -530,36 +563,7 @@ class OcrEngine {
     }
 
 
-    /**
-     * Rejects gibberish strings and HUD noise by requiring at least 60% of tokens to have
-     * valid English vowel/consonant letter patterns (>= 3 letters) or known short English words.
-     */
-    internal fun passesEnglishTokenRatioFilter(text: String): Boolean {
-        val tokens = text.split(WHITESPACE_REGEX).map { it.trim() }.filter { it.isNotBlank() }
-        if (tokens.isEmpty()) return false
 
-        var validEnglishWordCount = 0
-        var numericCount = 0
-        for (token in tokens) {
-            val letters = token.filter { it.isLetter() }
-            if (letters.length >= 3) {
-                val hasVowel = letters.any { it in "aeiouyAEIOUY" }
-                val hasConsonant = letters.any { it in "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ" }
-                if (hasVowel && hasConsonant) {
-                    validEnglishWordCount++
-                }
-            } else if (letters.isNotEmpty() && SHORT_VALID_WORDS.contains(letters.lowercase())) {
-                validEnglishWordCount++
-            } else if (letters.isEmpty() && token.any { it.isDigit() }) {
-                numericCount++
-            }
-        }
-
-        // When at least one valid English word is present, numeric/currency/code tokens do not count as invalid
-        val effectiveValidCount = if (validEnglishWordCount > 0) validEnglishWordCount + numericCount else validEnglishWordCount
-        val ratio = effectiveValidCount.toDouble() / tokens.size.toDouble()
-        return ratio >= 0.60
-    }
 
     /**
      * Rapidly recognizes text from a cropped ROI or MORT-filtered bitmap.
