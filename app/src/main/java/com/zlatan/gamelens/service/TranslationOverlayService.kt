@@ -673,7 +673,6 @@ class TranslationOverlayService : Service() {
         lastOcrTimestamp = now
 
         // 5. Stage 3: Adaptive Precision OCR with Quality Scoring (Single-Pass Fast vs Dual-Pass High-Contrast)
-        val activeProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(this)
         val ocrStartTime = android.os.SystemClock.uptimeMillis()
 
         val ocrInput = if (croppedRoi.width > 1440) {
