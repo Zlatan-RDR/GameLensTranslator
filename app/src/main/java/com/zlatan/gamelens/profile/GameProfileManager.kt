@@ -22,7 +22,9 @@ data class GameProfile(
     val patchName: String? = null,
     val textColorHex: String = "#FFFFFF",
     val bgOpacityPct: Int = 88,
-    val textShadow: Boolean = true
+    val textShadow: Boolean = true,
+    val highContrastOcr: Boolean = false,
+    val glossaryText: String = ""
 ) {
     fun toJsonObject(): JSONObject {
         return JSONObject().apply {
@@ -39,6 +41,8 @@ data class GameProfile(
             put("textColorHex", textColorHex)
             put("bgOpacityPct", bgOpacityPct)
             put("textShadow", textShadow)
+            put("highContrastOcr", highContrastOcr)
+            put("glossaryText", glossaryText)
         }
     }
 
@@ -57,7 +61,9 @@ data class GameProfile(
                 patchName = if (obj.has("patchName")) obj.optString("patchName") else null,
                 textColorHex = obj.optString("textColorHex", "#FFFFFF"),
                 bgOpacityPct = obj.optInt("bgOpacityPct", 88),
-                textShadow = obj.optBoolean("textShadow", true)
+                textShadow = obj.optBoolean("textShadow", true),
+                highContrastOcr = obj.optBoolean("highContrastOcr", false),
+                glossaryText = obj.optString("glossaryText", "")
             )
         }
     }

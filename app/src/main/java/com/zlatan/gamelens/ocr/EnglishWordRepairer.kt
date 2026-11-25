@@ -277,14 +277,19 @@ object EnglishWordRepairer {
                         prev.endsWith(".'") || prev.endsWith("!'") || prev.endsWith("?'")
             }
             if (idx > 0 && !followsPunctuation && core[0].isUpperCase() && core.substring(1).all { it.isLowerCase() }) {
-                // Only allow splitting if trailing piece is a common grammatical particle (e.g. Turningon -> Turning on)
+                // Only allow splitting if trailing piece is a common grammatical particle or both parts are common words
                 val canSplitParticle = run {
                     val n = lower.length
                     for (s in 1 until n) {
                         val w1 = lower.substring(0, s)
                         val w2 = lower.substring(s)
-                        if (w2 in GLUE_PARTICLES && dictionaryMap.containsKey(w1)) {
-                            return@run true
+                        if (dictionaryMap.containsKey(w1)) {
+                            if (w2 in GLUE_PARTICLES) return@run true
+                            val r1 = dictionaryMap[w1] ?: Int.MAX_VALUE
+                            val r2 = dictionaryMap[w2] ?: Int.MAX_VALUE
+                            if (r1 <= 15000 && r2 <= 15000 && w1.length >= 3 && w2.length >= 3) {
+                                return@run true
+                            }
                         }
                     }
                     false
@@ -396,20 +401,21 @@ object EnglishWordRepairer {
     )
 
     private val GLUE_PARTICLES = setOf(
-        "on", "in", "to", "of", "off", "up", "at", "by", "for", "out", "with",
+        "on", "in", "to", "of", "off", "up", "at", "by", "for", "out", "with", "without",
         "the", "it", "me", "you", "him", "her", "us", "them", "is", "as", "be", "so",
-        "from", "lock", "hints", "listening", "instinct", "and"
+        "from", "lock", "hints", "listening", "instinct", "and", "ride"
     )
 
     private val POSSESSIVE_EXCLAMATION_REGEX = Regex("""(?<=\w)!s\b""", RegexOption.IGNORE_CASE)
 
     private val COMPOUND_PREFIXES = setOf("up", "under", "over", "out", "down", "off", "back", "fore", "in")
-    private val COMPOUND_SUFFIXES = setOf("start", "stated", "stand", "load", "cast", "side", "line", "ward", "way")
+    private val COMPOUND_SUFFIXES = setOf("start", "stated", "stand", "load", "cast", "side", "line", "ward", "way", "less")
 
     private val EXTRA_DICTIONARY_WORDS = mapOf(
         "upstart" to 12000,
         "understated" to 14000,
         "silencer" to 15000,
-        "silencers" to 15500
+        "silencers" to 15500,
+        "countless" to 10000
     )
 }

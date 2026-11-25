@@ -35,6 +35,7 @@ class TranslationQualityPolisherTest {
         assertEquals("والسماء والطارق", TranslationQualityPolisher.polishArabic("و السماء و الطارق"))
         assertEquals("ذهب أحمد ومحمد", TranslationQualityPolisher.polishArabic("ذهب أحمد و محمد"))
         assertEquals("المعلومات والسرية", TranslationQualityPolisher.polishArabic("المعلومات و السرية"))
+        assertEquals("وكالة. لقد قدمت المعلومات والسرية. وبعت الكمال.", TranslationQualityPolisher.polishArabic("وكالة. لقد قدمت المعلومات و السرية. وبعت الكمال."))
 
         // Punctuation spacing
         assertEquals("مرحباً بك، كيف حالك؟", TranslationQualityPolisher.polishArabic("مرحباً بك ، كيف حالك ؟"))

@@ -22,6 +22,8 @@ class EnglishIdiomNormalizerTest {
         assertEquals("disguise is compromised", EnglishIdiomNormalizer.normalize("disguise is blown"))
         assertEquals("easy targets", EnglishIdiomNormalizer.normalize("sitting ducks"))
         assertEquals("approaching the target", EnglishIdiomNormalizer.normalize("closing in on target"))
+        assertEquals("stay seated and don't move", EnglishIdiomNormalizer.normalize("sit on your asses"))
+        assertEquals("stay seated and don't move", EnglishIdiomNormalizer.normalize("sit on your ass"))
         assertEquals("make trouble in he's own backyard", EnglishIdiomNormalizer.normalize("shit where he eats"))
         assertEquals("make trouble in they's own backyard", EnglishIdiomNormalizer.normalize("shit where they eat"))
     }

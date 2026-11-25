@@ -11,8 +11,8 @@ android {
         applicationId = "com.zlatan.gamelens"
         minSdk = 26
         targetSdk = 34
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 4) + 103
-        versionName = "1.0.3"
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 5) + 104
+        versionName = "1.0.4"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

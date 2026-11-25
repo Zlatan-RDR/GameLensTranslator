@@ -405,47 +405,57 @@ class TranslationManager(
             .getBoolean(com.zlatan.gamelens.MainActivity.KEY_ONLINE_TRANSLATE_ENHANCED, false)
 
         val hasNet = hasActiveInternet(context)
+        val activeProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(context)
+        val glossaryEntries = GameGlossaryManager.parse(activeProfile.glossaryText)
         val normalizedForMt = EnglishIdiomNormalizer.normalize(preprocessed)
+        val (mtInput, mtPlaceholders) = GameGlossaryManager.protectBeforeMt(normalizedForMt, glossaryEntries)
 
         val translated = when {
             isOnlineEnhanced && hasNet -> {
                 withTimeoutOrNull(900L) {
-                    translateViaGoogleFree(normalizedForMt)
+                    translateViaGoogleFree(mtInput)
                 } ?: when (config.mode) {
                     TranslationMode.CLOUD_OPENAI -> {
                         if (config.apiKey.isNotBlank()) {
                             translateViaOpenAi(preprocessed)
-                                ?: translateViaGoogleFree(normalizedForMt)
-                                ?: translateViaMlKit(normalizedForMt)
+                                ?: translateViaGoogleFree(mtInput)
+                                ?: translateViaMlKit(mtInput)
                         } else {
-                            translateViaGoogleFree(normalizedForMt) ?: translateViaMlKit(normalizedForMt)
+                            translateViaGoogleFree(mtInput) ?: translateViaMlKit(mtInput)
                         }
                     }
-                    TranslationMode.OFFLINE_MLKIT -> translateViaMlKit(normalizedForMt)
+                    TranslationMode.OFFLINE_MLKIT -> translateViaMlKit(mtInput)
                 }
             }
             config.mode == TranslationMode.CLOUD_OPENAI && hasNet -> {
                 if (config.apiKey.isNotBlank()) {
                     translateViaOpenAi(preprocessed)
-                        ?: translateViaGoogleFree(normalizedForMt)
-                        ?: translateViaMlKit(normalizedForMt)
+                        ?: translateViaGoogleFree(mtInput)
+                        ?: translateViaMlKit(mtInput)
                 } else {
-                    translateViaGoogleFree(normalizedForMt) ?: translateViaMlKit(normalizedForMt)
+                    translateViaGoogleFree(mtInput) ?: translateViaMlKit(mtInput)
                 }
             }
-            else -> translateViaMlKit(normalizedForMt)
+            else -> translateViaMlKit(mtInput)
+        }
+
+        // Restore numeric placeholders from MT pass
+        var effectiveTranslated = if (translated.isNotBlank() && mtPlaceholders.isNotEmpty()) {
+            GameGlossaryManager.restoreAfterMt(translated, mtPlaceholders)
+        } else {
+            translated
         }
 
         // Multi-sentence fallback when ML Kit leaves trailing sentences untranslated
-        var effectiveTranslated = translated
         val consecutiveEnglishRegex = Regex("(?i)\\b[a-zA-Z]{2,}(?:\\s+[a-zA-Z]{2,}){3,}\\b")
         if (consecutiveEnglishRegex.containsMatchIn(effectiveTranslated)) {
-            val sentences = normalizedForMt.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
+            val sentences = mtInput.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
             if (sentences.size > 1) {
                 val sentenceTranslations = sentences.map { sent ->
                     val trimmedSent = sent.trim()
                     if (trimmedSent.isNotEmpty()) {
-                        translateViaMlKit(trimmedSent)
+                        val transPart = translateViaMlKit(trimmedSent)
+                        if (mtPlaceholders.isNotEmpty()) GameGlossaryManager.restoreAfterMt(transPart, mtPlaceholders) else transPart
                     } else ""
                 }
                 val reassembled = sentenceTranslations.filter { it.isNotBlank() }.joinToString(" ")
@@ -726,6 +736,10 @@ class TranslationManager(
                 recentContextLines.clear()
             }
 
+            val activeProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(context)
+            val glossaryEntries = GameGlossaryManager.parse(activeProfile.glossaryText)
+            val glossaryAiPrompt = GameGlossaryManager.formatForAiSystemPrompt(glossaryEntries)
+
             val gameSnippet = if (activeGameProfile.isNotBlank() && !activeGameProfile.equals("الافتراضي", ignoreCase = true) && !activeGameProfile.equals("Default", ignoreCase = true)) {
                 "You are localizing dialogue for the game: \"$activeGameProfile\". "
             } else ""
@@ -733,7 +747,7 @@ class TranslationManager(
             val systemPrompt = "${gameSnippet}You are a professional Arabic video-game localization director. Translate the given on-screen game text into natural, cinematic Modern Standard Arabic (فصحى سينمائية سلسة). Follow these strict localization rules:\n" +
                 "1. Strict Gender Agreement: Track speaker and addressee gender across the 6-line dialogue history using character names (e.g., Diana, Victoria, Jade), pronouns (she/her/girl/woman), and context; conjugate Arabic verbs, pronouns, and adjectives accurately in masculine or feminine form—never default to masculine when addressing or referring to a female character.\n" +
                 "2. Proper Nouns & Titles: Never literally translate proper video game titles, character names, or weapon brands.\n" +
-                "3. Idiomatic Fluency: Translate idioms, threats, and gaming slang by meaning into natural, cinematic Modern Standard Arabic. Output ONLY the Arabic translation with zero explanations or quotation marks."
+                "3. Idiomatic Fluency: Translate idioms, threats, and gaming slang by meaning into natural, cinematic Modern Standard Arabic. Output ONLY the Arabic translation with zero explanations or quotation marks.$glossaryAiPrompt"
 
             val userContent = if (recentContextLines.isNotEmpty()) {
                 val history = recentContextLines.joinToString("\n") { entry ->

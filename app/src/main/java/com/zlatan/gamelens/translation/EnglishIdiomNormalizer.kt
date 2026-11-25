@@ -22,6 +22,7 @@ object EnglishIdiomNormalizer {
         Regex("""(?i)\bdisguise is blown\b""") to "disguise is compromised",
         Regex("""(?i)\bsitting ducks\b""") to "easy targets",
         Regex("""(?i)\bclosing in on target\b""") to "approaching the target",
+        Regex("""(?i)\bsit on your ass(es)?\b""") to "stay seated and don't move",
         Regex("""(?i)\bshit where (he|she|you|they) eats?\b""") to "make trouble in $1's own backyard"
     )
 

@@ -44,8 +44,29 @@ class OcrEngine {
         private val DOMAIN_OR_FILE_REGEX = Regex("^[a-z]{2,}\\.[a-z]{2,}$")
         private val SHORT_VALID_WORDS = setOf(
             "a", "i", "to", "in", "on", "at", "by", "of", "or", "is", "it",
-            "no", "go", "up", "we", "he", "me", "my", "do", "so", "ok", "am", "an", "as"
+            "no", "go", "up", "we", "he", "me", "my", "do", "so", "ok", "am", "an", "as",
+            "and", "the", "her", "his", "him", "she", "who", "how", "all", "out", "not",
+            "you", "can", "now", "see", "one", "two", "get", "let", "any", "off", "but",
+            "few", "far", "for", "our", "day", "man", "bad", "big", "run", "say", "try",
+            "use", "way", "yes", "yet", "end", "eye", "god", "job", "lot", "old", "sir",
+            "too", "war", "why"
         )
+        private val DOSSIER_METADATA_REGEX = Regex("(?i)\\b(HAIR|RANK|NATIONALITY|cond\\.|eff\\.):")
+
+        fun isDossierOrHudMetadata(text: String): Boolean {
+            if (DOSSIER_METADATA_REGEX.containsMatchIn(text)) return true
+            val trimmed = text.trim()
+            val tokens = trimmed.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
+            if (tokens.size >= 2 && trimmed == trimmed.uppercase(java.util.Locale.US)) {
+                val validCount = tokens.count { token ->
+                    val clean = token.filter { it.isLetter() }.lowercase(java.util.Locale.US)
+                    clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
+                }
+                val ratio = validCount.toFloat() / tokens.size.toFloat()
+                if (ratio < 0.40f) return true
+            }
+            return false
+        }
         private val CREDIT_KEYWORDS = setOf(
             "PRODUCED BY", "DIRECTED BY", "DESIGNER", "PROGRAMMER", "MUSIC BY", "WRITTEN BY"
         )
@@ -720,9 +741,16 @@ class OcrEngine {
                             // 2. Reject Opening Credits & Title lines (>=75% uppercase for >=4 chars, or credit keywords)
                             if (isCreditOrTitleLine(text)) return@filter false
 
-                            // 3. Side-Margin Filter: discard outer margin clusters (centerX/roiWidth outside 0.18f..0.82f) when a centered cluster exists
+                            // 3. Side-Margin Filter: discard outer margin clusters (centerX/roiWidth outside 0.18f..0.82f) when a centered cluster exists unless line has >= 3 valid words
                             if (hasCenteredCluster && !cluster.isCentered) {
-                                return@filter false
+                                val words = text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
+                                val validCount = words.count { token ->
+                                    val clean = token.filter { it.isLetter() }.lowercase(java.util.Locale.US)
+                                    clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
+                                }
+                                if (validCount < 3) {
+                                    return@filter false
+                                }
                             }
 
                             // 4. Reject Clipped Single-Word HUD Action Prompts & Unpunctuated Single-Word Garbage
@@ -753,33 +781,26 @@ class OcrEngine {
                             !OcrTextCleaner.isDiacriticSelfOcrGarble(text)
                         }
 
-                    // Geometric Subtitle Band Clustering: filter out lines deviating >45% from dominant line height or short edge fragments
-                    val geometricallyFilteredClusters = if (filteredClusters.size <= 1) {
-                        filteredClusters
-                    } else {
-                        val dominantCluster = filteredClusters.maxByOrNull { c ->
-                            val words = c.text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }.size
-                            words * 1000 + (c.right - c.left)
-                        } ?: filteredClusters.first()
-
-                        val dominantHeight = (dominantCluster.bottom - dominantCluster.top).coerceAtLeast(1).toFloat()
-
-                        filteredClusters.filter { cluster ->
-                            if (cluster === dominantCluster) return@filter true
-
-                            val h = (cluster.bottom - cluster.top).coerceAtLeast(1).toFloat()
-                            val deviation = kotlin.math.abs(h - dominantHeight) / dominantHeight
-                            if (deviation > 0.45f) return@filter false
-
-                            val tokens = cluster.text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
-                            if (tokens.size <= 2 && !cluster.isCentered && dominantCluster.isCentered) {
-                                val verticalGap = kotlin.math.abs(cluster.centerY - dominantCluster.centerY)
-                                if (verticalGap > dominantHeight * 0.75f) {
-                                    return@filter false
-                                }
-                            }
-                            true
+                    // Cohesive Area Line Merging: Keep all valid text lines inside the user-selected ROI in reading order.
+                    // Stop dropping valid multi-word English lines based on bounding-box width/height variance or vertical band distance.
+                    // ONLY filter out individual lines that are provably non-subtitle noise (logcat, explicit dossier metadata, or isolated non-dictionary fragments).
+                    // NEVER drop any line containing >= 3 valid English words.
+                    val geometricallyFilteredClusters = filteredClusters.filter { cluster ->
+                        val text = cluster.text
+                        val words = text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
+                        val validCount = words.count { token ->
+                            val clean = token.filter { it.isLetter() }.lowercase(java.util.Locale.US)
+                            clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
                         }
+                        if (validCount >= 3) return@filter true // NEVER drop any line containing >= 3 valid English words
+
+                        // Filter out explicit dossier/HUD metadata patterns
+                        if (isDossierOrHudMetadata(text)) return@filter false
+
+                        // Filter out isolated short non-dictionary garbage fragments (<= 2 words with zero valid words)
+                        if (words.size <= 2 && validCount == 0) return@filter false
+
+                        true
                     }
 
                     // Sort detected OCR lines strictly by line-center Y buckets (rowThreshold = medianLineHeight * 0.55f),

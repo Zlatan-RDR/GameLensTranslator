@@ -171,4 +171,17 @@ object SecureApiKeyStorage {
             )
         }
     }
+
+    /**
+     * Checks if the endpoint points to a local or private network host (e.g. Ollama, LM Studio, vLLM).
+     */
+    fun isLocalEndpoint(endpointUrl: String): Boolean {
+        val trimmed = endpointUrl.trim()
+        val uri = try { URI(trimmed) } catch (_: Exception) { return false }
+        val host = uri.host?.lowercase() ?: return false
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" ||
+                host.matches(Regex("^10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$")) ||
+                host.matches(Regex("^192\\.168\\.\\d{1,3}\\.\\d{1,3}$")) ||
+                host.matches(Regex("^172\\.(1[6-9]|2[0-9]|3[0-1])\\.\\d{1,3}\\.\\d{1,3}$"))
+    }
 }

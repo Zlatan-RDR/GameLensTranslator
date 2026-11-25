@@ -62,6 +62,16 @@ class OcrProcessorTest {
         assertTrue(OcrTextCleaner.isNoiseOrPrompt("ill ing view trolled Der"))
         assertFalse(OcrTextCleaner.isFragmentedGibberish("Good morning agent 47"))
 
+        // Multi-line and short valid words like "her", "and", "the" must NEVER be dropped as noise/prompt
+        assertFalse(OcrTextCleaner.isNoiseOrPrompt("her down and offered me the contract."))
+        assertFalse(OcrTextCleaner.isFragmentedGibberish("her down and offered me the contract."))
+
+        // Dossier and HUD metadata detection
+        assertTrue(OcrEngine.isDossierOrHudMetadata("HAIR: Black"))
+        assertTrue(OcrEngine.isDossierOrHudMetadata("RANK: Sergeant"))
+        assertTrue(OcrEngine.isDossierOrHudMetadata("NATIONALITY: American"))
+        assertFalse(OcrEngine.isDossierOrHudMetadata("Her rank was very high in the agency"))
+
         // Logcat and self-capture rejection
         assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("[12:34:56.789] D/GameLens: precision loop"))
         assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("com.zlatan.gamelens.MainActivity"))

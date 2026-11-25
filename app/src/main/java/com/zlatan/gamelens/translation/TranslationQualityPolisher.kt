@@ -9,7 +9,7 @@ object TranslationQualityPolisher {
 
     // Fix Arabic typography spacing:
     // Conjunction 'و' attached to following Arabic word: "و الرجل" -> "والرجل", "المعلومات و السرية" -> "المعلومات والسرية"
-    private val WAW_CONJUNCTION_REGEX = Regex("(^|[\\s،.؟!])و\\s+(?=[\\u0621-\\u064A\\u0671-\\u06D3])")
+    private val WAW_CONJUNCTION_REGEX = Regex("(^|[\\s،.؟!\\p{Z}])و[\\s\\p{Z}]+(?=[\\u0621-\\u064A])")
 
     // Feminine-object pronoun agreement: "تلك القلادة. لا تفقده" -> "تلك القلادة. لا تفقدها"
     private val FEMININE_OBJECT_PRONOUN_REGEX = Regex("(تلك\\s+[\\u0621-\\u064A]+[،.]\\s*لا\\s+[\\u0621-\\u064A]+)ه\\b")
@@ -71,7 +71,11 @@ object TranslationQualityPolisher {
         s = FEMININE_OBJECT_PRONOUN_REGEX.replace(s, "$1ها")
 
         // 2. Arabic Typography Spacing Normalization
-        s = WAW_CONJUNCTION_REGEX.replace(s, "$1و")
+        while (WAW_CONJUNCTION_REGEX.containsMatchIn(s)) {
+            val next = WAW_CONJUNCTION_REGEX.replace(s, "$1و")
+            if (next == s) break
+            s = next
+        }
         s = PUNCTUATION_SPACING_REGEX.replace(s, "$1")
         s = MULTIPLE_WHITESPACE_REGEX.replace(s, " ").trim()
 

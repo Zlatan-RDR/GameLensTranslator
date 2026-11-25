@@ -224,6 +224,36 @@
                                 app:backgroundTint="#FFEF4444"
                                 app:cornerRadius="8dp" />
                         </LinearLayout>
+
+                        <!-- Glossary Button -->
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnGlossary"
+                            android:layout_width="match_parent"
+                            android:layout_height="44dp"
+                            android:layout_marginTop="8dp"
+                            android:text="قاموس اللعبة والأسماء (Glossary)"
+                            android:textColor="#FFFFFF"
+                            android:textSize="12sp"
+                            android:textStyle="bold"
+                            app:backgroundTint="#FF475569"
+                            app:cornerRadius="8dp" />
+
+                        <!-- High Contrast OCR Switch -->
+                        <com.google.android.material.switchmaterial.SwitchMaterial
+                            android:id="@+id/switchHighContrastOcr"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="وضع التباين العالي (Mort Filter)"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="معالجة قسرية ومضاعفة للإطارات الصعبة والخطوط الشفافة (يستهلك طاقة أعلى)"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 

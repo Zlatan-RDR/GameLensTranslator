@@ -8,7 +8,7 @@ import kotlin.math.abs
  * High-speed ROI processing and downscaling utilities for OCR preprocessing.
  */
 object OcrProcessor {
-    fun downscaleRoiIfNeeded(bitmap: Bitmap, targetWidth: Int = 960): Bitmap {
+    fun downscaleRoiIfNeeded(bitmap: Bitmap, targetWidth: Int = 1440): Bitmap {
         if (bitmap.isRecycled || bitmap.width <= targetWidth || bitmap.height <= 0) return bitmap
         val scale = targetWidth.toFloat() / bitmap.width.toFloat()
         val targetH = (bitmap.height * scale).toInt().coerceAtLeast(1)
@@ -180,9 +180,14 @@ object MortFilter {
  */
 object OcrTextCleaner {
     private val STANDALONE_COUNTER_REGEX = Regex("^\\d+(\\s*[/\\\\\\-:]\\s*\\d+)?$")
-    private val SHORT_VALID_WORDS = setOf(
+    val SHORT_VALID_WORDS = setOf(
         "a", "i", "to", "in", "on", "at", "by", "of", "or", "is", "it",
-        "no", "go", "up", "we", "he", "me", "my", "do", "so", "ok", "am", "an", "as"
+        "no", "go", "up", "we", "he", "me", "my", "do", "so", "ok", "am", "an", "as",
+        "and", "the", "her", "his", "him", "she", "who", "how", "all", "out", "not",
+        "you", "can", "now", "see", "one", "two", "get", "let", "any", "off", "but",
+        "few", "far", "for", "our", "day", "man", "bad", "big", "run", "say", "try",
+        "use", "way", "yes", "yet", "end", "eye", "god", "job", "lot", "old", "sir",
+        "too", "war", "why"
     )
     private val HUD_PROMPTS = setOf(
         "tap to", "press to", "hold to", "to skip", "skip",
@@ -289,10 +294,16 @@ object OcrTextCleaner {
         if (trimmed.isEmpty()) return false
         val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
         if (tokens.size < 3) return false
+        val validWordCount = tokens.count { token ->
+            val clean = token.filter { it.isLetter() }.lowercase(Locale.US)
+            clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
+        }
+        if (validWordCount >= 3) return false // NEVER drop string containing >= 3 valid English words
+
         var fragmentCount = 0
         for (t in tokens) {
             val clean = t.filter { it.isLetter() }.lowercase(Locale.US)
-            if (clean.length in 1..3 && !SHORT_VALID_WORDS.contains(clean)) {
+            if (clean.length in 1..3 && !SHORT_VALID_WORDS.contains(clean) && !EnglishWordRepairer.isWord(clean)) {
                 fragmentCount++
             }
         }
@@ -300,7 +311,7 @@ object OcrTextCleaner {
         return ratio >= 0.40f
     }
 
-    fun downscaleRoiIfNeeded(bitmap: Bitmap, targetWidth: Int = 960): Bitmap =
+    fun downscaleRoiIfNeeded(bitmap: Bitmap, targetWidth: Int = 1440): Bitmap =
         OcrProcessor.downscaleRoiIfNeeded(bitmap, targetWidth)
 
     /**
@@ -532,6 +543,17 @@ object OcrTextCleaner {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
         if (isLogcatOrSelfCaptureNoise(trimmed)) return true
+
+        // Ensure any recognized string containing >= 4 valid English dictionary words is NEVER dropped as noise/prompt
+        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val dictWordCount = tokens.count { token ->
+            val clean = token.filter { it.isLetter() }.lowercase(Locale.US)
+            clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
+        }
+        if (dictWordCount >= 4) {
+            return false
+        }
+
         if (isFragmentedGibberish(trimmed)) return true
         if (isDiacriticSelfOcrGarble(trimmed)) return true
         if (Regex("^\\.{2,}\\s*\\(").containsMatchIn(trimmed)) return true

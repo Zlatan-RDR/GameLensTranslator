@@ -566,7 +566,7 @@ class MainActivity : AppCompatActivity() {
             }
             else -> {
                 binding.rbAutoCloudOffline.isChecked = true
-                binding.layoutCloudSettings.visibility = View.VISIBLE
+                binding.layoutCloudSettings.visibility = View.GONE
             }
         }
 
@@ -721,6 +721,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val isLocal = SecureApiKeyStorage.isLocalEndpoint(finalEndpoint)
+        if (apiKey.isBlank() && !isLocal) {
+            binding.tvTestApiResult.visibility = View.VISIBLE
+            binding.tvTestApiResult.setTextColor(Color.parseColor("#FBBF24"))
+            binding.tvTestApiResult.text = "⚠️ يرجى إدخال مفتاح API أولاً ثم إعادة الاختبار"
+            return
+        }
+
         binding.tvTestApiResult.visibility = View.VISIBLE
         binding.tvTestApiResult.setTextColor(Color.parseColor("#94A3B8"))
         binding.tvTestApiResult.text = "جارٍ اختبار الاتصال..."
@@ -760,7 +768,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupListeners() {
         // Translation Engine Selection (Auto-Saved)
         binding.rgTranslationMode.setOnCheckedChangeListener { _, checkedId ->
-            val showCloud = (checkedId == R.id.rbCloudOpenAi || checkedId == R.id.rbAutoCloudOffline)
+            val showCloud = (checkedId == R.id.rbCloudOpenAi)
             binding.layoutCloudSettings.visibility = if (showCloud) View.VISIBLE else View.GONE
             autoSaveTranslationConfig()
 
@@ -1183,12 +1191,28 @@ class MainActivity : AppCompatActivity() {
         val activeIndex = profiles.indexOfFirst { it.id == activeProfileId }.coerceAtLeast(0)
         binding.spGameProfiles.setSelection(activeIndex)
 
+        val curActiveProfile = GameProfileManager.getActiveProfile(this)
+        binding.switchHighContrastOcr.setOnCheckedChangeListener(null)
+        binding.switchHighContrastOcr.isChecked = curActiveProfile.highContrastOcr
+        binding.switchHighContrastOcr.setOnCheckedChangeListener { _, isChecked ->
+            val p = GameProfileManager.getActiveProfile(this)
+            if (p.highContrastOcr != isChecked) {
+                GameProfileManager.saveProfile(this, p.copy(highContrastOcr = isChecked))
+                Toast.makeText(this, if (isChecked) "تم تفعيل وضع التباين العالي (Mort Filter)" else "تم تعطيل وضع التباين العالي", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        binding.btnGlossary.setOnClickListener {
+            showGlossaryDialog()
+        }
+
         binding.spGameProfiles.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 if (isUpdatingProfileUi) return
                 val selectedProfile = profiles.getOrNull(position) ?: return
                 if (selectedProfile.id != GameProfileManager.getActiveProfileId(this@MainActivity)) {
                     GameProfileManager.applyProfile(this@MainActivity, selectedProfile.id)
+                    binding.switchHighContrastOcr.isChecked = selectedProfile.highContrastOcr
                     isUpdatingProfileUi = true
                     loadSettings()
                     isUpdatingProfileUi = false
@@ -1262,6 +1286,41 @@ class MainActivity : AppCompatActivity() {
                 .setNegativeButton("إلغاء", null)
                 .show()
         }
+    }
+
+    private fun showGlossaryDialog() {
+        val active = GameProfileManager.getActiveProfile(this)
+        val input = EditText(this).apply {
+            hint = "أدخل المصطلحات واسم الشخصية وسياق الجنس (سطر لكل مصطلح):\nVictoria = فيكتوريا [أنثى]\nAgent 47 = العميل 47 [ذكر]\nDiana = ديانا [أنثى]"
+            setText(active.glossaryText)
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#94A3B8"))
+            minLines = 6
+            gravity = Gravity.TOP or Gravity.START
+            setBackgroundColor(Color.parseColor("#1E293B"))
+            setPadding(32, 32, 32, 32)
+        }
+
+        val scroll = ScrollView(this).apply {
+            addView(input)
+            setPadding(24, 16, 24, 16)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("قاموس اللعبة وتحديد الجنس (Glossary)")
+            .setView(scroll)
+            .setPositiveButton("حفظ") { _, _ ->
+                val updatedText = input.text.toString().trim()
+                val updatedProfile = active.copy(glossaryText = updatedText)
+                GameProfileManager.saveProfile(this, updatedProfile)
+                Toast.makeText(this, "تم حفظ قاموس اللعبة بنجاح", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("إلغاء", null)
+            .create()
+
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.parseColor("#34D399"))
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Color.parseColor("#CBD5E1"))
     }
 
     private fun openHyperOsPermissionSettings() {

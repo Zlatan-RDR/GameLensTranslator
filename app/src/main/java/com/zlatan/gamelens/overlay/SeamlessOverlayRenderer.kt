@@ -11,6 +11,10 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.Spannable
+import android.text.SpannableStringBuilder
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -612,7 +616,7 @@ class SeamlessOverlayRenderer(private val context: Context) {
      * and Offset Above Mode (translucent bar positioned cleanly above bottom zone).
      * Auto-hides dynamically based on reading speed so old lines clear promptly between scenes.
      */
-    fun renderSubtitle(arabicText: String, englishText: String = "") {
+    fun renderSubtitle(arabicText: String, englishText: String = "", speaker: String? = null) {
         mainHandler.post {
             if (!isContainerAttached || overlayContainer == null) {
                 initOverlayContainer()
@@ -623,8 +627,9 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 return@post
             }
 
+            val expectedText = if (!speaker.isNullOrBlank()) "$speaker: \u200F$arabicText" else arabicText
             val currentText = sub.text?.toString() ?: ""
-            val isAlreadyShowing = sub.visibility == View.VISIBLE && currentText == arabicText
+            val isAlreadyShowing = sub.visibility == View.VISIBLE && currentText == expectedText
             if (isAlreadyShowing) {
                 // Idempotent Zero-Blink: do not re-animate, clear, or touch background alpha; keep frozen
                 mainHandler.removeCallbacks(hideSubtitleRunnable)
@@ -734,9 +739,30 @@ class SeamlessOverlayRenderer(private val context: Context) {
                 sub.layoutParams = layoutParams
             }
 
-            sub.text = arabicText
+            if (!speaker.isNullOrBlank()) {
+                val ssb = SpannableStringBuilder()
+                val speakerPrefix = "$speaker: "
+                ssb.append(speakerPrefix)
+                ssb.setSpan(
+                    ForegroundColorSpan(Color.parseColor("#FBBF24")),
+                    0,
+                    speakerPrefix.length,
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                ssb.setSpan(
+                    StyleSpan(Typeface.BOLD),
+                    0,
+                    speakerPrefix.length,
+                    Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                ssb.append("\u200F$arabicText")
+                sub.text = ssb
+            } else {
+                sub.text = arabicText
+            }
             sub.visibility = View.VISIBLE
-            com.zlatan.gamelens.diag.SubtitleHistoryManager.recordOrUpgradeStreaming(englishText, arabicText)
+            val histArabic = if (!speaker.isNullOrBlank()) "$speaker: $arabicText" else arabicText
+            com.zlatan.gamelens.diag.SubtitleHistoryManager.recordOrUpgradeStreaming(englishText, histArabic)
             mainHandler.removeCallbacks(hideSubtitleRunnable)
             subtitleHoldUntilMs = SystemClock.elapsedRealtime() + EMERGENCY_FAILSAFE_TIMEOUT_MS
             mainHandler.postDelayed(hideSubtitleRunnable, EMERGENCY_FAILSAFE_TIMEOUT_MS)

@@ -190,6 +190,7 @@ class TranslationOverlayService : Service() {
     private var consecutiveEmptyRoiCount: Int = 0
     private var lastSubtitleVisibleOnScreenMs: Long = 0L
     private var lastResizeTimestampMs: Long = 0L
+    private var serviceStartTimeMs: Long = 0L
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -198,6 +199,7 @@ class TranslationOverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         try {
+            serviceStartTimeMs = android.os.SystemClock.elapsedRealtime()
             DiagnosticLogger.log("Service: onCreate")
             windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
             mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -546,8 +548,11 @@ class TranslationOverlayService : Service() {
 
         val (screenW, screenH, dpi) = getRealScreenDimensions()
 
-        // 1. Auto-pause during rapid display resize transition or when GameLens is in the foreground
+        // 1. Auto-pause during startup grace window (1500ms), rapid display resize transition, or when GameLens is in the foreground
         val nowRealtime = android.os.SystemClock.elapsedRealtime()
+        if (nowRealtime - serviceStartTimeMs < 1500L) {
+            return
+        }
         if ((nowRealtime - lastResizeTimestampMs < 650L) ||
             AppForegroundState.isMainUiVisible.get() ||
             com.zlatan.gamelens.MainActivity.isAppInForeground
@@ -661,7 +666,10 @@ class TranslationOverlayService : Service() {
         forceInstantPass = false
         lastOcrTimestamp = now
 
-        // 5. Stage 3: Dual-Pass OCR with Adaptive Downscaling & Quality Scoring (Raw ROI vs MortFilter lum >= 155)
+        // 5. Stage 3: Adaptive Precision OCR with Quality Scoring (Single-Pass Fast vs Dual-Pass High-Contrast)
+        val activeProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(this)
+        val ocrStartTime = android.os.SystemClock.uptimeMillis()
+
         val ocrInput = com.zlatan.gamelens.ocr.OcrProcessor.downscaleRoiIfNeeded(croppedRoi)
         if (ocrInput !== croppedRoi && !croppedRoi.isRecycled) {
             croppedRoi.recycle()
@@ -675,7 +683,8 @@ class TranslationOverlayService : Service() {
         var filterSource = "Raw (q=%.2f)".format(java.util.Locale.US, rawScore)
         var bestScore = rawScore
 
-        if (rawLines.isEmpty() || rawScore < 0.80f) {
+        // Fast Single-Pass OCR: skip Mort Filter unless highContrastOcr toggle is active OR (rawLines not empty and rawScore < 0.80f)
+        if (activeProfile.highContrastOcr || (rawLines.isNotEmpty() && rawScore < 0.80f)) {
             val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(ocrInput)
             if (mortBitmap != null) {
                 val scaledMort = com.zlatan.gamelens.ocr.OcrProcessor.downscaleRoiIfNeeded(mortBitmap)
@@ -693,6 +702,8 @@ class TranslationOverlayService : Service() {
                 }
             }
         }
+
+        val ocrDurationMs = android.os.SystemClock.uptimeMillis() - ocrStartTime
 
         if (!ocrInput.isRecycled) {
             ocrInput.recycle()
@@ -758,8 +769,8 @@ class TranslationOverlayService : Service() {
             Log.d(TAG, "OCR quality-upgrade allowed for active subtitle: \"$lastDisplayedEnglishText\" -> \"$mergedEnglish\"")
         }
 
-        // Prefix/subset overwrite guard: ignore new OCR strings that are shorter subsets/prefixes (>= 75% token overlap) of the currently displayed sentence within 5000ms
-        if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 5000L)) {
+        // Continuous Anti-Pollution Lock: ignore shorter subsets while subtitle is continuously visible on screen (consecutiveEmptyRoiCount == 0) or within 5000ms
+        if (lastDisplayedEnglishText.isNotEmpty() && (consecutiveEmptyRoiCount == 0 || now - lastSubtitleDisplayTimestamp < 5000L)) {
             if (com.zlatan.gamelens.ocr.OcrTextCleaner.isShorterSubsetOrPrefix(mergedEnglish, lastDisplayedEnglishText)) {
                 val dropMsg = "OCR skipped [shorter-subset]: \"$mergedEnglish\" (subset of: \"$lastDisplayedEnglishText\")"
                 Log.d(TAG, dropMsg)
@@ -772,7 +783,7 @@ class TranslationOverlayService : Service() {
         }
 
         // Clean-Superset Overwrite Guard & Delta-Aware Progressive Auto-Typewriter
-        if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 6000L)) {
+        if (lastDisplayedEnglishText.isNotEmpty() && (consecutiveEmptyRoiCount == 0 || now - lastSubtitleDisplayTimestamp < 6000L)) {
             val verdict = com.zlatan.gamelens.ocr.OcrEngine.classifySupersetExpansion(lastDisplayedEnglishText, mergedEnglish)
             val isFuzzyPolluted = com.zlatan.gamelens.ocr.OcrEngine.isPollutedFuzzySuperset(lastDisplayedEnglishText, mergedEnglish)
             if ((verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CREDIT_POLLUTION || isFuzzyPolluted) &&
@@ -924,18 +935,29 @@ class TranslationOverlayService : Service() {
         val capturedGen = subtitleGeneration.incrementAndGet()
         activeTranslationJob?.cancel()
         activeTranslationJob = serviceScope.launch {
+            val transStartTime = android.os.SystemClock.uptimeMillis()
+            val speakerResult = com.zlatan.gamelens.translation.SpeakerDetector.detect(promptNormalized)
+            val textToTranslate = if (speakerResult.hasSpeaker) speakerResult.dialogue else promptNormalized
+
             val rawArabic = if (patchMatch != null) {
                 patchMatch
             } else {
-                val memMatch = translationManager.getFromMemoryCache(promptNormalized)
-                if (memMatch != null) {
-                    memMatch
+                val patchBody = PatchManager.lookup(textToTranslate)
+                if (patchBody != null) {
+                    patchBody
                 } else {
-                    withContext(Dispatchers.IO) {
-                        translationManager.translate(promptNormalized)
+                    val memMatch = translationManager.getFromMemoryCache(textToTranslate)
+                    if (memMatch != null) {
+                        memMatch
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            translationManager.translate(textToTranslate)
+                        }
                     }
                 }
             }
+
+            val transDurationMs = android.os.SystemClock.uptimeMillis() - transStartTime
 
             if (capturedGen != subtitleGeneration.get()) {
                 Log.d(TAG, "Translation dropped due to newer generation (gen=$capturedGen, curr=${subtitleGeneration.get()}): \"$promptNormalized\"")
@@ -944,12 +966,19 @@ class TranslationOverlayService : Service() {
 
             val arabicTranslation = if (patchMatch != null) rawArabic else translationManager.repairGluedArabicWords(rawArabic)
 
-            if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(promptNormalized.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
+            if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(textToTranslate.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
                 val dropMsg = "OCR skipped [empty-or-non-arabic]: \"$promptNormalized\" -> \"$arabicTranslation\""
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
                 return@launch
             }
+
+            val speakerDisplay = if (speakerResult.hasSpeaker && speakerResult.speaker != null) {
+                val curProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(this@TranslationOverlayService)
+                val glossaryEntries = com.zlatan.gamelens.translation.GameGlossaryManager.parse(curProfile.glossaryText)
+                val matchedEntry = glossaryEntries.find { it.term.equals(speakerResult.speaker, ignoreCase = true) }
+                matchedEntry?.target ?: com.zlatan.gamelens.translation.TranslationManager.DEFAULT_PROTECTED_GLOSSARY[speakerResult.speaker] ?: speakerResult.speaker
+            } else null
 
             withContext(Dispatchers.Main) {
                 if (capturedGen != subtitleGeneration.get()) return@withContext
@@ -972,10 +1001,10 @@ class TranslationOverlayService : Service() {
                 }
 
                 // Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
-                seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)
+                seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized, speakerDisplay)
                 pulseHeartbeat()
-                DiagnosticLogger.log("Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
-                Log.i(TAG, "Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
+                DiagnosticLogger.log("Precision OCR [$filterSource (ocr=${ocrDurationMs}ms, trans=${transDurationMs}ms)]: \"$promptNormalized\" -> \"$arabicTranslation\"")
+                Log.i(TAG, "Precision OCR [$filterSource (ocr=${ocrDurationMs}ms, trans=${transDurationMs}ms)]: \"$promptNormalized\" -> \"$arabicTranslation\"")
             }
         }
     }
