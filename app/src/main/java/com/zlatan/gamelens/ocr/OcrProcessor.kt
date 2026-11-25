@@ -219,6 +219,20 @@ object OcrTextCleaner {
     }
 
     /**
+     * Cleans stray circular on-screen button icons or unmatched parentheses from MenuScan text blocks
+     * (e.g. "Tap ) to" -> "Tap to", "Tap ( ) to" -> "Tap to", "Tap  and" -> "Tap and").
+     */
+    fun cleanMenuScanArtifacts(raw: String): String {
+        if (raw.isBlank()) return raw
+        var s = raw
+        s = s.replace(Regex("""\(\s*\)"""), " ")
+        s = s.replace(Regex("""(?i)(?<=\bTap|\bPress|\bHold|\bPush)\s*[()\[\]{}]+\s*"""), " ")
+        s = s.replace(Regex("""(?i)\s*[()\[\]{}]+\s*(?=to\b|and\b|for\b)"""), " ")
+        s = s.replace(Regex("""\s{2,}"""), " ").trim()
+        return s
+    }
+
+    /**
      * Rejects Arabic-as-Latin OCR garble (e.g. "Jlal ce Blg .äyul gUloglaall")
      * produced when ML Kit mistakenly scans Arabic overlay text with Latin models.
      */

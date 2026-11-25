@@ -51,6 +51,11 @@ object EnglishWordRepairer {
                 }
             }
         }
+        for ((word, rank) in EXTRA_DICTIONARY_WORDS) {
+            if (!dictionaryMap.containsKey(word)) {
+                dictionaryMap[word] = rank
+            }
+        }
         isInitialized = true
         try {
             Log.i(TAG, "Loaded ${dictionaryMap.size} words into EnglishWordRepairer dictionary.")
@@ -65,6 +70,11 @@ object EnglishWordRepairer {
             val word = w.trim().lowercase(Locale.US)
             if (word.isNotEmpty() && !dictionaryMap.containsKey(word)) {
                 dictionaryMap[word] = rank++
+            }
+        }
+        for ((word, extraRank) in EXTRA_DICTIONARY_WORDS) {
+            if (!dictionaryMap.containsKey(word)) {
+                dictionaryMap[word] = extraRank
             }
         }
         isInitialized = true
@@ -121,13 +131,42 @@ object EnglishWordRepairer {
     fun repair(text: String): String {
         if (text.isBlank() || dictionaryMap.isEmpty()) return text
 
-        val rawTokens = text.trim().split(WHITESPACE_REGEX).filter { it.isNotEmpty() }
+        val normalizedInput = text.replace(POSSESSIVE_EXCLAMATION_REGEX, "'s")
+        val rawTokens = normalizedInput.trim().split(WHITESPACE_REGEX).filter { it.isNotEmpty() }
         if (rawTokens.isEmpty()) return text
 
-        // Pass A — Adjacent Split-Word Rejoining
+        // Pass A — Adjacent Split-Word Rejoining (3-fragment and 2-fragment)
         val rejoinedTokens = ArrayList<String>(rawTokens.size)
         var i = 0
         while (i < rawTokens.size) {
+            // Check 3-fragment rejoining first: e.g. "supp li ed" -> "supplied"
+            if (i + 2 < rawTokens.size) {
+                val p1 = splitPunctuation(rawTokens[i])
+                val p2 = splitPunctuation(rawTokens[i + 1])
+                val p3 = splitPunctuation(rawTokens[i + 2])
+                if (p1.core.isNotEmpty() && p2.core.isNotEmpty() && p3.core.isNotEmpty() &&
+                    p1.trailingPunct.isEmpty() && p2.leadingPunct.isEmpty() && p2.trailingPunct.isEmpty() && p3.leadingPunct.isEmpty()) {
+                    val merged3 = (p1.core + p2.core + p3.core).lowercase(Locale.US)
+                    if (merged3.length >= 5 && dictionaryMap.containsKey(merged3)) {
+                        val w1 = p1.core.lowercase(Locale.US)
+                        val w2 = p2.core.lowercase(Locale.US)
+                        val w3 = p3.core.lowercase(Locale.US)
+                        if (!dictionaryMap.containsKey(w1) || !dictionaryMap.containsKey(w2) || !dictionaryMap.containsKey(w3) ||
+                            (w1.length <= 4 && w2.length <= 4 && w3.length <= 4)) {
+                            val mergedCasing = if (p1.core[0].isUpperCase()) {
+                                merged3.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+                            } else {
+                                merged3
+                            }
+                            rejoinedTokens.add(p1.leadingPunct + mergedCasing + p3.trailingPunct)
+                            i += 3
+                            continue
+                        }
+                    }
+                }
+            }
+
+            // Check 2-fragment rejoining: e.g. "Excel lent" -> "Excellent", "up start" -> "upstart", "under stated" -> "understated"
             if (i + 1 < rawTokens.size) {
                 val p1 = splitPunctuation(rawTokens[i])
                 val p2 = splitPunctuation(rawTokens[i + 1])
@@ -136,9 +175,17 @@ object EnglishWordRepairer {
                     val w1Lower = p1.core.lowercase(Locale.US)
                     val w2Lower = p2.core.lowercase(Locale.US)
 
-                    // Merge ONLY IF merged is a valid word >= 5 chars AND at least one component is NOT a valid word, OR known split (e.g. steal thy -> stealthy)
                     if (merged.length >= 5 && dictionaryMap.containsKey(merged)) {
-                        if (!dictionaryMap.containsKey(w1Lower) || !dictionaryMap.containsKey(w2Lower) || (w1Lower == "steal" && w2Lower == "thy")) {
+                        val mergedRank = dictionaryMap[merged] ?: Int.MAX_VALUE
+                        val r1 = dictionaryMap[w1Lower]
+                        val r2 = dictionaryMap[w2Lower]
+
+                        val shouldMerge = (r1 == null || r2 == null) ||
+                                (w1Lower == "steal" && w2Lower == "thy") ||
+                                (p1.core[0].isUpperCase() && !p2.core[0].isUpperCase() && (r2 > 5000 || mergedRank < r2)) ||
+                                (mergedRank <= 15000 && (w1Lower in COMPOUND_PREFIXES || w2Lower in COMPOUND_SUFFIXES))
+
+                        if (shouldMerge) {
                             val mergedCasing = if (p1.core[0].isUpperCase()) {
                                 merged.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
                             } else {
@@ -295,7 +342,7 @@ object EnglishWordRepairer {
                 if (maxOf(w1.length, w2.length) < 3) continue
                 val r1 = dictionaryMap[w1] ?: continue
                 val r2 = dictionaryMap[w2] ?: continue
-                if (r1 <= 16000 && r2 <= 16000) {
+                if (r1 <= 25000 && r2 <= 25000) {
                     val cost = ln(r1 + 10.0) + ln(r2 + 10.0) + 3.6
                     if (cost < bestCost) {
                         bestCost = cost
@@ -350,6 +397,19 @@ object EnglishWordRepairer {
 
     private val GLUE_PARTICLES = setOf(
         "on", "in", "to", "of", "off", "up", "at", "by", "for", "out", "with",
-        "the", "it", "me", "you", "him", "her", "us", "them", "is", "as", "be", "so"
+        "the", "it", "me", "you", "him", "her", "us", "them", "is", "as", "be", "so",
+        "from", "lock", "hints", "listening", "instinct", "and"
+    )
+
+    private val POSSESSIVE_EXCLAMATION_REGEX = Regex("""(?<=\w)!s\b""", RegexOption.IGNORE_CASE)
+
+    private val COMPOUND_PREFIXES = setOf("up", "under", "over", "out", "down", "off", "back", "fore", "in")
+    private val COMPOUND_SUFFIXES = setOf("start", "stated", "stand", "load", "cast", "side", "line", "ward", "way")
+
+    private val EXTRA_DICTIONARY_WORDS = mapOf(
+        "upstart" to 12000,
+        "understated" to 14000,
+        "silencer" to 15000,
+        "silencers" to 15500
     )
 }

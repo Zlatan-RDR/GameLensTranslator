@@ -50,6 +50,25 @@ class TranslationManager(
         private const val TAG = "TranslationManager"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
+        internal fun normalizeApiUrl(rawEndpoint: String): String {
+            val trimmed = rawEndpoint.trim()
+            if (trimmed.isBlank()) return "https://api.openai.com/v1/chat/completions"
+
+            val isAnthropic = trimmed.contains("anthropic.com", ignoreCase = true)
+            return if (isAnthropic) {
+                when {
+                    trimmed.endsWith("/messages") || trimmed.endsWith("/messages/") -> trimmed.trimEnd('/')
+                    trimmed.endsWith("/v1") || trimmed.endsWith("/v1/") -> "${trimmed.trimEnd('/')}/messages"
+                    else -> "${trimmed.trimEnd('/')}/v1/messages"
+                }
+            } else {
+                when {
+                    trimmed.endsWith("/chat/completions") || trimmed.endsWith("/chat/completions/") -> trimmed.trimEnd('/')
+                    else -> "${trimmed.trimEnd('/')}/chat/completions"
+                }
+            }
+        }
+
         fun hasActiveInternet(context: Context): Boolean {
             return try {
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
@@ -106,15 +125,20 @@ class TranslationManager(
     }
 
     private val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectionPool(okhttp3.ConnectionPool(4, 2L, TimeUnit.MINUTES))
-        .connectTimeout(1200L, TimeUnit.MILLISECONDS)
-        .readTimeout(1400L, TimeUnit.MILLISECONDS)
-        .callTimeout(1600L, TimeUnit.MILLISECONDS)
+        .connectionPool(okhttp3.ConnectionPool(5, 5L, TimeUnit.MINUTES))
+        .connectTimeout(3000L, TimeUnit.MILLISECONDS)
+        .readTimeout(8000L, TimeUnit.MILLISECONDS)
+        .callTimeout(10000L, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
         .build()
 
     private val fastMemoryCache = LruCache<String, String>(500)
-    private val recentContextLines = java.util.concurrent.ConcurrentLinkedDeque<String>()
+    private val recentContextLines = java.util.concurrent.ConcurrentLinkedDeque<Pair<String, String>>()
+    var activeGameProfile: String = ""
+
+    fun clearDialogueContext() {
+        recentContextLines.clear()
+    }
 
     fun getFromMemoryCache(text: String): String? {
         val trimmed = text.trim()
@@ -673,30 +697,6 @@ class TranslationManager(
 
     private suspend fun translateViaOpenAi(text: String): String? = withContext(Dispatchers.IO) {
         try {
-            val jsonBody = JSONObject().apply {
-                put("model", config.modelName)
-                put("temperature", 0.3)
-                put("max_tokens", 100)
-
-                val userContent = if (recentContextLines.isNotEmpty()) {
-                    "Previous context:\n${recentContextLines.joinToString("\n")}\n\nTranslate ONLY this line:\n$text"
-                } else {
-                    text
-                }
-
-                val messagesArray = JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("role", "system")
-                        put("content", "You are a professional Arabic video-game localization director. Translate the given on-screen game text into natural, cinematic Modern Standard Arabic (فصحى سينمائية سلسة). Localize idioms and gaming expressions by meaning (never word-for-word). Keep proper nouns and weapons accurate. Output ONLY the Arabic translation with zero commentary, notes, or quotation marks.")
-                    })
-                    put(JSONObject().apply {
-                        put("role", "user")
-                        put("content", userContent)
-                    })
-                }
-                put("messages", messagesArray)
-            }
-
             val (isEndpointValid, validationError) = SecureApiKeyStorage.isValidEndpointUrl(config.apiEndpoint)
             if (!isEndpointValid) {
                 Log.w(TAG, "Blocked insecure endpoint: $validationError")
@@ -704,44 +704,101 @@ class TranslationManager(
                 return@withContext null
             }
 
-            val endpointUrl = if (config.apiEndpoint.endsWith("/chat/completions")) {
-                config.apiEndpoint
+            val endpointUrl = normalizeApiUrl(config.apiEndpoint)
+            val isAnthropic = endpointUrl.contains("anthropic.com", ignoreCase = true)
+
+            val gameSnippet = if (activeGameProfile.isNotBlank() && !activeGameProfile.equals("الافتراضي", ignoreCase = true) && !activeGameProfile.equals("Default", ignoreCase = true)) {
+                "You are localizing dialogue for the game: \"$activeGameProfile\". "
+            } else ""
+
+            val systemPrompt = "${gameSnippet}You are a professional Arabic video-game localization director. Translate the given on-screen game text into natural, cinematic Modern Standard Arabic (فصحى سينمائية سلسة). Follow these strict localization rules:\n" +
+                "1. Strict Gender Agreement: Track speaker and addressee gender across the 6-line dialogue history using character names (e.g., Diana, Victoria, Jade), pronouns (she/her/girl/woman), and context; conjugate Arabic verbs, pronouns, and adjectives accurately in masculine or feminine form—never default to masculine when addressing or referring to a female character.\n" +
+                "2. Proper Nouns & Titles: Never literally translate proper video game titles, character names, or weapon brands.\n" +
+                "3. Idiomatic Fluency: Translate idioms, threats, and gaming slang by meaning into natural, cinematic Modern Standard Arabic. Output ONLY the Arabic translation with zero explanations or quotation marks."
+
+            val userContent = if (recentContextLines.isNotEmpty()) {
+                val history = recentContextLines.joinToString("\n") { (en, ar) ->
+                    "EN: $en\nAR: $ar"
+                }
+                "Previous Dialogue Context (Last 6 exchanges):\n$history\n\nTranslate ONLY this line:\n$text"
             } else {
-                "${config.apiEndpoint.trimEnd('/')}/chat/completions"
+                text
             }
 
-            val request = Request.Builder()
-                .url(endpointUrl)
-                .addHeader("Authorization", "Bearer ${config.apiKey}")
-                .addHeader("Content-Type", "application/json")
-                .post(jsonBody.toString().toRequestBody(JSON_MEDIA_TYPE))
-                .build()
+            val request = if (isAnthropic) {
+                val anthropicBody = JSONObject().apply {
+                    put("model", if (config.modelName.isNotBlank() && !config.modelName.equals("gpt-4o-mini", ignoreCase = true)) config.modelName else "claude-3-5-haiku-20241022")
+                    put("max_tokens", 256)
+                    put("system", systemPrompt)
+                    put("messages", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", userContent)
+                        })
+                    })
+                }
+                Request.Builder()
+                    .url(endpointUrl)
+                    .addHeader("x-api-key", config.apiKey)
+                    .addHeader("anthropic-version", "2023-06-01")
+                    .addHeader("content-type", "application/json")
+                    .post(anthropicBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+            } else {
+                val openAiBody = JSONObject().apply {
+                    put("model", config.modelName)
+                    put("temperature", 0.3)
+                    put("max_tokens", 256)
+                    put("messages", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "system")
+                            put("content", systemPrompt)
+                        })
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", userContent)
+                        })
+                    })
+                }
+                Request.Builder()
+                    .url(endpointUrl)
+                    .addHeader("Authorization", "Bearer ${config.apiKey}")
+                    .addHeader("Content-Type", "application/json")
+                    .post(openAiBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+            }
 
             val response = sharedHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
-                Log.w(TAG, "OpenAI translation failed with HTTP code: ${response.code}")
+                Log.w(TAG, "AI translation failed with HTTP code: ${response.code}")
                 return@withContext null
             }
 
             val responseBody = response.body?.use { it.string() } ?: return@withContext null
             val responseJson = JSONObject(responseBody)
-            val choices = responseJson.optJSONArray("choices") ?: return@withContext null
-            if (choices.length() == 0) return@withContext null
 
-            val firstChoice = choices.getJSONObject(0)
-            val message = firstChoice.optJSONObject("message") ?: return@withContext null
-            val rawContent = message.optString("content", "").trim()
+            val rawContent = if (isAnthropic) {
+                val contentArr = responseJson.optJSONArray("content") ?: return@withContext null
+                if (contentArr.length() == 0) return@withContext null
+                contentArr.getJSONObject(0).optString("text", "").trim()
+            } else {
+                val choices = responseJson.optJSONArray("choices") ?: return@withContext null
+                if (choices.length() == 0) return@withContext null
+                val firstChoice = choices.getJSONObject(0)
+                val message = firstChoice.optJSONObject("message") ?: return@withContext null
+                message.optString("content", "").trim()
+            }
 
             if (rawContent.isNotEmpty()) {
                 val cleaned = rawContent.removeSurrounding("\"").removeSurrounding("«", "»").trim()
-                recentContextLines.add(text)
-                while (recentContextLines.size > 2) {
+                recentContextLines.add(text to cleaned)
+                while (recentContextLines.size > 6) {
                     recentContextLines.pollFirst()
                 }
                 TranslationQualityPolisher.polishArabic(cleaned)
             } else null
         } catch (e: Exception) {
-            Log.e(TAG, "Error translating via OpenAI API: ${e.message}", e)
+            Log.e(TAG, "Error translating via AI API: ${e.message}", e)
             null
         }
     }

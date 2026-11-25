@@ -48,6 +48,14 @@ object AppUpdateManager {
         "release-assets.githubusercontent.com"
     )
 
+    fun cleanReleaseNotes(notes: String): String {
+        return notes
+            .replace(Regex("""(?m)^#+\s*"""), "")
+            .replace("**", "")
+            .replace("__", "")
+            .trim()
+    }
+
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

@@ -1034,16 +1034,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun showUpdateDialog(release: ReleaseInfo) {
         val sizeMb = release.apkSizeBytes / (1024.0 * 1024.0)
-        val view = layoutInflater.inflate(android.R.layout.simple_list_item_1, null)
+        val cleanNotes = AppUpdateManager.cleanReleaseNotes(release.releaseNotes)
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.update_dialog_title, release.tagName))
-            .setMessage("الحجم: %.1f MB\n\nالمميزات والإصلاحات:\n%s".format(java.util.Locale.US, sizeMb, release.releaseNotes))
+            .setMessage("الحجم: %.1f MB\n\nالمميزات والإصلاحات:\n%s".format(java.util.Locale.US, sizeMb, cleanNotes))
             .setPositiveButton(R.string.btn_update_now, null)
             .setNegativeButton("لاحقاً", null)
             .create()
 
         dialog.setOnShowListener {
             val positiveBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            val negativeBtn = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+            positiveBtn.setTextColor(Color.parseColor("#34D399"))
+            negativeBtn.setTextColor(Color.parseColor("#CBD5E1"))
+
             positiveBtn.setOnClickListener {
                 positiveBtn.isEnabled = false
                 dialog.setMessage("جاري تنزيل التحديث (%s)... يرجى الانتظار.".format(release.tagName))
@@ -1052,7 +1056,7 @@ class MainActivity : AppCompatActivity() {
                     val downloadedApk = AppUpdateManager.downloadApk(this@MainActivity, release.downloadUrl) { down, total ->
                         val pct = if (total > 0) (down * 100 / total).toInt() else 0
                         runOnUiThread {
-                            dialog.setMessage("جاري التنزيل: %d%% (%.1f MB / %.1f MB)".format(java.util.Locale.US, pct, down / (1024.0 * 1024.0), total / (1024.0 * 1024.0)))
+                            dialog.setMessage("جاري التنزيل: %d%% \u2066(%.1f MB / %.1f MB)\u2069".format(java.util.Locale.US, pct, down / (1024.0 * 1024.0), total / (1024.0 * 1024.0)))
                         }
                     }
 

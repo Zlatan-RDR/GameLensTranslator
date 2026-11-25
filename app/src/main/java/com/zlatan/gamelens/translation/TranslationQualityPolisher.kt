@@ -30,6 +30,18 @@ object TranslationQualityPolisher {
     // "سحب الحمار" -> "أسرع" (haul ass)
     private val HAUL_ASS_REGEX = Regex("(?i)\\bسحب\\s+الحمار\\b")
 
+    // Precompiled universal gaming glossary & literal MT replacements:
+    private val CLOSE_IN_TARGET_REGEX = Regex("(?i)\\bإغلاق\\s+على\\s+الهدف\\b")
+    private val CHECKPOINTS_REGEX = Regex("(?i)\\bنقاط\\s+التفتيش\\b")
+    private val CHECKPOINT_REGEX = Regex("(?i)\\bنقطة\\s+التفتيش\\b")
+    private val EXTRACTION_POINT_REGEX = Regex("(?i)\\bنقطة\\s+الاستخراج\\b")
+    private val NO_PARTIES_REGEX = Regex("(?i)\\bلا\\s+أحزاب\\b")
+    private val PLAY_BALL_REGEX = Regex("(?i)\\bللعب\\s+الكرة\\b")
+    private val CATCH_DRIFT_REGEX = Regex("(?i)\\bفهمت\\s+انجرافي\\b")
+    private val EUROPEAN_RIDE_REGEX = Regex("(?i)\\bرحلة\\s+أوروبية\\b")
+    private val LOCK_ON_REGEX = Regex("(?i)\\bقفل\\s+اللقطة\\b")
+    private val PROMISE_ME_REGEX = Regex("(?i)\\bوعد\\s+مني([.!]?)\\b")
+
     /**
      * Applies post-processing polish to Arabic translations.
      */
@@ -42,6 +54,17 @@ object TranslationQualityPolisher {
         s = NO_NUMBER_REGEX.replace(s, "لا، لا")
         s = SITTING_DUCKS_REGEX.replace(s, "أهداف سهلة")
         s = HAUL_ASS_REGEX.replace(s, "أسرع")
+
+        s = CLOSE_IN_TARGET_REGEX.replace(s, "الاقتراب من الهدف")
+        s = CHECKPOINTS_REGEX.replace(s, "نقاط الحفظ")
+        s = CHECKPOINT_REGEX.replace(s, "نقطة الحفظ")
+        s = EXTRACTION_POINT_REGEX.replace(s, "نقطة الإخلاء")
+        s = NO_PARTIES_REGEX.replace(s, "ممنوع الحفلات")
+        s = PLAY_BALL_REGEX.replace(s, "للتعاون")
+        s = CATCH_DRIFT_REGEX.replace(s, "فهمت قصدي")
+        s = EUROPEAN_RIDE_REGEX.replace(s, "سيارة أوروبية")
+        s = LOCK_ON_REGEX.replace(s, "تحديد الهدف")
+        s = PROMISE_ME_REGEX.replace(s, "عدني$1")
 
         // 2. Arabic Typography Spacing Normalization
         s = WAW_CONJUNCTION_REGEX.replace(s, "و$1")

@@ -534,25 +534,30 @@ class OcrEngine {
      * Rejects gibberish strings and HUD noise by requiring at least 60% of tokens to have
      * valid English vowel/consonant letter patterns (>= 3 letters) or known short English words.
      */
-    private fun passesEnglishTokenRatioFilter(text: String): Boolean {
+    internal fun passesEnglishTokenRatioFilter(text: String): Boolean {
         val tokens = text.split(WHITESPACE_REGEX).map { it.trim() }.filter { it.isNotBlank() }
         if (tokens.isEmpty()) return false
 
-        var validCount = 0
+        var validEnglishWordCount = 0
+        var numericCount = 0
         for (token in tokens) {
             val letters = token.filter { it.isLetter() }
             if (letters.length >= 3) {
                 val hasVowel = letters.any { it in "aeiouyAEIOUY" }
                 val hasConsonant = letters.any { it in "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ" }
                 if (hasVowel && hasConsonant) {
-                    validCount++
+                    validEnglishWordCount++
                 }
             } else if (letters.isNotEmpty() && SHORT_VALID_WORDS.contains(letters.lowercase())) {
-                validCount++
+                validEnglishWordCount++
+            } else if (letters.isEmpty() && token.any { it.isDigit() }) {
+                numericCount++
             }
         }
 
-        val ratio = validCount.toDouble() / tokens.size.toDouble()
+        // When at least one valid English word is present, numeric/currency/code tokens do not count as invalid
+        val effectiveValidCount = if (validEnglishWordCount > 0) validEnglishWordCount + numericCount else validEnglishWordCount
+        val ratio = effectiveValidCount.toDouble() / tokens.size.toDouble()
         return ratio >= 0.60
     }
 

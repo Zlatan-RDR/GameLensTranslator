@@ -14,6 +14,19 @@ class TranslationQualityPolisherTest {
         assertEquals("لا، لا، لا يمكننا الذهاب", TranslationQualityPolisher.polishArabic("رقم لا، لا يمكننا الذهاب"))
         assertEquals("نحن أهداف سهلة هنا", TranslationQualityPolisher.polishArabic("نحن نجلس البط هنا"))
         assertEquals("أسرع الآن!", TranslationQualityPolisher.polishArabic("سحب الحمار الآن!"))
+
+        // New universal gaming glossary & literal MT corrections
+        assertEquals("الاقتراب من الهدف", TranslationQualityPolisher.polishArabic("إغلاق على الهدف"))
+        assertEquals("وصلنا إلى نقاط الحفظ", TranslationQualityPolisher.polishArabic("وصلنا إلى نقاط التفتيش"))
+        assertEquals("هذه نقطة الحفظ", TranslationQualityPolisher.polishArabic("هذه نقطة التفتيش"))
+        assertEquals("التوجه إلى نقطة الإخلاء", TranslationQualityPolisher.polishArabic("التوجه إلى نقطة الاستخراج"))
+        assertEquals("ممنوع الحفلات الليلة", TranslationQualityPolisher.polishArabic("لا أحزاب الليلة"))
+        assertEquals("جئت للتعاون معك", TranslationQualityPolisher.polishArabic("جئت للعب الكرة معك"))
+        assertEquals("هل فهمت قصدي؟", TranslationQualityPolisher.polishArabic("هل فهمت انجرافي؟"))
+        assertEquals("استأجرنا سيارة أوروبية", TranslationQualityPolisher.polishArabic("استأجرنا رحلة أوروبية"))
+        assertEquals("تم تحديد الهدف", TranslationQualityPolisher.polishArabic("تم قفل اللقطة"))
+        assertEquals("عدني.", TranslationQualityPolisher.polishArabic("وعد مني."))
+        assertEquals("عدني!", TranslationQualityPolisher.polishArabic("وعد مني!"))
     }
 
     @Test
@@ -21,6 +34,7 @@ class TranslationQualityPolisherTest {
         // Conjunction 'و' should connect directly to subsequent word
         assertEquals("والسماء والطارق", TranslationQualityPolisher.polishArabic("و السماء و الطارق"))
         assertEquals("ذهب أحمد ومحمد", TranslationQualityPolisher.polishArabic("ذهب أحمد و محمد"))
+        assertEquals("المعلومات والسرية", TranslationQualityPolisher.polishArabic("المعلومات و السرية"))
 
         // Punctuation spacing
         assertEquals("مرحباً بك، كيف حالك؟", TranslationQualityPolisher.polishArabic("مرحباً بك ، كيف حالك ؟"))

@@ -379,7 +379,13 @@ class TranslationOverlayService : Service() {
                 seamlessOverlayRenderer?.reloadAppearanceSettings()
                 val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
                 updateBubbleVisualState()
-                DiagnosticLogger.log("Reloaded profile settings in service: ROI=$calRect, font=${fontSize}sp")
+
+                val activeProfId = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfileId(this)
+                val activeProf = com.zlatan.gamelens.profile.GameProfileManager.getProfiles(this).find { it.id == activeProfId }
+                translationManager?.activeGameProfile = activeProf?.name ?: ""
+                translationManager?.clearDialogueContext()
+
+                DiagnosticLogger.log("Reloaded profile settings in service: ROI=$calRect, font=${fontSize}sp, profile=${activeProf?.name}")
             }
         }
         return START_NOT_STICKY
@@ -495,7 +501,7 @@ class TranslationOverlayService : Service() {
         captureJob?.cancel()
         captureJob = serviceScope.launch {
             Log.d(TAG, "Precision ROI OCR Pipeline active")
-            DiagnosticLogger.log("Precision ROI OCR loop started (140ms)")
+            DiagnosticLogger.log("Precision ROI OCR loop started (150ms)")
             while (isActive) {
                 val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
                 val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) == MainActivity.MODE_OPAQUE_COVER
@@ -506,7 +512,7 @@ class TranslationOverlayService : Service() {
                     Log.e(TAG, "Error in Pipeline: ${t.message}", t)
                     DiagnosticLogger.log("Pipeline error: ${t.javaClass.simpleName} - ${t.message}")
                 }
-                delay(140L)
+                delay(150L)
             }
         }
     }
@@ -620,8 +626,8 @@ class TranslationOverlayService : Service() {
         val delta = fastPixelDiffGate.computeDiffRatio(croppedRoi)
         if (isRoiSettling && !forceInstantPass) {
             val waitElapsed = now - roiSettleStartTime
-            if (delta < 0.0045f || waitElapsed >= 140L) {
-                // Frame stabilized (< 0.45% delta) or max settling time reached (140ms / 1 frame) -> commit and proceed to OCR
+            if (delta < 0.0045f || waitElapsed >= 150L) {
+                // Frame stabilized (< 0.45% delta) or max settling time reached (150ms / 1 frame) -> commit and proceed to OCR
                 isRoiSettling = false
                 fastPixelDiffGate.commitSamples(croppedRoi)
             } else {
@@ -630,7 +636,7 @@ class TranslationOverlayService : Service() {
                 return
             }
         } else if (delta >= 0.0045f && !forceInstantPass) {
-            // New motion detected: initiate 1-frame settling wait (140ms) so transitional half-faded frames settle
+            // New motion detected: initiate 1-frame settling wait (150ms) so transitional half-faded frames settle
             isRoiSettling = true
             roiSettleStartTime = now
             fastPixelDiffGate.commitSamples(croppedRoi)
@@ -1285,8 +1291,11 @@ class TranslationOverlayService : Service() {
                     coroutineScope {
                         detectedBlocks.map { block ->
                             async {
-                                val translated = translationManager.translate(block.text)
-                                block.translatedText = translated
+                                val cleanedText = com.zlatan.gamelens.ocr.OcrTextCleaner.cleanMenuScanArtifacts(block.text)
+                                val repairedText = com.zlatan.gamelens.ocr.EnglishWordRepairer.repair(cleanedText)
+                                val translated = translationManager.translate(repairedText)
+                                val polished = com.zlatan.gamelens.translation.TranslationQualityPolisher.polishArabic(translated)
+                                block.translatedText = polished
                             }
                         }.awaitAll()
                     }

@@ -42,8 +42,8 @@ class SubtitleHistoryManagerTest {
         val blocks = srt.trim().split("\n\n")
         assertEquals(3, blocks.size)
 
-        // Block 1: starts at 00:00:00,000, next starts at 1200ms -> end is min(3000, 1200 - 50) = 1150ms
-        assertTrue(blocks[0].startsWith("1\n00:00:00,000 --> 00:00:01,150\nمرحباً آرثر"))
+        // Block 1: starts at 00:00:00,000, next starts at 1200ms -> end is min(3000, 1200 - 10) = 1190ms
+        assertTrue(blocks[0].startsWith("1\n00:00:00,000 --> 00:00:01,190\nمرحباً آرثر"))
 
         // Block 2: starts at 1200ms (00:00:01,200), next starts at 10000ms -> end is 1200 + 3000 = 4200ms
         assertTrue(blocks[1].startsWith("2\n00:00:01,200 --> 00:00:04,200\nنحتاج إلى المزيد من المال"))
@@ -66,7 +66,7 @@ class SubtitleHistoryManagerTest {
                 timestamp = "10:00:00",
                 source = "Next",
                 arabic = "التالي",
-                recordTimeMs = baseTime + 200L // Only 200ms later -> min clamp should guarantee at least 500ms
+                recordTimeMs = baseTime + 200L // Only 200ms later -> zero overlap guarantees end at 190ms
             )
         )
 
@@ -74,7 +74,7 @@ class SubtitleHistoryManagerTest {
         val blocks = srt.trim().split("\n\n")
         assertEquals(2, blocks.size)
 
-        // Block 1: start 0ms, nextStart 200ms. clamped is max(start + 500, nextStart - 50) = 500ms
-        assertTrue(blocks[0].startsWith("1\n00:00:00,000 --> 00:00:00,500\nسريع"))
+        // Block 1: start 0ms, nextStart 200ms. safeMax is 200 - 10 = 190ms (strict zero overlap)
+        assertTrue(blocks[0].startsWith("1\n00:00:00,000 --> 00:00:00,190\nسريع"))
     }
 }

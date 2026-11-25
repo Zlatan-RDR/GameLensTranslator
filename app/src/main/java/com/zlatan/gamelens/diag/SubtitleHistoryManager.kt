@@ -147,8 +147,18 @@ object SubtitleHistoryManager {
             val startMs = maxOf(0L, entry.recordTimeMs - firstMs)
             val nextStartMs = if (i + 1 < list.size) maxOf(startMs, list[i + 1].recordTimeMs - firstMs) else Long.MAX_VALUE
             val targetEndMs = startMs + 3000L
-            val clampedEndMs = if (nextStartMs != Long.MAX_VALUE) minOf(targetEndMs, nextStartMs - 50L) else targetEndMs
-            val endMs = maxOf(startMs + 500L, clampedEndMs)
+            val endMs = if (nextStartMs != Long.MAX_VALUE) {
+                val safeMax = nextStartMs - 10L
+                if (safeMax >= startMs + 100L) {
+                    minOf(targetEndMs, safeMax)
+                } else if (nextStartMs > startMs) {
+                    nextStartMs - 1L
+                } else {
+                    startMs + 100L
+                }
+            } else {
+                targetEndMs
+            }
 
             val startTimeStr = formatSrtTime(startMs)
             val endTimeStr = formatSrtTime(endMs)
