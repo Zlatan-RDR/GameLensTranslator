@@ -62,7 +62,11 @@ class EnglishWordRepairerTest {
             "playingon" to "playing on",
             "steal thy" to "stealthy",
             "ofsecurity's" to "of security's",
-            "thewitnesses" to "the witnesses"
+            "thewitnesses" to "the witnesses",
+            "thison" to "this on",
+            "Put thison the table" to "Put this on the table",
+            "Try Turningon the radio" to "Try Turning on the radio",
+            "They saw thewitnesses outside" to "They saw the witnesses outside"
         )
 
         for ((input, expected) in cases) {

@@ -230,8 +230,24 @@ object EnglishWordRepairer {
                         prev.endsWith(".'") || prev.endsWith("!'") || prev.endsWith("?'")
             }
             if (idx > 0 && !followsPunctuation && core[0].isUpperCase() && core.substring(1).all { it.isLowerCase() }) {
-                finalTokens.add(tok)
-                continue
+                // Check if TitleCase token can cleanly split into 2 common dictionary words (e.g. Turningon -> Turning on)
+                val canSplit = run {
+                    val n = lower.length
+                    for (s in 1 until n) {
+                        val w1 = lower.substring(0, s)
+                        val w2 = lower.substring(s)
+                        if ((w1.length == 1 && w1 != "a" && w1 != "i") || (w2.length == 1 && w2 != "a" && w2 != "i")) continue
+                        if (maxOf(w1.length, w2.length) < 3) continue
+                        val r1 = dictionaryMap[w1] ?: continue
+                        val r2 = dictionaryMap[w2] ?: continue
+                        if (r1 <= 8000 && r2 <= 8000) return@run true
+                    }
+                    false
+                }
+                if (!canSplit) {
+                    finalTokens.add(tok)
+                    continue
+                }
             }
 
             // Possessive gluing: e.g. ofsecurity's -> of security's

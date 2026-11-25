@@ -687,11 +687,17 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log(dropMsg)
             }
             consecutiveEmptyRoiCount++
+            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
             if (consecutiveEmptyRoiCount == 1) {
                 forceInstantPass = true
+                if (isSubtitleShowing) {
+                    serviceScope.launch {
+                        delay(100L)
+                        forceInstantPass = true
+                    }
+                }
             }
-            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
-            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2 && (now - lastSubtitleVisibleOnScreenMs >= 250L)) {
+            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -725,11 +731,17 @@ class TranslationOverlayService : Service() {
                 DiagnosticLogger.log("OCR skipped [$dropReason]: \"$mergedRaw\"")
             }
             consecutiveEmptyRoiCount++
+            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
             if (consecutiveEmptyRoiCount == 1) {
                 forceInstantPass = true
+                if (isSubtitleShowing) {
+                    serviceScope.launch {
+                        delay(100L)
+                        forceInstantPass = true
+                    }
+                }
             }
-            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
-            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2 && (now - lastSubtitleVisibleOnScreenMs >= 250L)) {
+            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
                 candidateEnglishText = ""
@@ -796,22 +808,25 @@ class TranslationOverlayService : Service() {
             }
 
             if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION) {
-                val hasEndingPunctuation = mergedEnglish.endsWith(".") || mergedEnglish.endsWith("!") || mergedEnglish.endsWith("?") ||
-                        mergedEnglish.endsWith(".\"") || mergedEnglish.endsWith("!\"") || mergedEnglish.endsWith("?\"")
+                val isTypewriterEnabled = prefs.getBoolean(com.zlatan.gamelens.MainActivity.KEY_TYPEWRITER_MODE, false)
+                if (isTypewriterEnabled) {
+                    val hasEndingPunctuation = mergedEnglish.endsWith(".") || mergedEnglish.endsWith("!") || mergedEnglish.endsWith("?") ||
+                            mergedEnglish.endsWith(".\"") || mergedEnglish.endsWith("!\"") || mergedEnglish.endsWith("?\"")
 
-                if (!hasEndingPunctuation) {
-                    if (pendingStreamingText != mergedEnglish) {
-                        pendingStreamingText = mergedEnglish
-                        streamingStartTime = now
-                        forceInstantPass = true
-                        Log.d(TAG, "OCR streaming progressive expansion debounced (1-cycle wait): \"$mergedEnglish\"")
-                        return
-                    } else {
-                        val streamElapsed = now - streamingStartTime
-                        if (streamElapsed < 650L) {
+                    if (!hasEndingPunctuation) {
+                        if (pendingStreamingText != mergedEnglish) {
+                            pendingStreamingText = mergedEnglish
+                            streamingStartTime = now
                             forceInstantPass = true
-                            Log.d(TAG, "OCR streaming progressive expansion debounced (wait=${streamElapsed}ms < 650ms): \"$mergedEnglish\"")
+                            Log.d(TAG, "OCR streaming progressive expansion debounced (1-cycle wait): \"$mergedEnglish\"")
                             return
+                        } else {
+                            val streamElapsed = now - streamingStartTime
+                            if (streamElapsed < 650L) {
+                                forceInstantPass = true
+                                Log.d(TAG, "OCR streaming progressive expansion debounced (wait=${streamElapsed}ms < 650ms): \"$mergedEnglish\"")
+                                return
+                            }
                         }
                     }
                 }
@@ -925,8 +940,13 @@ class TranslationOverlayService : Service() {
         val rawArabic = if (patchMatch != null) {
             patchMatch
         } else {
-            withContext(Dispatchers.IO) {
-                translationManager.translate(promptNormalized)
+            val memMatch = translationManager.getFromMemoryCache(promptNormalized)
+            if (memMatch != null) {
+                memMatch
+            } else {
+                withContext(Dispatchers.IO) {
+                    translationManager.translate(promptNormalized)
+                }
             }
         }
 

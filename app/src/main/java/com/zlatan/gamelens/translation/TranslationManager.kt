@@ -114,6 +114,13 @@ class TranslationManager(
         .build()
 
     private val fastMemoryCache = LruCache<String, String>(500)
+    private val recentContextLines = java.util.concurrent.ConcurrentLinkedDeque<String>()
+
+    fun getFromMemoryCache(text: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return null
+        return fastMemoryCache.get(trimmed) ?: findFuzzyMemoryCacheMatch(trimmed, 0.90f)
+    }
 
     private val modelManager = RemoteModelManager.getInstance()
     private val arabicModel = TranslateRemoteModel.Builder(TranslateLanguage.ARABIC).build()
@@ -423,6 +430,9 @@ class TranslationManager(
             finalResult = if (finalResult.isBlank()) "آه!" else "$finalResult آه!".trim()
         }
 
+        // Universal Gaming Idiom & Arabic Polish Layer
+        finalResult = TranslationQualityPolisher.polishArabic(finalResult)
+
         // 7. Save to Cache for subsequent 0ms hits
         fastMemoryCache.put(trimmed, finalResult)
         cacheManager.put(trimmed, finalResult)
@@ -443,6 +453,11 @@ class TranslationManager(
     fun preprocessGamingText(rawText: String): String {
         var processed = rawText.trim()
         if (processed.isEmpty()) return ""
+
+        // Pre-Translation MT Trap Guard:
+        // Dialogue "No." followed by words mistranslated as "رقم" by MT engines
+        // Replace "No. <Word>" with "No, <Word>", while preserving abbreviations like "No. 47"
+        processed = processed.replace(Regex("(?i)(?<=^|[.!?]\\s)No\\.\\s+([A-Za-z])"), "No, $1")
 
         // 0. Clean Controller & Button Prompts (OPEN ✕, PUT DOWN ○, L1-R3, LB/RB, Press X, Tap Enter)
         processed = normalizeControllerPrompts(processed)
@@ -663,14 +678,20 @@ class TranslationManager(
                 put("temperature", 0.3)
                 put("max_tokens", 100)
 
+                val userContent = if (recentContextLines.isNotEmpty()) {
+                    "Previous context:\n${recentContextLines.joinToString("\n")}\n\nTranslate ONLY this line:\n$text"
+                } else {
+                    text
+                }
+
                 val messagesArray = JSONArray().apply {
                     put(JSONObject().apply {
                         put("role", "system")
-                        put("content", "You are an expert real-time game translator. Translate the given game text from English into natural, high-quality Arabic suitable for on-screen game UI/dialogue. Return ONLY the Arabic translation without any explanations or quotes.")
+                        put("content", "You are a professional Arabic video-game localization director. Translate the given on-screen game text into natural, cinematic Modern Standard Arabic (فصحى سينمائية سلسة). Localize idioms and gaming expressions by meaning (never word-for-word). Keep proper nouns and weapons accurate. Output ONLY the Arabic translation with zero commentary, notes, or quotation marks.")
                     })
                     put(JSONObject().apply {
                         put("role", "user")
-                        put("content", text)
+                        put("content", userContent)
                     })
                 }
                 put("messages", messagesArray)
@@ -709,9 +730,16 @@ class TranslationManager(
 
             val firstChoice = choices.getJSONObject(0)
             val message = firstChoice.optJSONObject("message") ?: return@withContext null
-            val arabicContent = message.optString("content", "").trim()
+            val rawContent = message.optString("content", "").trim()
 
-            if (arabicContent.isNotEmpty()) arabicContent else null
+            if (rawContent.isNotEmpty()) {
+                val cleaned = rawContent.removeSurrounding("\"").removeSurrounding("«", "»").trim()
+                recentContextLines.add(text)
+                while (recentContextLines.size > 2) {
+                    recentContextLines.pollFirst()
+                }
+                TranslationQualityPolisher.polishArabic(cleaned)
+            } else null
         } catch (e: Exception) {
             Log.e(TAG, "Error translating via OpenAI API: ${e.message}", e)
             null

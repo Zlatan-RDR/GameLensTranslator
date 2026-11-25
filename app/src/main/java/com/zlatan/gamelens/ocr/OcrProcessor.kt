@@ -187,6 +187,38 @@ object OcrTextCleaner {
     )
 
     /**
+     * Normalizes common OCR diacritic misreads in Latin alphabet:
+     * ç->c, ď->d, é/è/ê/ë->e, á/à/â/ä->a, í/ì/î/ï->i, ó/ò/ô/ö->o, ú/ù/û/ü->u, ñ->n
+     */
+    fun normalizeLatinDiacritics(text: String): String {
+        if (text.isEmpty()) return text
+        val sb = StringBuilder(text.length)
+        for (ch in text) {
+            val mapped = when (ch) {
+                'ç' -> 'c'
+                'Ç' -> 'C'
+                'ď' -> 'd'
+                'Ď' -> 'D'
+                'é', 'è', 'ê', 'ë' -> 'e'
+                'É', 'È', 'Ê', 'Ë' -> 'E'
+                'á', 'à', 'â', 'ä' -> 'a'
+                'Á', 'À', 'Â', 'Ä' -> 'A'
+                'í', 'ì', 'î', 'ï' -> 'i'
+                'Í', 'Ì', 'Î', 'Ï' -> 'I'
+                'ó', 'ò', 'ô', 'ö' -> 'o'
+                'Ó', 'Ò', 'Ô', 'Ö' -> 'O'
+                'ú', 'ù', 'û', 'ü' -> 'u'
+                'Ú', 'Ù', 'Û', 'Ü' -> 'U'
+                'ñ' -> 'n'
+                'Ñ' -> 'N'
+                else -> ch
+            }
+            sb.append(mapped)
+        }
+        return sb.toString()
+    }
+
+    /**
      * Rejects Arabic-as-Latin OCR garble (e.g. "Jlal ce Blg .äyul gUloglaall")
      * produced when ML Kit mistakenly scans Arabic overlay text with Latin models.
      */
@@ -197,12 +229,15 @@ object OcrTextCleaner {
         // Reject broken punctuation/parenthesis fragments like "...(Self-Read"
         if (Regex("^\\.{2,}\\s*\\(").containsMatchIn(trimmed)) return true
 
+        // Normalize misread Latin diacritics first so valid sentences (çome, openeď) are not falsely rejected
+        val normalized = normalizeLatinDiacritics(trimmed)
+
         // Reject any OCR string containing >= 2 non-ASCII European diacritic characters anywhere
-        val diacriticCount = trimmed.count { it in EUROPEAN_DIACRITICS }
+        val diacriticCount = normalized.count { it in EUROPEAN_DIACRITICS }
         if (diacriticCount >= 2) return true
 
         val hasDiacritic = diacriticCount > 0
-        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val tokens = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
         if (tokens.isEmpty()) return true
 
         val shortGarbleCount = tokens.count { token ->
@@ -222,7 +257,11 @@ object OcrTextCleaner {
      */
     fun normalizeOcrArtifacts(text: String): String {
         if (text.isBlank()) return ""
-        var s = EnglishWordRepairer.repair(text.trim())
+
+        // Strip stray leading OCR punctuation/HUD noise (e.g. ". .Come on" -> "Come on")
+        var s = text.trim().replace(Regex("^(?:[.\\s,:;~*^#\\-=_+]\\s*)+(?=[A-Za-z0-9])"), "")
+        s = normalizeLatinDiacritics(s)
+        s = EnglishWordRepairer.repair(s)
 
         // Split-word and spacing repairs
         s = s.replace(Regex("(?i)\\bBenj\\s+amin\\b"), "Benjamin")

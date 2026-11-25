@@ -619,7 +619,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun updateSubtitlePreview() {
+    private fun updateSubtitlePreview(notifyService: Boolean = true) {
         val fontSize = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
         val textColorHex = prefs.getString(KEY_SUBTITLE_TEXT_COLOR, "#FFFFFF") ?: "#FFFFFF"
         val bgOpacity = prefs.getInt(KEY_SUBTITLE_BG_OPACITY, 88)
@@ -653,7 +653,7 @@ class MainActivity : AppCompatActivity() {
         }
         binding.tvPreviewSubtitleText.background = bgDrawable
 
-        if (isServiceRunning) {
+        if (notifyService && isServiceRunning) {
             val intent = Intent(this, TranslationOverlayService::class.java).apply {
                 action = TranslationOverlayService.ACTION_RELOAD_SETTINGS
                 putExtra(TranslationOverlayService.EXTRA_FONT_SIZE_SP, fontSize)
@@ -768,11 +768,20 @@ class MainActivity : AppCompatActivity() {
                 binding.tvFontSizeValue.text = getString(R.string.font_size_label, fontSize.toInt())
                 if (fromUser) {
                     prefs.edit().putFloat(KEY_SUBTITLE_FONT_SIZE_SP, fontSize).apply()
-                    updateSubtitlePreview()
+                    updateSubtitlePreview(notifyService = false)
                 }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                if (isServiceRunning) {
+                    val fontSize = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
+                    val intent = Intent(this@MainActivity, TranslationOverlayService::class.java).apply {
+                        action = TranslationOverlayService.ACTION_RELOAD_SETTINGS
+                        putExtra(TranslationOverlayService.EXTRA_FONT_SIZE_SP, fontSize)
+                    }
+                    startService(intent)
+                }
+            }
         })
 
         // Subtitle Appearance: Text Color Presets
@@ -793,11 +802,20 @@ class MainActivity : AppCompatActivity() {
                 binding.tvBgOpacityValue.text = getString(R.string.bg_opacity_label, opacity)
                 if (fromUser) {
                     prefs.edit().putInt(KEY_SUBTITLE_BG_OPACITY, opacity).apply()
-                    updateSubtitlePreview()
+                    updateSubtitlePreview(notifyService = false)
                 }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                if (isServiceRunning) {
+                    val fontSize = prefs.getFloat(KEY_SUBTITLE_FONT_SIZE_SP, DEFAULT_FONT_SIZE_SP)
+                    val intent = Intent(this@MainActivity, TranslationOverlayService::class.java).apply {
+                        action = TranslationOverlayService.ACTION_RELOAD_SETTINGS
+                        putExtra(TranslationOverlayService.EXTRA_FONT_SIZE_SP, fontSize)
+                    }
+                    startService(intent)
+                }
+            }
         })
 
         // Subtitle Appearance: Border / Shadow Toggle

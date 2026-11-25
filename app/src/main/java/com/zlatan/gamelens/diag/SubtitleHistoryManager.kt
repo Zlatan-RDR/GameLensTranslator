@@ -131,32 +131,41 @@ object SubtitleHistoryManager {
                 jsonObject.toString(2).toByteArray(Charsets.UTF_8)
             }
             ExportFormat.SRT -> {
-                val sb = StringBuilder()
-                var index = 1
-                for (entry in list) {
-                    val startMs = entry.recordTimeMs
-                    val endMs = startMs + 3000L
-                    val startTimeStr = formatSrtTime(startMs)
-                    val endTimeStr = formatSrtTime(endMs)
-                    sb.append(index).append("\n")
-                    sb.append(startTimeStr).append(" --> ").append(endTimeStr).append("\n")
-                    sb.append(entry.arabic.trim()).append("\n\n")
-                    index++
-                }
-                sb.toString().toByteArray(Charsets.UTF_8)
+                generateSrt(list).toByteArray(Charsets.UTF_8)
             }
         }
 
         return saveToMediaStore(context, fileName, contentBytes)
     }
 
-    private fun formatSrtTime(timeMs: Long): String {
-        val cal = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
-        cal.timeInMillis = timeMs
-        val hours = cal.get(Calendar.HOUR_OF_DAY)
-        val minutes = cal.get(Calendar.MINUTE)
-        val seconds = cal.get(Calendar.SECOND)
-        val millis = cal.get(Calendar.MILLISECOND)
+    internal fun generateSrt(list: List<SubtitleEntry>): String {
+        val sb = StringBuilder()
+        var index = 1
+        val firstMs = if (list.isNotEmpty()) list.first().recordTimeMs else 0L
+        for (i in list.indices) {
+            val entry = list[i]
+            val startMs = maxOf(0L, entry.recordTimeMs - firstMs)
+            val nextStartMs = if (i + 1 < list.size) maxOf(startMs, list[i + 1].recordTimeMs - firstMs) else Long.MAX_VALUE
+            val targetEndMs = startMs + 3000L
+            val clampedEndMs = if (nextStartMs != Long.MAX_VALUE) minOf(targetEndMs, nextStartMs - 50L) else targetEndMs
+            val endMs = maxOf(startMs + 500L, clampedEndMs)
+
+            val startTimeStr = formatSrtTime(startMs)
+            val endTimeStr = formatSrtTime(endMs)
+            sb.append(index).append("\n")
+            sb.append(startTimeStr).append(" --> ").append(endTimeStr).append("\n")
+            sb.append(entry.arabic.trim()).append("\n\n")
+            index++
+        }
+        return sb.toString()
+    }
+
+    internal fun formatSrtTime(timeMs: Long): String {
+        val totalMs = maxOf(0L, timeMs)
+        val hours = totalMs / (3600 * 1000)
+        val minutes = (totalMs / (60 * 1000)) % 60
+        val seconds = (totalMs / 1000) % 60
+        val millis = totalMs % 1000
         return String.format(Locale.US, "%02d:%02d:%02d,%03d", hours, minutes, seconds, millis)
     }
 
