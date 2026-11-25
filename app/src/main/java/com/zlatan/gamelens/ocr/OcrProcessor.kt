@@ -326,19 +326,19 @@ object OcrTextCleaner {
         s = s.replace(Regex("""(?m)^[B-HJ-Z]\s+(?=[A-Z][a-z])"""), "")
 
         // 4. Repair dotted stylized emphasis (e.g. "Lov.ing. the.suit!" -> "Loving the suit!")
+        s = s.replace(Regex("""(?i)\bthe\.suit\b"""), "the suit")
         s = s.replace(Regex("""(?i)\b([a-zA-Z]+)\.([a-zA-Z]+)\.?""")) { match ->
             val w1 = match.groupValues[1]
             val w2 = match.groupValues[2]
             w1 + w2
         }
-        s = s.replace(Regex("""(?i)\bthe\.suit\b"""), "the suit")
 
         s = EnglishWordRepairer.repair(s)
 
         // Split-word and spacing repairs
         s = s.replace(Regex("(?i)\\bIcome\\b"), "I come")
         s = s.replace(Regex("(?i)\\btheking\\b"), "the king")
-        s = s.replace(Regex("(?i)\\bofchinatown\\b"), "of chinatown")
+        s = s.replace(Regex("(?i)\\bofchinatown\\b"), "of Chinatown")
         s = s.replace(Regex("(?i)\\bControl\\s+Led\\b"), "Controlled")
         s = s.replace(Regex("(?i)\\bBenj\\s+amin\\b"), "Benjamin")
         s = s.replace(Regex("(?i)\\bscalpe\\s+l\\b"), "scalpel")
@@ -370,12 +370,21 @@ object OcrTextCleaner {
         s = s.replace(Regex("\\b([A-Za-z]{4,})\\s+([b-hj-zB-HJ-Z])\\b"), "$1$2")
 
         // Collapse single/double-letter OCR splits inside words: ca Lmly -> calmly, ho Ld -> hold
+        val skipGluePrefixes = setOf(
+            "of", "to", "in", "on", "at", "by", "for", "from", "with", "the", "and", "or", "a", "an", "is", "it", "my", "we", "he", "she", "no"
+        )
         s = Regex("\\b([a-z]{2,4})\\s+([A-Z][a-z]{2,})\\b").replace(s) { match ->
-            match.groupValues[1] + match.groupValues[2].lowercase(Locale.US)
+            val w1 = match.groupValues[1].lowercase(Locale.US)
+            if (w1 in skipGluePrefixes) {
+                match.value
+            } else {
+                match.groupValues[1] + match.groupValues[2].lowercase(Locale.US)
+            }
         }
 
         // Collapse suffix splits: suppli ed -> supplied, confusi on -> confusion, discret ion -> discretion
-        s = s.replace(Regex("(?i)\\b([A-Za-z]{4,})\\s+(ed|on|ion|ly|ing|ment|al|er|es)\\b"), "$1$2")
+        s = s.replace(Regex("(?i)\\bconfusi\\s+on\\b"), "confusion")
+        s = s.replace(Regex("(?i)\\b([A-Za-z]{4,})\\s+(ed|ion|ly|ing|ment|al|er|es)\\b"), "$1$2")
 
         // Normalize colloquial contractions & slang for clean ML Kit translation
         s = s.replace(Regex("(?i)\\boutta\\b"), "out of")
