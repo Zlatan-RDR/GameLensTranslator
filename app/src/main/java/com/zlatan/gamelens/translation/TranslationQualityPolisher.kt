@@ -60,8 +60,8 @@ object TranslationQualityPolisher {
         var s = text
         for (name in namesMentioned) {
             val esc = Regex.escape(name)
-            s = s.replace(Regex("يجب\\s+أن\\s+تكون\\s+$esc", RegexOption.IGNORE_CASE), "يجب أن تكوني $name")
-            s = s.replace(Regex("لا\\s+بد\\s+أنك\\s+$esc", RegexOption.IGNORE_CASE), "لا بد أنكِ $name")
+            s = Regex("يجب\\s+أن\\s+تكون\\s+($esc)", RegexOption.IGNORE_CASE).replace(s) { match -> "يجب أن تكوني ${match.groupValues[1]}" }
+            s = Regex("لا\\s+بد\\s+أنك\\s+($esc)", RegexOption.IGNORE_CASE).replace(s) { match -> "لا بد أنكِ ${match.groupValues[1]}" }
         }
 
         s = s.replace(Regex("ادخل\\s+يا\\s+طفل\\b"), "ادخلي يا طفلتي")
