@@ -138,7 +138,7 @@ object SubtitleHistoryManager {
         return saveToMediaStore(context, fileName, contentBytes)
     }
 
-    internal fun generateSrt(list: List<SubtitleEntry>): String {
+    internal fun generateSrt(list: List<HistoryEntry>): String {
         val sb = StringBuilder()
         var index = 1
         val firstMs = if (list.isNotEmpty()) list.first().recordTimeMs else 0L

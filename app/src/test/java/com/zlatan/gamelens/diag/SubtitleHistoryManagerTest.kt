@@ -18,19 +18,19 @@ class SubtitleHistoryManagerTest {
     fun testGenerateSrtRelativeAndClamped() {
         val baseTime = 100_000L
         val entries = listOf(
-            SubtitleEntry(
+            SubtitleHistoryManager.HistoryEntry(
                 timestamp = "12:00:00",
                 source = "Hello Arthur",
                 arabic = "مرحباً آرثر",
                 recordTimeMs = baseTime
             ),
-            SubtitleEntry(
+            SubtitleHistoryManager.HistoryEntry(
                 timestamp = "12:00:01",
                 source = "We need more money",
                 arabic = "نحتاج إلى المزيد من المال",
                 recordTimeMs = baseTime + 1200L // 1.2s after first
             ),
-            SubtitleEntry(
+            SubtitleHistoryManager.HistoryEntry(
                 timestamp = "12:00:10",
                 source = "One last job",
                 arabic = "مهمة أخيرة فقط",
@@ -56,13 +56,13 @@ class SubtitleHistoryManagerTest {
     fun testGenerateSrtMinDurationClamp() {
         val baseTime = 50_000L
         val entries = listOf(
-            SubtitleEntry(
+            SubtitleHistoryManager.HistoryEntry(
                 timestamp = "10:00:00",
                 source = "Quick",
                 arabic = "سريع",
                 recordTimeMs = baseTime
             ),
-            SubtitleEntry(
+            SubtitleHistoryManager.HistoryEntry(
                 timestamp = "10:00:00",
                 source = "Next",
                 arabic = "التالي",
