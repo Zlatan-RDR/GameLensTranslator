@@ -831,7 +831,6 @@ class TranslationManager(
     suspend fun testCustomAiConnection(prompt: String): String? = withContext(Dispatchers.IO) {
         translateViaOpenAi(prompt)
     }
-    }
 
     fun trimMemory() {
         try {

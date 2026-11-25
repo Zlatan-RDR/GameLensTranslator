@@ -60,6 +60,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * Global foreground tracker to prevent self-capture when GameLens UI is visible.
+ */
+object AppForegroundState {
+    val isMainUiVisible = java.util.concurrent.atomic.AtomicBoolean(false)
+}
+
 class MainActivity : AppCompatActivity() {
 
     companion object {
@@ -85,10 +92,6 @@ class MainActivity : AppCompatActivity() {
         const val MODE_OFFLINE = "mode_offline"
         const val MODE_CLOUD = "mode_cloud"
         const val MODE_AUTO = "mode_auto"
-
-        object AppForegroundState {
-            val isMainUiVisible = java.util.concurrent.atomic.AtomicBoolean(false)
-        }
 
         @Volatile
         var isAppInForeground: Boolean = false

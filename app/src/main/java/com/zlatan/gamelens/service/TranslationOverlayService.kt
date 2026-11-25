@@ -548,7 +548,7 @@ class TranslationOverlayService : Service() {
         // 1. Auto-pause during rapid display resize transition or when GameLens is in the foreground
         val nowRealtime = android.os.SystemClock.elapsedRealtime()
         if ((nowRealtime - lastResizeTimestampMs < 650L) ||
-            com.zlatan.gamelens.MainActivity.AppForegroundState.isMainUiVisible.get() ||
+            com.zlatan.gamelens.AppForegroundState.isMainUiVisible.get() ||
             com.zlatan.gamelens.MainActivity.isAppInForeground
         ) {
             if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
@@ -730,7 +730,6 @@ class TranslationOverlayService : Service() {
             }
             handleEmptyRoiDetection(isOpaqueCover)
             return
-        }
         }
 
         // Subtitle detected: reset empty counter and update last visible timestamp
