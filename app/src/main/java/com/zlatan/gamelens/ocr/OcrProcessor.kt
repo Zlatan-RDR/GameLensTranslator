@@ -338,7 +338,7 @@ object OcrTextCleaner {
         // Split-word and spacing repairs
         s = s.replace(Regex("(?i)\\bIcome\\b"), "I come")
         s = s.replace(Regex("(?i)\\btheking\\b"), "the king")
-        s = s.replace(Regex("(?i)\\bofchinatown\\b"), "of Chinatown")
+        s = s.replace(Regex("(?i)\\bof\\s*chinatown\\b"), "of Chinatown")
         s = s.replace(Regex("(?i)\\bControl\\s+Led\\b"), "Controlled")
         s = s.replace(Regex("(?i)\\bBenj\\s+amin\\b"), "Benjamin")
         s = s.replace(Regex("(?i)\\bscalpe\\s+l\\b"), "scalpel")
