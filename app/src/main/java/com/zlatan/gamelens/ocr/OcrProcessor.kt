@@ -572,7 +572,6 @@ object OcrTextCleaner {
         if (STANDALONE_COUNTER_REGEX.matches(trimmed)) return true
 
         // Reject single-word non-patch strings whose stripped alphabetic core is <= 4 chars or matches HUD action stems
-        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
         if (tokens.size == 1) {
             val coreLetters = tokens[0].filter { it.isLetter() }.lowercase(Locale.US)
             val isShortOrHud = coreLetters.length <= 4 || HUD_ACTION_STEMS.contains(coreLetters)
