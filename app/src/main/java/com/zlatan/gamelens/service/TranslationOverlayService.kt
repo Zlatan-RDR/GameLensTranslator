@@ -34,6 +34,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.zlatan.gamelens.AppForegroundState
 import com.zlatan.gamelens.MainActivity
 import com.zlatan.gamelens.ProjectionReacquireActivity
 import com.zlatan.gamelens.R
@@ -548,7 +549,7 @@ class TranslationOverlayService : Service() {
         // 1. Auto-pause during rapid display resize transition or when GameLens is in the foreground
         val nowRealtime = android.os.SystemClock.elapsedRealtime()
         if ((nowRealtime - lastResizeTimestampMs < 650L) ||
-            com.zlatan.gamelens.AppForegroundState.isMainUiVisible.get() ||
+            AppForegroundState.isMainUiVisible.get() ||
             com.zlatan.gamelens.MainActivity.isAppInForeground
         ) {
             if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
@@ -913,7 +914,7 @@ class TranslationOverlayService : Service() {
         val (finalCurW, finalCurH) = captureMgr.getDimensions()
         val finalRealtime = android.os.SystemClock.elapsedRealtime()
         if ((finalRealtime - lastResizeTimestampMs < 650L) ||
-            com.zlatan.gamelens.MainActivity.AppForegroundState.isMainUiVisible.get() ||
+            AppForegroundState.isMainUiVisible.get() ||
             com.zlatan.gamelens.MainActivity.isAppInForeground
         ) {
             return
