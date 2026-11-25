@@ -20,7 +20,8 @@ object EnglishWordRepairer {
     private val CAMEL_CASE_REGEX = Regex("^([A-Z][a-z]{2,})([A-Z][a-z]+|[a-z]{2,})$")
 
     @Volatile
-    private var isInitialized = false
+    var isInitialized = false
+        private set
 
     private val dictionaryMap = HashMap<String, Int>(25000)
 

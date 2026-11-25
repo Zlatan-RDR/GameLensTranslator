@@ -666,8 +666,7 @@ object OcrTextCleaner {
             clean.isNotEmpty() && (
                 SHORT_VALID_WORDS.contains(clean) ||
                 EnglishWordRepairer.isWord(clean) ||
-                EnglishWordRepairer.COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean) ||
-                COMMON_CONTRACTIONS.contains(clean)
+                EnglishWordRepairer.COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean)
             )
         }
 

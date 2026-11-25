@@ -13,6 +13,7 @@ import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.zlatan.gamelens.diag.DiagnosticLogger
 import com.zlatan.gamelens.patch.PatchManager
+import com.zlatan.gamelens.translation.TranslationManager
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
@@ -172,8 +173,9 @@ class OcrEngine {
                             EnglishWordRepairer.isWord(clean) ||
                             SHORT_VALID_WORDS.contains(clean) ||
                             EnglishWordRepairer.COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean) ||
-                            OcrTextCleaner.COMMON_CONTRACTIONS.contains(clean) ||
-                            TranslationManager.DEFAULT_PROTECTED_GLOSSARY.any { it.key.equals(clean, ignoreCase = true) }
+                            TranslationManager.DEFAULT_PROTECTED_GLOSSARY.any { entry ->
+                                entry.key.split(" ").any { it.equals(clean, ignoreCase = true) }
+                            }
                         } else {
                             (clean.any { it in "aeiouy" } && clean.any { it in "bcdfghjklmnpqrstvwxyz" }) ||
                             SHORT_VALID_WORDS.contains(clean)
