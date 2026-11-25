@@ -92,6 +92,12 @@ object EnglishWordRepairer {
     /**
      * Measures the ratio of recognizable English dictionary words in the given text.
      */
+    val COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE = setOf(
+        "thats", "youre", "dont", "cant", "wont", "im", "its", "hes", "shes",
+        "theyre", "whats", "ive", "weve", "whos", "theres", "couldnt", "shouldnt",
+        "wouldnt", "arent", "isnt", "wasnt", "werent", "hasnt", "havent", "hadnt"
+    )
+
     fun dictionaryCoverage(text: String): Float {
         val tokens = text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
         if (tokens.isEmpty()) return 0f
@@ -99,7 +105,7 @@ object EnglishWordRepairer {
         for (t in tokens) {
             val clean = t.filter { it.isLetter() }.lowercase(Locale.US)
             if (clean.isEmpty()) continue
-            if (dictionaryMap.containsKey(clean)) {
+            if (isWord(clean) || OcrTextCleaner.SHORT_VALID_WORDS.contains(clean) || COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean)) {
                 validCount++
             }
         }
@@ -114,7 +120,7 @@ object EnglishWordRepairer {
         var unknown = 0
         for (t in tokens) {
             val clean = t.filter { it.isLetter() }.lowercase(Locale.US)
-            if (clean.length >= 2 && !isWord(clean) && !OcrTextCleaner.SHORT_VALID_WORDS.contains(clean)) {
+            if (clean.length >= 2 && !isWord(clean) && !OcrTextCleaner.SHORT_VALID_WORDS.contains(clean) && !COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean)) {
                 unknown++
             }
         }

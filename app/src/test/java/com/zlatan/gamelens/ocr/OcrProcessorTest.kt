@@ -3,9 +3,32 @@ package com.zlatan.gamelens.ocr
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.BeforeClass
 import org.junit.Test
+import java.io.File
+import java.io.FileInputStream
 
 class OcrProcessorTest {
+
+    companion object {
+        @BeforeClass
+        @JvmStatic
+        fun setUp() {
+            val possiblePaths = listOf(
+                File("app/src/main/assets/en_dict.txt"),
+                File("src/main/assets/en_dict.txt"),
+                File("../app/src/main/assets/en_dict.txt"),
+                File("assets/en_dict.txt"),
+                File("../assets/en_dict.txt")
+            )
+            val dictFile = possiblePaths.firstOrNull { it.exists() }
+            dictFile?.let {
+                FileInputStream(it).use { stream ->
+                    EnglishWordRepairer.loadDictionary(stream)
+                }
+            }
+        }
+    }
 
     @Test
     fun testNumericDialogueNotDropped() {
@@ -155,6 +178,45 @@ class OcrProcessorTest {
         assertFalse(
             "Identical text must not be degraded",
             OcrProcessor.isDegradedReRead(cleanLocked, cleanLocked)
+        )
+
+        // Subtitle upgrading with missing apostrophe ("Thats" vs "That's") must NEVER be blocked
+        val baseSubtitle = "That's all I got, homes. Call me back when"
+        val completingSubtitle = "Thats all I got, homes. Call me back when you're done, got it?"
+        assertTrue(
+            "Clean superset with dropped apostrophe must be recognized as clean superset",
+            OcrProcessor.isCleanSupersetUpgrade(completingSubtitle, baseSubtitle)
+        )
+        assertFalse(
+            "Clean superset with dropped apostrophe must not be flagged as degraded",
+            OcrProcessor.isDegradedReRead(completingSubtitle, baseSubtitle)
+        )
+    }
+
+    @Test
+    fun testStrictQualityScoringRejectsGibberish() {
+        val nonWordGibberish = "arranged courte"
+        val qGibberish = OcrEngine.scoreOcrQuality(nonWordGibberish)
+        assertTrue(
+            "Non-dictionary word combination '$nonWordGibberish' must score < 0.55f (was $qGibberish)",
+            qGibberish < 0.55f
+        )
+
+        val cleanSentence = "arranged court"
+        val qClean = OcrEngine.scoreOcrQuality(cleanSentence)
+        assertTrue(
+            "Clean dictionary phrase '$cleanSentence' must score >= 0.85f (was $qClean)",
+            qClean >= 0.85f
+        )
+    }
+
+    @Test
+    fun testDossierMetadataTailScrubbing() {
+        val fullLineWithDossier = "For years, Diana was my sole handler at the Agency. She supplied information and secrecy. And I sold perfection. dana penelope HAIR Red Gamma (cond. Tetra eff"
+        val scrubbed = OcrProcessor.scrubInlineDossierArtifacts(fullLineWithDossier)
+        assertEquals(
+            "For years, Diana was my sole handler at the Agency. She supplied information and secrecy. And I sold perfection.",
+            scrubbed
         )
     }
 }

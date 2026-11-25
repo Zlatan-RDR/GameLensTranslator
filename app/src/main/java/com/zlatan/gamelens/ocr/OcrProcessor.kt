@@ -579,11 +579,12 @@ object OcrTextCleaner {
     }
 
     /**
-     * Strips broken OCR dossier fragments (e.g. "Ganma (condtetra eft 130 ") at the start or end of text.
+     * Strips broken OCR dossier fragments (e.g. "Ganma (condtetra eft 130 ", "dana penelope HAIR Red Gamma (cond. Tetra eff") at the start or end of text.
      */
     fun scrubInlineDossierArtifacts(text: String): String {
         if (text.isBlank()) return text
         var s = text.trim()
+        s = s.replace(Regex("""(?i)\s*\b(?:dana\s+penelope|HAIR\s+[A-Za-z]+|Gamma|Ganma|\(?\s*cond\.?\s*Tetra\s*eff\)?)\b.*$"""), "")
         s = s.replace(Regex("""(?i)^(?:\b(?:Ganma|Gamma|Rank|Hair|Nationality)\b\s*)?\(?\b(?:cond|eff|condtetra|eft)\w*\b(?:\s+\b(?:eft|eff|cond)\w*\b)*\s*\d+\)?\s*"""), "")
         s = s.replace(Regex("""(?i)\s*\(?\b(?:cond|eff|condtetra|eft)\w*\b(?:\s+\b(?:eft|eff|cond)\w*\b)*\s*\d+\)?$"""), "")
         return s.trim()
@@ -612,7 +613,7 @@ object OcrTextCleaner {
 
         val garbageCount = removedTokens.count { token ->
             val clean = token.filter { it.isLetter() }
-            clean.isEmpty() || (!SHORT_VALID_WORDS.contains(clean) && !EnglishWordRepairer.isWord(clean))
+            clean.isEmpty() || (!SHORT_VALID_WORDS.contains(clean) && !EnglishWordRepairer.isWord(clean) && !EnglishWordRepairer.COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean))
         }
 
         val garbageRatio = garbageCount.toFloat() / removedTokens.size.toFloat()
@@ -621,7 +622,7 @@ object OcrTextCleaner {
 
     /**
      * Inspects added tokens when newText is longer than lastLockedText.
-     * Allows upgrade if added tokens contain >= 2 valid dictionary words with >= 75% dict ratio,
+     * Allows upgrade if added tokens contain >= 2 valid dictionary words with >= 70% dict ratio,
      * zero ALL-CAPS metadata tokens, and no code/date patterns.
      */
     fun isCleanSupersetUpgrade(newText: String, lastLockedText: String): Boolean {
@@ -629,19 +630,20 @@ object OcrTextCleaner {
         val l = lastLockedText.trim()
         if (n.isEmpty() || l.isEmpty() || n.equals(l, ignoreCase = true) || n.length <= l.length) return false
 
-        val nLower = n.lowercase(Locale.US)
-        val lLower = l.lowercase(Locale.US)
+        val normalizeToken = { t: String -> t.lowercase(Locale.US).replace("'", "").replace("’", "").filter { it.isLetterOrDigit() } }
 
         val newTokensRaw = n.split(Regex("\\s+")).filter { it.isNotBlank() }
-        val lockedTokensLower = lLower.split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
-        if (newTokensRaw.isEmpty() || lockedTokensLower.isEmpty()) return false
+        val lockedTokensNormalized = l.split(Regex("\\s+")).filter { it.isNotBlank() }.map(normalizeToken).filter { it.isNotEmpty() }.toSet()
+        if (newTokensRaw.isEmpty() || lockedTokensNormalized.isEmpty()) return false
 
-        val newTokensLower = newTokensRaw.map { it.lowercase(Locale.US) }
-        val containedLockedCount = lockedTokensLower.count { newTokensLower.contains(it) }
-        val lockedRecall = containedLockedCount.toFloat() / lockedTokensLower.size.toFloat()
-        if (lockedRecall < 0.75f && !nLower.contains(lLower)) return false
+        val newTokensNormalized = newTokensRaw.map(normalizeToken).filter { it.isNotEmpty() }
+        val containedLockedCount = lockedTokensNormalized.count { newTokensNormalized.contains(it) }
+        val lockedRecall = containedLockedCount.toFloat() / lockedTokensNormalized.size.toFloat()
+        val nLower = n.lowercase(Locale.US).replace("'", "").replace("’", "")
+        val lLower = l.lowercase(Locale.US).replace("'", "").replace("’", "")
+        if (lockedRecall < 0.70f && !nLower.contains(lLower)) return false
 
-        val addedTokens = newTokensRaw.filter { !lockedTokensLower.contains(it.lowercase(Locale.US)) }
+        val addedTokens = newTokensRaw.filter { !lockedTokensNormalized.contains(normalizeToken(it)) }
         if (addedTokens.size < 2) return false
 
         // Check for ALL-CAPS metadata tokens (len >= 4, e.g. HAIR, RANK, GAMMA, ATIONALITY)
@@ -660,12 +662,17 @@ object OcrTextCleaner {
 
         // Count valid English dictionary words
         val validDictCount = addedTokens.count { token ->
-            val clean = token.filter { it.isLetter() }.lowercase(Locale.US)
-            clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
+            val clean = normalizeToken(token)
+            clean.isNotEmpty() && (
+                SHORT_VALID_WORDS.contains(clean) ||
+                EnglishWordRepairer.isWord(clean) ||
+                EnglishWordRepairer.COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean) ||
+                COMMON_CONTRACTIONS.contains(clean)
+            )
         }
 
         val dictRatio = validDictCount.toFloat() / addedTokens.size.toFloat()
-        return validDictCount >= 2 && dictRatio >= 0.75f
+        return validDictCount >= 2 && dictRatio >= 0.70f
     }
 
     /**
@@ -687,14 +694,20 @@ object OcrTextCleaner {
             return false
         }
 
-        val newCov = EnglishWordRepairer.dictionaryCoverage(n)
-        val lockedCov = EnglishWordRepairer.dictionaryCoverage(l)
+        val newWords = n.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val oldWords = l.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (abs(newWords.size - oldWords.size) > 2) {
+            return false
+        }
+
         val newUnknown = EnglishWordRepairer.unknownTokenCount(n)
         val lockedUnknown = EnglishWordRepairer.unknownTokenCount(l)
 
-        val qDegraded = (newScore > 0f && lockedScore > 0f && newScore < lockedScore)
+        val newCov = EnglishWordRepairer.dictionaryCoverage(n)
+        val lockedCov = EnglishWordRepairer.dictionaryCoverage(l)
+        val qDegraded = (newScore > 0f && lockedScore > 0f && (lockedScore - newScore) >= 0.20f)
 
-        return newUnknown > lockedUnknown || (lockedCov - newCov) >= 0.05f || qDegraded
+        return (newUnknown > lockedUnknown) || (newUnknown == lockedUnknown && (lockedCov - newCov) >= 0.10f && qDegraded)
     }
 
     fun isNoiseOrPrompt(text: String): Boolean {

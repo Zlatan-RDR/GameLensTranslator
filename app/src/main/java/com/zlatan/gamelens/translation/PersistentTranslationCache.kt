@@ -115,10 +115,8 @@ class PersistentTranslationCache(
         if (currentProfileId == targetProfile) return Job().apply { complete() }
 
         flushDirty()
-        val s = customScope ?: scope
-        return s.launch {
-            loadProfile(targetProfile)
-        }
+        loadProfileDirect(targetProfile)
+        return Job().apply { complete() }
     }
 
     private fun logD(msg: String) {
@@ -133,7 +131,7 @@ class PersistentTranslationCache(
         } catch (_: Throwable) {}
     }
 
-    suspend fun loadProfile(profileId: String) = withContext(Dispatchers.IO) {
+    fun loadProfileDirect(profileId: String) {
         val sanitized = sanitizeProfileId(profileId)
         val file = File(cacheDir, "$sanitized.json")
         val loaded = mutableMapOf<String, String>()
@@ -163,6 +161,10 @@ class PersistentTranslationCache(
             memCache.putAll(loaded)
             isDirty = false
         }
+    }
+
+    suspend fun loadProfile(profileId: String) = withContext(Dispatchers.IO) {
+        loadProfileDirect(profileId)
     }
 
     private fun scheduleDebouncedFlush() {

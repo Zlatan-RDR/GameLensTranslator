@@ -815,7 +815,7 @@ class MainActivity : AppCompatActivity() {
 
         // One-Tap AI Provider Presets
         binding.btnPresetGemini.setOnClickListener {
-            binding.etApiEndpoint.setText("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            binding.etApiEndpoint.setText("https://generativelanguage.googleapis.com/v1beta/models")
             binding.etModelName.setText("gemini-3.5-flash")
             autoSaveTranslationConfig()
         }

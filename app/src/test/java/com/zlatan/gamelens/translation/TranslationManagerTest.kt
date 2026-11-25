@@ -130,4 +130,85 @@ class TranslationManagerTest {
         val polishedFemale = TranslationQualityPolisher.polishArabic(rawMt, femaleNames, sourceEnglish)
         assertEquals("أوه، يجب أن تكوني فيكتوريا. ادخلي يا طفلتي.", polishedFemale)
     }
+
+    @Test
+    fun testGeminiNativeUrlResolution() {
+        // Native models endpoint
+        org.junit.Assert.assertTrue(
+            TranslationManager.isGeminiNativeEndpoint("https://generativelanguage.googleapis.com/v1beta/models")
+        )
+        // OpenAI-compat proxy should NOT be treated as native
+        org.junit.Assert.assertFalse(
+            TranslationManager.isGeminiNativeEndpoint("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+        )
+
+        val resolved = TranslationManager.resolveGeminiNativeUrl(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            "gemini-3.5-flash",
+            "test_api_key_123"
+        )
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=test_api_key_123",
+            resolved
+        )
+
+        // normalizeApiUrl must NOT append /chat/completions to Gemini native endpoint
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            TranslationManager.normalizeApiUrl("https://generativelanguage.googleapis.com/v1beta/models")
+        )
+    }
+
+    @Test
+    fun testGeminiNativePayloadFormattingAndResponseParsing() {
+        // Zero-thinking budget payload
+        val payloadBudget0 = TranslationManager.buildGeminiNativeRequestBody(
+            systemPrompt = "Translate to Arabic",
+            userContent = "Hello friend",
+            thinkingMode = TranslationManager.GeminiThinkingMode.BUDGET_0
+        )
+        val genConfig0 = payloadBudget0.getJSONObject("generationConfig")
+        assertEquals(512, genConfig0.getInt("maxOutputTokens"))
+        org.junit.Assert.assertFalse(genConfig0.has("temperature"))
+        org.junit.Assert.assertFalse(genConfig0.has("top_p"))
+        org.junit.Assert.assertFalse(genConfig0.has("top_k"))
+        val thinkingConfig0 = genConfig0.getJSONObject("thinkingConfig")
+        assertEquals(0, thinkingConfig0.getInt("thinkingBudget"))
+
+        // Fallback MINIMAL mode payload
+        val payloadMinimal = TranslationManager.buildGeminiNativeRequestBody(
+            systemPrompt = "Translate to Arabic",
+            userContent = "Hello friend",
+            thinkingMode = TranslationManager.GeminiThinkingMode.MINIMAL
+        )
+        val thinkingConfigMinimal = payloadMinimal.getJSONObject("generationConfig").getJSONObject("thinkingConfig")
+        assertEquals("MINIMAL", thinkingConfigMinimal.getString("thinkingLevel"))
+
+        // Fallback NONE mode payload
+        val payloadNone = TranslationManager.buildGeminiNativeRequestBody(
+            systemPrompt = "Translate to Arabic",
+            userContent = "Hello friend",
+            thinkingMode = TranslationManager.GeminiThinkingMode.NONE
+        )
+        org.junit.Assert.assertFalse(payloadNone.getJSONObject("generationConfig").has("thinkingConfig"))
+
+        // Response parser
+        val responseJson = org.json.JSONObject(
+            """
+            {
+              "candidates": [
+                {
+                  "content": {
+                    "parts": [
+                      { "text": "مرحباً يا صديقي" }
+                    ]
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+        val parsed = TranslationManager.parseGeminiNativeResponse(responseJson)
+        assertEquals("مرحباً يا صديقي", parsed)
+    }
 }

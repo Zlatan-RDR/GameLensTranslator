@@ -147,6 +147,7 @@ class ScreenCaptureManager(
     private var lastReboundWidth: Int = 0
     private var lastReboundHeight: Int = 0
     private var lastReboundTimestampMs: Long = 0L
+    private var lastUpdateDimensionsTimestampMs: Long = 0L
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -161,6 +162,27 @@ class ScreenCaptureManager(
             if (width <= 0 || height <= 0) return
 
             val now = SystemClock.elapsedRealtime()
+
+            // 1. 350ms cooldown between updateDimensions and onCapturedContentResize to stop ping-pong storms
+            if (now - lastUpdateDimensionsTimestampMs < 350L) {
+                Log.d(TAG, "Ignoring onCapturedContentResize during 350ms cooldown after updateDimensions: ${width}x${height}")
+                DiagnosticLogger.log("Ignoring resize in cooldown (${now - lastUpdateDimensionsTimestampMs}ms < 350ms): ${width}x${height}")
+                return
+            }
+
+            // 2. Check current actual WindowManager/display orientation to prevent flipping to a stale orientation
+            val isCurrentOrientationLandscape = try {
+                context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            } catch (_: Throwable) {
+                screenWidth > screenHeight
+            }
+            val isIncomingLandscape = width > height
+            if (isCurrentOrientationLandscape != isIncomingLandscape) {
+                Log.d(TAG, "Ignoring stale onCapturedContentResize (${width}x${height}) contradicting display orientation (isLandscape=$isCurrentOrientationLandscape)")
+                DiagnosticLogger.log("Ignoring stale resize (${width}x${height}) vs orientation (isLandscape=$isCurrentOrientationLandscape)")
+                return
+            }
+
             if (width == screenWidth && height == screenHeight) {
                 if (now < suppressResizeCallbackUntilMs) {
                     Log.d(TAG, "Ignoring self-echo onCapturedContentResize: ${width}x${height}")
@@ -301,6 +323,7 @@ class ScreenCaptureManager(
     @Synchronized
     fun updateDimensions(newWidth: Int, newHeight: Int, newDpi: Int) {
         if (newWidth <= 0 || newHeight <= 0) return
+        this.lastUpdateDimensionsTimestampMs = SystemClock.elapsedRealtime()
         this.screenDensityDpi = newDpi
         if (screenWidth != newWidth || screenHeight != newHeight) {
             forceRebindVirtualDisplay(newWidth, newHeight, "updateDimensions")

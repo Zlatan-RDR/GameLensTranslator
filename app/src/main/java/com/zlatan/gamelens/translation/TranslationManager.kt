@@ -50,17 +50,106 @@ class TranslationManager(
         private const val TAG = "TranslationManager"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
+        fun isGeminiNativeEndpoint(url: String): Boolean {
+            val clean = url.trim().lowercase(java.util.Locale.US)
+            return clean.contains("generativelanguage.googleapis.com") && !clean.contains("/openai/")
+        }
+
+        fun resolveGeminiNativeUrl(endpointUrl: String, model: String, apiKey: String): String {
+            val clean = endpointUrl.trim()
+            val m = model.ifBlank { "gemini-3.5-flash" }
+            val base = if (clean.contains(":generateContent")) {
+                clean.substringBefore("?")
+            } else {
+                val trimmed = clean.trimEnd('/')
+                if (trimmed.endsWith("/models")) {
+                    "$trimmed/$m:generateContent"
+                } else if (trimmed.contains("/models/")) {
+                    "$trimmed:generateContent"
+                } else {
+                    "$trimmed/models/$m:generateContent"
+                }
+            }
+            return if (base.contains("?key=")) base else "$base?key=$apiKey"
+        }
+
+        enum class GeminiThinkingMode { BUDGET_0, MINIMAL, NONE }
+
+        val geminiThinkingModeCache = java.util.concurrent.ConcurrentHashMap<String, GeminiThinkingMode>()
+
+        fun buildGeminiNativeRequestBody(
+            systemPrompt: String,
+            userContent: String,
+            thinkingMode: GeminiThinkingMode = GeminiThinkingMode.BUDGET_0
+        ): JSONObject {
+            val root = JSONObject()
+            if (systemPrompt.isNotBlank()) {
+                root.put("systemInstruction", JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply { put("text", systemPrompt) })
+                    })
+                })
+            }
+            root.put("contents", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply { put("text", userContent) })
+                    })
+                })
+            })
+            val genConfig = JSONObject().apply {
+                put("maxOutputTokens", 512)
+                when (thinkingMode) {
+                    GeminiThinkingMode.BUDGET_0 -> {
+                        put("thinkingConfig", JSONObject().apply {
+                            put("thinkingBudget", 0)
+                        })
+                    }
+                    GeminiThinkingMode.MINIMAL -> {
+                        put("thinkingConfig", JSONObject().apply {
+                            put("thinkingLevel", "MINIMAL")
+                        })
+                    }
+                    GeminiThinkingMode.NONE -> {
+                        // omit thinkingConfig
+                    }
+                }
+            }
+            root.put("generationConfig", genConfig)
+            return root
+        }
+
+        fun parseGeminiNativeResponse(responseJson: JSONObject): String? {
+            val candidates = responseJson.optJSONArray("candidates") ?: return null
+            if (candidates.length() == 0) return null
+            val firstCandidate = candidates.getJSONObject(0)
+            val content = firstCandidate.optJSONObject("content") ?: return null
+            val parts = content.optJSONArray("parts") ?: return null
+            if (parts.length() == 0) return null
+            val sb = StringBuilder()
+            for (i in 0 until parts.length()) {
+                val part = parts.getJSONObject(i)
+                val text = part.optString("text", "")
+                if (text.isNotEmpty()) sb.append(text)
+            }
+            return sb.toString().trim().ifEmpty { null }
+        }
+
         internal fun normalizeApiUrl(rawEndpoint: String): String {
             val trimmed = rawEndpoint.trim()
             if (trimmed.isBlank()) return "https://api.openai.com/v1/chat/completions"
 
             val isAnthropic = trimmed.contains("anthropic.com", ignoreCase = true)
+            val isGeminiNative = isGeminiNativeEndpoint(trimmed)
             return if (isAnthropic) {
                 when {
                     trimmed.endsWith("/messages") || trimmed.endsWith("/messages/") -> trimmed.trimEnd('/')
                     trimmed.endsWith("/v1") || trimmed.endsWith("/v1/") -> "${trimmed.trimEnd('/')}/messages"
                     else -> "${trimmed.trimEnd('/')}/v1/messages"
                 }
+            } else if (isGeminiNative) {
+                trimmed.trimEnd('/')
             } else {
                 when {
                     trimmed.endsWith("/chat/completions") || trimmed.endsWith("/chat/completions/") -> trimmed.trimEnd('/')
@@ -174,7 +263,17 @@ class TranslationManager(
         }
     }
 
-    private val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
+    private val freeGoogleHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .dns(okhttp3.Dns.SYSTEM)
+        .protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
+        .connectionPool(okhttp3.ConnectionPool(5, 5L, TimeUnit.MINUTES))
+        .connectTimeout(3000L, TimeUnit.MILLISECONDS)
+        .readTimeout(5000L, TimeUnit.MILLISECONDS)
+        .callTimeout(6000L, TimeUnit.MILLISECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+
+    private val customAiHttpClient: OkHttpClient = OkHttpClient.Builder()
         .dns(Ipv4FirstDns)
         .connectionPool(okhttp3.ConnectionPool(5, 5L, TimeUnit.MINUTES))
         .connectTimeout(3000L, TimeUnit.MILLISECONDS)
@@ -182,6 +281,11 @@ class TranslationManager(
         .callTimeout(10000L, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(true)
         .build()
+
+    val sharedHttpClient: OkHttpClient get() = customAiHttpClient
+
+    @Volatile
+    var isLastTranslationFromCache: Boolean = false
 
     data class DialogueContextEntry(
         val english: String,
@@ -219,9 +323,13 @@ class TranslationManager(
         if (trimmed.isEmpty()) return null
         val eKey = getEngineCacheKey()
         val gHash = getGlossaryCacheHash()
-        return persistentCache.get(eKey, gHash, trimmed)
+        val res = persistentCache.get(eKey, gHash, trimmed)
             ?: fastMemoryCache.get(trimmed)
             ?: findFuzzyMemoryCacheMatch(trimmed, 0.90f)
+        if (res != null) {
+            isLastTranslationFromCache = true
+        }
+        return res
     }
 
     fun putToCache(text: String, arabic: String) {
@@ -319,7 +427,7 @@ class TranslationManager(
                 .get()
                 .build()
 
-            sharedHttpClient.newCall(request).execute().use { response ->
+            freeGoogleHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
                 val bodyStr = response.body?.string() ?: return@withContext null
                 val jsonArray = JSONArray(bodyStr)
@@ -423,6 +531,7 @@ class TranslationManager(
      * 6. Session auto-exporter for community patch generation
      */
     suspend fun translate(text: String, isFinal: Boolean = true): String = withContext(Dispatchers.IO) {
+        isLastTranslationFromCache = false
         val asrRepaired = normalizeAsrTranscript(text)
         val trimmed = asrRepaired.trim()
         if (trimmed.isEmpty()) return@withContext ""
@@ -434,24 +543,28 @@ class TranslationManager(
         // 0. Mandatory 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86)
         val patchMatch = com.zlatan.gamelens.patch.PatchManager.lookup(trimmed)
         if (patchMatch != null) {
+            isLastTranslationFromCache = true
             return@withContext TranslationQualityPolisher.polishArabic(patchMatch, femaleNames, trimmed)
         }
 
         // Fast Two-Tier / In-Memory LRU Cache (0ms)
         val memMatch = getFromMemoryCache(trimmed)
         if (memMatch != null) {
+            isLastTranslationFromCache = true
             return@withContext TranslationQualityPolisher.polishArabic(memMatch, femaleNames, trimmed)
         }
 
         // 1. Direct Game Glossary Exact Match
         val glossaryMatch = glossaryManager.findExactMatch(trimmed)
         if (glossaryMatch != null) {
+            isLastTranslationFromCache = true
             return@withContext TranslationQualityPolisher.polishArabic(glossaryMatch, femaleNames, trimmed)
         }
 
         // 2. Instant Cache (Memory LRU -> Room Persistent DB)
         val cached = cacheManager.get(trimmed)
         if (cached != null) {
+            isLastTranslationFromCache = true
             val polished = TranslationQualityPolisher.polishArabic(cached, femaleNames, trimmed)
             putToCache(trimmed, polished)
             return@withContext polished
@@ -861,6 +974,11 @@ class TranslationManager(
             }
 
             val normalizedModel = config.modelName.trim().lowercase()
+            val isGeminiNative = isGeminiNativeEndpoint(endpointUrl)
+            val resolvedUrl = if (isGeminiNative) {
+                resolveGeminiNativeUrl(endpointUrl, normalizedModel.ifBlank { "gemini-3.5-flash" }, config.apiKey)
+            } else endpointUrl
+
             val request = if (isAnthropic) {
                 val anthropicBody = JSONObject().apply {
                     put("model", if (normalizedModel.isNotBlank() && !normalizedModel.equals("gpt-4o-mini", ignoreCase = true)) normalizedModel else "claude-3-5-haiku-20241022")
@@ -881,6 +999,14 @@ class TranslationManager(
                     .addHeader("content-type", "application/json")
                     .post(anthropicBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                     .build()
+            } else if (isGeminiNative) {
+                val curMode = geminiThinkingModeCache[normalizedModel] ?: GeminiThinkingMode.BUDGET_0
+                val geminiBody = buildGeminiNativeRequestBody(systemPrompt, userContent, curMode)
+                Request.Builder()
+                    .url(resolvedUrl)
+                    .addHeader("Content-Type", "application/json")
+                    .post(geminiBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
             } else {
                 val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
                 val effort = if (isGemini) (modelReasoningEffortCache[normalizedModel] ?: "none") else null
@@ -893,7 +1019,7 @@ class TranslationManager(
                     .build()
             }
 
-            val aiClient = sharedHttpClient.newBuilder()
+            val aiClient = customAiHttpClient.newBuilder()
                 .callTimeout(5000L, TimeUnit.MILLISECONDS)
                 .readTimeout(5000L, TimeUnit.MILLISECONDS)
                 .connectTimeout(3000L, TimeUnit.MILLISECONDS)
@@ -901,7 +1027,33 @@ class TranslationManager(
 
             var response = aiClient.newCall(request).execute()
             val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
-            if (!response.isSuccessful && response.code == 400 && !isAnthropic) {
+            if (!response.isSuccessful && response.code == 400 && isGeminiNative) {
+                val errBody = response.body?.use { it.string() } ?: ""
+                if (errBody.contains("thinkingBudget", ignoreCase = true) || errBody.contains("thinking", ignoreCase = true)) {
+                    Log.w(TAG, "Gemini native thinkingBudget 0 rejected, retrying with MINIMAL: $errBody")
+                    val retryBody = buildGeminiNativeRequestBody(systemPrompt, userContent, GeminiThinkingMode.MINIMAL)
+                    val retryReq = Request.Builder()
+                        .url(resolvedUrl)
+                        .addHeader("Content-Type", "application/json")
+                        .post(retryBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    response = aiClient.newCall(retryReq).execute()
+                    if (response.isSuccessful) {
+                        geminiThinkingModeCache[normalizedModel] = GeminiThinkingMode.MINIMAL
+                    } else if (response.code == 400) {
+                        val retryBodyNone = buildGeminiNativeRequestBody(systemPrompt, userContent, GeminiThinkingMode.NONE)
+                        val retryReqNone = Request.Builder()
+                            .url(resolvedUrl)
+                            .addHeader("Content-Type", "application/json")
+                            .post(retryBodyNone.toString().toRequestBody(JSON_MEDIA_TYPE))
+                            .build()
+                        response = aiClient.newCall(retryReqNone).execute()
+                        if (response.isSuccessful) {
+                            geminiThinkingModeCache[normalizedModel] = GeminiThinkingMode.NONE
+                        }
+                    }
+                }
+            } else if (!response.isSuccessful && response.code == 400 && !isAnthropic) {
                 val errBody = response.body?.use { it.string() } ?: ""
                 if (isGemini && errBody.contains("reasoning", ignoreCase = true)) {
                     Log.w(TAG, "Gemini reasoning effort rejected, retrying with minimal: $errBody")
@@ -949,6 +1101,8 @@ class TranslationManager(
                 val contentArr = responseJson.optJSONArray("content") ?: return@withContext null
                 if (contentArr.length() == 0) return@withContext null
                 contentArr.getJSONObject(0).optString("text", "").trim()
+            } else if (isGeminiNative) {
+                parseGeminiNativeResponse(responseJson) ?: ""
             } else {
                 val choices = responseJson.optJSONArray("choices") ?: return@withContext null
                 if (choices.length() == 0) return@withContext null
@@ -989,8 +1143,12 @@ class TranslationManager(
 
             val endpointUrl = normalizeApiUrl(config.apiEndpoint)
             val isAnthropic = endpointUrl.contains("anthropic.com", ignoreCase = true)
+            val isGeminiNative = isGeminiNativeEndpoint(endpointUrl)
             val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
             val normalizedModel = config.modelName.trim().lowercase()
+            val resolvedUrl = if (isGeminiNative) {
+                resolveGeminiNativeUrl(endpointUrl, normalizedModel.ifBlank { "gemini-3.5-flash" }, config.apiKey)
+            } else endpointUrl
             val systemPrompt = "You are a professional video game translator. Translate to Arabic. Output ONLY the Arabic translation."
 
             val request = if (isAnthropic) {
@@ -1013,6 +1171,14 @@ class TranslationManager(
                     .addHeader("content-type", "application/json")
                     .post(anthropicBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                     .build()
+            } else if (isGeminiNative) {
+                val curMode = geminiThinkingModeCache[normalizedModel] ?: GeminiThinkingMode.BUDGET_0
+                val geminiBody = buildGeminiNativeRequestBody(systemPrompt, prompt, curMode)
+                Request.Builder()
+                    .url(resolvedUrl)
+                    .addHeader("Content-Type", "application/json")
+                    .post(geminiBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
             } else {
                 val effort = if (isGemini) (modelReasoningEffortCache[normalizedModel] ?: "none") else null
                 val openAiBody = buildOpenAiRequestBody(endpointUrl, normalizedModel, systemPrompt, prompt, includeGenerationParams = true, reasoningEffort = effort)
@@ -1024,14 +1190,39 @@ class TranslationManager(
                     .build()
             }
 
-            val testClient = sharedHttpClient.newBuilder()
+            val testClient = customAiHttpClient.newBuilder()
                 .callTimeout(11000L, TimeUnit.MILLISECONDS)
                 .connectTimeout(3000L, TimeUnit.MILLISECONDS)
                 .readTimeout(8000L, TimeUnit.MILLISECONDS)
                 .build()
 
             var response = testClient.newCall(request).execute()
-            if (!response.isSuccessful && response.code == 400 && isGemini) {
+            if (!response.isSuccessful && response.code == 400 && isGeminiNative) {
+                val errBody = response.body?.use { it.string() } ?: ""
+                if (errBody.contains("thinkingBudget", ignoreCase = true) || errBody.contains("thinking", ignoreCase = true)) {
+                    val retryBody = buildGeminiNativeRequestBody(systemPrompt, prompt, GeminiThinkingMode.MINIMAL)
+                    val retryReq = Request.Builder()
+                        .url(resolvedUrl)
+                        .addHeader("Content-Type", "application/json")
+                        .post(retryBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    response = testClient.newCall(retryReq).execute()
+                    if (response.isSuccessful) {
+                        geminiThinkingModeCache[normalizedModel] = GeminiThinkingMode.MINIMAL
+                    } else if (response.code == 400) {
+                        val retryBodyNone = buildGeminiNativeRequestBody(systemPrompt, prompt, GeminiThinkingMode.NONE)
+                        val retryReqNone = Request.Builder()
+                            .url(resolvedUrl)
+                            .addHeader("Content-Type", "application/json")
+                            .post(retryBodyNone.toString().toRequestBody(JSON_MEDIA_TYPE))
+                            .build()
+                        response = testClient.newCall(retryReqNone).execute()
+                        if (response.isSuccessful) {
+                            geminiThinkingModeCache[normalizedModel] = GeminiThinkingMode.NONE
+                        }
+                    }
+                }
+            } else if (!response.isSuccessful && response.code == 400 && isGemini) {
                 val errBody = response.body?.use { it.string() } ?: ""
                 if (errBody.contains("reasoning", ignoreCase = true)) {
                     val retryBody = buildOpenAiRequestBody(endpointUrl, normalizedModel, systemPrompt, prompt, includeGenerationParams = true, reasoningEffort = "minimal")
@@ -1067,6 +1258,8 @@ class TranslationManager(
                 val contentArr = responseJson.optJSONArray("content")
                 if (contentArr == null || contentArr.length() == 0) return@withContext ApiTestResult(false, null, "لا يوجد محتوى في رد Claude")
                 contentArr.getJSONObject(0).optString("text", "").trim()
+            } else if (isGeminiNative) {
+                parseGeminiNativeResponse(responseJson) ?: ""
             } else {
                 val choices = responseJson.optJSONArray("choices")
                 if (choices == null || choices.length() == 0) return@withContext ApiTestResult(false, null, "لا يوجد choices في رد الخادم")

@@ -164,13 +164,24 @@ class OcrEngine {
                     }
                 }
 
-                if (letters.length >= 3) {
-                    val hasVowel = letters.any { it in "aeiouyAEIOUY" }
-                    val hasConsonant = letters.any { it in "bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ" }
-                    if (hasVowel && hasConsonant) {
-                        validEnglishTokens++
+                val clean = letters.lowercase(java.util.Locale.US)
+                val isDictWord = when {
+                    clean.length == 1 -> clean == "a" || clean == "i"
+                    clean.length >= 2 -> {
+                        if (EnglishWordRepairer.isInitialized) {
+                            EnglishWordRepairer.isWord(clean) ||
+                            SHORT_VALID_WORDS.contains(clean) ||
+                            EnglishWordRepairer.COMMON_CONTRACTIONS_WITHOUT_APOSTROPHE.contains(clean) ||
+                            OcrTextCleaner.COMMON_CONTRACTIONS.contains(clean) ||
+                            TranslationManager.DEFAULT_PROTECTED_GLOSSARY.any { it.key.equals(clean, ignoreCase = true) }
+                        } else {
+                            (clean.any { it in "aeiouy" } && clean.any { it in "bcdfghjklmnpqrstvwxyz" }) ||
+                            SHORT_VALID_WORDS.contains(clean)
+                        }
                     }
-                } else if (letters.isNotEmpty() && SHORT_VALID_WORDS.contains(letters.lowercase(java.util.Locale.US))) {
+                    else -> false
+                }
+                if (isDictWord) {
                     validEnglishTokens++
                 }
             }
