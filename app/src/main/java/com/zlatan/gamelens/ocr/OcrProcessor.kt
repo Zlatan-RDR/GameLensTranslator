@@ -537,6 +537,9 @@ object OcrTextCleaner {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
         if (isLogcatOrSelfCaptureNoise(trimmed)) return true
+        if (isFragmentedGibberish(trimmed)) return true
+        if (isDiacriticSelfOcrGarble(trimmed)) return true
+        if (Regex("^\\.{2,}\\s*\\(").containsMatchIn(trimmed)) return true
 
         // Ensure any recognized string containing >= 4 valid English dictionary words is NEVER dropped as noise/prompt
         val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
@@ -547,10 +550,6 @@ object OcrTextCleaner {
         if (dictWordCount >= 4) {
             return false
         }
-
-        if (isFragmentedGibberish(trimmed)) return true
-        if (isDiacriticSelfOcrGarble(trimmed)) return true
-        if (Regex("^\\.{2,}\\s*\\(").containsMatchIn(trimmed)) return true
 
         // Reject self-app name or UI text
         if (trimmed.contains("GameLens", ignoreCase = true) || trimmed.contains("Translator", ignoreCase = true)) {
