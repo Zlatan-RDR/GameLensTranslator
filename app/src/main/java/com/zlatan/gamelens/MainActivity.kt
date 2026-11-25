@@ -86,6 +86,10 @@ class MainActivity : AppCompatActivity() {
         const val MODE_CLOUD = "mode_cloud"
         const val MODE_AUTO = "mode_auto"
 
+        object AppForegroundState {
+            val isMainUiVisible = java.util.concurrent.atomic.AtomicBoolean(false)
+        }
+
         @Volatile
         var isAppInForeground: Boolean = false
     }
@@ -307,6 +311,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppForegroundState.isMainUiVisible.set(true)
         isAppInForeground = true
         updatePermissionStates()
         refreshDiagnosticLogs()
@@ -317,6 +322,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        AppForegroundState.isMainUiVisible.set(false)
         isAppInForeground = false
     }
 
@@ -698,6 +704,56 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private fun testApiConnection() {
+        val endpoint = binding.etApiEndpoint.text?.toString()?.trim() ?: ""
+        val apiKey = binding.etApiKey.text?.toString()?.trim() ?: ""
+        val model = binding.etModelName.text?.toString()?.trim() ?: ""
+
+        val finalEndpoint = if (endpoint.isBlank()) "https://api.openai.com/v1" else endpoint
+        val (isValid, errorMsg) = SecureApiKeyStorage.isValidEndpointUrl(finalEndpoint)
+        if (!isValid) {
+            binding.tvTestApiResult.visibility = View.VISIBLE
+            binding.tvTestApiResult.setTextColor(Color.parseColor("#F87171"))
+            binding.tvTestApiResult.text = "❌ $errorMsg"
+            return
+        }
+
+        binding.tvTestApiResult.visibility = View.VISIBLE
+        binding.tvTestApiResult.setTextColor(Color.parseColor("#94A3B8"))
+        binding.tvTestApiResult.text = "جارٍ اختبار الاتصال..."
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val testConfig = TranslationConfig(
+                mode = TranslationMode.CLOUD_OPENAI,
+                apiKey = apiKey,
+                apiEndpoint = finalEndpoint,
+                modelName = if (model.isBlank()) "gpt-4o-mini" else model
+            )
+            val tempManager = TranslationManager(applicationContext, cacheManager, glossaryManager, testConfig)
+            val startTime = android.os.SystemClock.elapsedRealtime()
+            try {
+                val result = tempManager.testCustomAiConnection("Oh, you must be Victoria. Come on in, child.")
+                val latency = android.os.SystemClock.elapsedRealtime() - startTime
+                withContext(Dispatchers.Main) {
+                    if (result != null && result.isNotBlank()) {
+                        binding.tvTestApiResult.setTextColor(Color.parseColor("#34D399"))
+                        binding.tvTestApiResult.text = "✅ ${latency}ms: $result"
+                    } else {
+                        binding.tvTestApiResult.setTextColor(Color.parseColor("#F87171"))
+                        binding.tvTestApiResult.text = "❌ فشل الاتصال: تأكد من صحة المفتاح والموديل والرابط."
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    binding.tvTestApiResult.setTextColor(Color.parseColor("#F87171"))
+                    binding.tvTestApiResult.text = "❌ خطأ: ${e.message}"
+                }
+            } finally {
+                tempManager.close()
+            }
+        }
+    }
+
     private fun setupListeners() {
         // Translation Engine Selection (Auto-Saved)
         binding.rgTranslationMode.setOnCheckedChangeListener { _, checkedId ->
@@ -727,6 +783,38 @@ class MainActivity : AppCompatActivity() {
         binding.etApiEndpoint.addTextChangedListener(autoSaveWatcher)
         binding.etApiKey.addTextChangedListener(autoSaveWatcher)
         binding.etModelName.addTextChangedListener(autoSaveWatcher)
+
+        // One-Tap AI Provider Presets
+        binding.btnPresetGemini.setOnClickListener {
+            binding.etApiEndpoint.setText("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+            binding.etModelName.setText("gemini-2.5-flash-lite")
+            autoSaveTranslationConfig()
+        }
+        binding.btnPresetGroq.setOnClickListener {
+            binding.etApiEndpoint.setText("https://api.groq.com/openai/v1/chat/completions")
+            binding.etModelName.setText("llama-3.3-70b-versatile")
+            autoSaveTranslationConfig()
+        }
+        binding.btnPresetOpenAi.setOnClickListener {
+            binding.etApiEndpoint.setText("https://api.openai.com/v1/chat/completions")
+            binding.etModelName.setText("gpt-4o-mini")
+            autoSaveTranslationConfig()
+        }
+        binding.btnPresetClaude.setOnClickListener {
+            binding.etApiEndpoint.setText("https://api.anthropic.com/v1/messages")
+            binding.etModelName.setText("claude-3-5-haiku-latest")
+            autoSaveTranslationConfig()
+        }
+        binding.btnPresetLocal.setOnClickListener {
+            binding.etApiEndpoint.setText("http://127.0.0.1:8080/v1/chat/completions")
+            binding.etModelName.setText("local-model")
+            autoSaveTranslationConfig()
+        }
+
+        // Live API Connection Test
+        binding.btnTestApi.setOnClickListener {
+            testApiConnection()
+        }
 
         binding.switchOnlineEnhanced.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_ONLINE_TRANSLATE_ENHANCED, isChecked).apply()

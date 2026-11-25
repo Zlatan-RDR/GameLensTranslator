@@ -132,8 +132,14 @@ class TranslationManager(
         .retryOnConnectionFailure(true)
         .build()
 
+    data class DialogueContextEntry(
+        val english: String,
+        val arabic: String,
+        val timestampMs: Long
+    )
+
     private val fastMemoryCache = LruCache<String, String>(500)
-    private val recentContextLines = java.util.concurrent.ConcurrentLinkedDeque<Pair<String, String>>()
+    private val recentContextLines = java.util.concurrent.ConcurrentLinkedDeque<DialogueContextEntry>()
     var activeGameProfile: String = ""
 
     fun clearDialogueContext() {
@@ -330,32 +336,33 @@ class TranslationManager(
         // 0. Mandatory 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86)
         val patchMatch = com.zlatan.gamelens.patch.PatchManager.lookup(trimmed)
         if (patchMatch != null) {
-            return@withContext patchMatch
+            return@withContext TranslationQualityPolisher.polishArabic(patchMatch)
         }
 
         // Fast In-Memory LRU Cache (0ms)
         val memMatch = fastMemoryCache.get(trimmed)
         if (memMatch != null) {
-            return@withContext memMatch
+            return@withContext TranslationQualityPolisher.polishArabic(memMatch)
         }
 
         // Fuzzy In-Memory Cache (0ms, >= 0.90 similarity)
         val fuzzyMatch = findFuzzyMemoryCacheMatch(trimmed, 0.90f)
         if (fuzzyMatch != null) {
-            return@withContext fuzzyMatch
+            return@withContext TranslationQualityPolisher.polishArabic(fuzzyMatch)
         }
 
         // 1. Direct Game Glossary Exact Match
         val glossaryMatch = glossaryManager.findExactMatch(trimmed)
         if (glossaryMatch != null) {
-            return@withContext glossaryMatch
+            return@withContext TranslationQualityPolisher.polishArabic(glossaryMatch)
         }
 
         // 2. Instant Cache (Memory LRU -> Room Persistent DB)
         val cached = cacheManager.get(trimmed)
         if (cached != null) {
-            fastMemoryCache.put(trimmed, cached)
-            return@withContext cached
+            val polished = TranslationQualityPolisher.polishArabic(cached)
+            fastMemoryCache.put(trimmed, polished)
+            return@withContext polished
         }
 
         // Deterministic Clean Kill handling: if input is standalone "Clean kill" or "Clean kill - ..."
@@ -398,37 +405,42 @@ class TranslationManager(
             .getBoolean(com.zlatan.gamelens.MainActivity.KEY_ONLINE_TRANSLATE_ENHANCED, false)
 
         val hasNet = hasActiveInternet(context)
+        val normalizedForMt = EnglishIdiomNormalizer.normalize(preprocessed)
 
         val translated = when {
             isOnlineEnhanced && hasNet -> {
                 withTimeoutOrNull(900L) {
-                    translateViaGoogleFree(preprocessed)
+                    translateViaGoogleFree(normalizedForMt)
                 } ?: when (config.mode) {
                     TranslationMode.CLOUD_OPENAI -> {
                         if (config.apiKey.isNotBlank()) {
-                            translateViaOpenAi(preprocessed) ?: translateViaMlKit(preprocessed)
+                            translateViaOpenAi(preprocessed)
+                                ?: translateViaGoogleFree(normalizedForMt)
+                                ?: translateViaMlKit(normalizedForMt)
                         } else {
-                            translateViaMlKit(preprocessed)
+                            translateViaGoogleFree(normalizedForMt) ?: translateViaMlKit(normalizedForMt)
                         }
                     }
-                    TranslationMode.OFFLINE_MLKIT -> translateViaMlKit(preprocessed)
+                    TranslationMode.OFFLINE_MLKIT -> translateViaMlKit(normalizedForMt)
                 }
             }
             config.mode == TranslationMode.CLOUD_OPENAI && hasNet -> {
                 if (config.apiKey.isNotBlank()) {
-                    translateViaOpenAi(preprocessed) ?: translateViaMlKit(preprocessed)
+                    translateViaOpenAi(preprocessed)
+                        ?: translateViaGoogleFree(normalizedForMt)
+                        ?: translateViaMlKit(normalizedForMt)
                 } else {
-                    translateViaMlKit(preprocessed)
+                    translateViaGoogleFree(normalizedForMt) ?: translateViaMlKit(normalizedForMt)
                 }
             }
-            else -> translateViaMlKit(preprocessed)
+            else -> translateViaMlKit(normalizedForMt)
         }
 
         // Multi-sentence fallback when ML Kit leaves trailing sentences untranslated
         var effectiveTranslated = translated
         val consecutiveEnglishRegex = Regex("(?i)\\b[a-zA-Z]{2,}(?:\\s+[a-zA-Z]{2,}){3,}\\b")
         if (consecutiveEnglishRegex.containsMatchIn(effectiveTranslated)) {
-            val sentences = preprocessed.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
+            val sentences = normalizedForMt.split(Regex("(?<=[.!?])\\s+")).filter { it.isNotBlank() }
             if (sentences.size > 1) {
                 val sentenceTranslations = sentences.map { sent ->
                     val trimmedSent = sent.trim()
@@ -707,6 +719,13 @@ class TranslationManager(
             val endpointUrl = normalizeApiUrl(config.apiEndpoint)
             val isAnthropic = endpointUrl.contains("anthropic.com", ignoreCase = true)
 
+            val now = android.os.SystemClock.elapsedRealtime()
+            val lastEntry = recentContextLines.peekLast()
+            if (lastEntry != null && (now - lastEntry.timestampMs > 25_000L)) {
+                Log.d(TAG, "Scene-gap detected (${now - lastEntry.timestampMs}ms > 25000ms), clearing AI dialogue context")
+                recentContextLines.clear()
+            }
+
             val gameSnippet = if (activeGameProfile.isNotBlank() && !activeGameProfile.equals("الافتراضي", ignoreCase = true) && !activeGameProfile.equals("Default", ignoreCase = true)) {
                 "You are localizing dialogue for the game: \"$activeGameProfile\". "
             } else ""
@@ -717,8 +736,8 @@ class TranslationManager(
                 "3. Idiomatic Fluency: Translate idioms, threats, and gaming slang by meaning into natural, cinematic Modern Standard Arabic. Output ONLY the Arabic translation with zero explanations or quotation marks."
 
             val userContent = if (recentContextLines.isNotEmpty()) {
-                val history = recentContextLines.joinToString("\n") { (en, ar) ->
-                    "EN: $en\nAR: $ar"
+                val history = recentContextLines.joinToString("\n") { entry ->
+                    "EN: ${entry.english}\nAR: ${entry.arabic}"
                 }
                 "Previous Dialogue Context (Last 6 exchanges):\n$history\n\nTranslate ONLY this line:\n$text"
             } else {
@@ -728,7 +747,8 @@ class TranslationManager(
             val request = if (isAnthropic) {
                 val anthropicBody = JSONObject().apply {
                     put("model", if (config.modelName.isNotBlank() && !config.modelName.equals("gpt-4o-mini", ignoreCase = true)) config.modelName else "claude-3-5-haiku-20241022")
-                    put("max_tokens", 256)
+                    put("max_tokens", 120)
+                    put("temperature", 0.2)
                     put("system", systemPrompt)
                     put("messages", JSONArray().apply {
                         put(JSONObject().apply {
@@ -747,8 +767,8 @@ class TranslationManager(
             } else {
                 val openAiBody = JSONObject().apply {
                     put("model", config.modelName)
-                    put("temperature", 0.3)
-                    put("max_tokens", 256)
+                    put("temperature", 0.2)
+                    put("max_tokens", 120)
                     put("messages", JSONArray().apply {
                         put(JSONObject().apply {
                             put("role", "system")
@@ -768,7 +788,12 @@ class TranslationManager(
                     .build()
             }
 
-            val response = sharedHttpClient.newCall(request).execute()
+            val aiClient = sharedHttpClient.newBuilder()
+                .callTimeout(2500L, TimeUnit.MILLISECONDS)
+                .readTimeout(2500L, TimeUnit.MILLISECONDS)
+                .build()
+
+            val response = aiClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 Log.w(TAG, "AI translation failed with HTTP code: ${response.code}")
                 return@withContext null
@@ -791,7 +816,7 @@ class TranslationManager(
 
             if (rawContent.isNotEmpty()) {
                 val cleaned = rawContent.removeSurrounding("\"").removeSurrounding("«", "»").trim()
-                recentContextLines.add(text to cleaned)
+                recentContextLines.add(DialogueContextEntry(text, cleaned, now))
                 while (recentContextLines.size > 6) {
                     recentContextLines.pollFirst()
                 }
@@ -801,6 +826,11 @@ class TranslationManager(
             Log.e(TAG, "Error translating via AI API: ${e.message}", e)
             null
         }
+    }
+
+    suspend fun testCustomAiConnection(prompt: String): String? = withContext(Dispatchers.IO) {
+        translateViaOpenAi(prompt)
+    }
     }
 
     fun trimMemory() {

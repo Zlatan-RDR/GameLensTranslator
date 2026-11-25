@@ -39,4 +39,11 @@ class TranslationQualityPolisherTest {
         // Punctuation spacing
         assertEquals("مرحباً بك، كيف حالك؟", TranslationQualityPolisher.polishArabic("مرحباً بك ، كيف حالك ؟"))
     }
+
+    @Test
+    fun testFemininePronounAgreementAndNoParties() {
+        assertEquals("تلك القلادة. لا تفقدها", TranslationQualityPolisher.polishArabic("تلك القلادة. لا تفقده"))
+        assertEquals("تلك القلادة، لا تفقدها", TranslationQualityPolisher.polishArabic("تلك القلادة، لا تفقده"))
+        assertEquals("ممنوع الحفلات هنا", TranslationQualityPolisher.polishArabic("لا الحفلات هنا"))
+    }
 }

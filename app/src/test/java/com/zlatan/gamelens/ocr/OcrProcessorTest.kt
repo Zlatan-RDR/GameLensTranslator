@@ -28,4 +28,43 @@ class OcrProcessorTest {
         assertEquals("Press to enter", OcrTextCleaner.cleanMenuScanArtifacts("Press () to enter"))
         assertEquals("Normal menu text", OcrTextCleaner.cleanMenuScanArtifacts("Normal menu text"))
     }
+
+    @Test
+    fun testOcrPreNormalizerAndWordRepair() {
+        // Contractions and accent apostrophes
+        assertEquals("That's great", OcrTextCleaner.normalizeOcrArtifacts("That ´s great"))
+        assertEquals("you're right", OcrTextCleaner.normalizeOcrArtifacts("you ´re right"))
+        assertEquals("what's that", OcrTextCleaner.normalizeOcrArtifacts("what 's that"))
+
+        // Digit-for-letter substitution
+        assertEquals("Officer on duty", OcrTextCleaner.normalizeOcrArtifacts("0fficer on duty"))
+        assertEquals("Only you", OcrTextCleaner.normalizeOcrArtifacts("0nly you"))
+
+        // Stray HUD button prompts
+        assertEquals("Chicago SWAT Officer", OcrTextCleaner.normalizeOcrArtifacts("L Chicago SWAT Officer"))
+        assertEquals("Swap Knife", OcrTextCleaner.normalizeOcrArtifacts("L Swap Knife"))
+        assertEquals("I know.", OcrTextCleaner.normalizeOcrArtifacts("I know."))
+        assertEquals("A Personal Contract", OcrTextCleaner.normalizeOcrArtifacts("A Personal Contract"))
+
+        // Dotted stylized emphasis
+        assertEquals("Loving the suit!", OcrTextCleaner.normalizeOcrArtifacts("Lov.ing. the.suit!"))
+
+        // Glued and split tokens
+        assertEquals("I come in peace", OcrTextCleaner.normalizeOcrArtifacts("Icome in peace"))
+        assertEquals("the king of Chinatown", OcrTextCleaner.normalizeOcrArtifacts("theking ofchinatown"))
+        assertEquals("Controlled entry", OcrTextCleaner.normalizeOcrArtifacts("Control Led entry"))
+    }
+
+    @Test
+    fun testNoiseAndFragmentRejection() {
+        // Fragmented gibberish rejection
+        assertTrue(OcrTextCleaner.isFragmentedGibberish("ill ing view trolled Der"))
+        assertTrue(OcrTextCleaner.isNoiseOrPrompt("ill ing view trolled Der"))
+        assertFalse(OcrTextCleaner.isFragmentedGibberish("Good morning agent 47"))
+
+        // Logcat and self-capture rejection
+        assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("[12:34:56.789] D/GameLens: precision loop"))
+        assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("com.zlatan.gamelens.MainActivity"))
+        assertFalse(OcrTextCleaner.isLogcatOrSelfCaptureNoise("This is normal game dialogue"))
+    }
 }

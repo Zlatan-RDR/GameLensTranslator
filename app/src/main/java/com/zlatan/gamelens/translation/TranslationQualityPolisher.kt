@@ -8,8 +8,11 @@ package com.zlatan.gamelens.translation
 object TranslationQualityPolisher {
 
     // Fix Arabic typography spacing:
-    // Conjunction 'و' attached to following Arabic word: "و الرجل" -> "والرجل"
-    private val WAW_CONJUNCTION_REGEX = Regex("(?<=\\s|^)و\\s+([\u0621-\u064A\u0671-\u06D3])")
+    // Conjunction 'و' attached to following Arabic word: "و الرجل" -> "والرجل", "المعلومات و السرية" -> "المعلومات والسرية"
+    private val WAW_CONJUNCTION_REGEX = Regex("(^|[\\s،.؟!])و\\s+(?=[\\u0621-\\u064A\\u0671-\\u06D3])")
+
+    // Feminine-object pronoun agreement: "تلك القلادة. لا تفقده" -> "تلك القلادة. لا تفقدها"
+    private val FEMININE_OBJECT_PRONOUN_REGEX = Regex("(تلك\\s+[\\u0621-\\u064A]+[،.]\\s*لا\\s+[\\u0621-\\u064A]+)ه\\b")
 
     // Stray spaces before Arabic & standard punctuation: " ،" -> "،", " ." -> "."
     private val PUNCTUATION_SPACING_REGEX = Regex("\\s+([،.؟!؛:])")
@@ -35,7 +38,7 @@ object TranslationQualityPolisher {
     private val CHECKPOINTS_REGEX = Regex("(?i)\\bنقاط\\s+التفتيش\\b")
     private val CHECKPOINT_REGEX = Regex("(?i)\\bنقطة\\s+التفتيش\\b")
     private val EXTRACTION_POINT_REGEX = Regex("(?i)\\bنقطة\\s+الاستخراج\\b")
-    private val NO_PARTIES_REGEX = Regex("(?i)\\bلا\\s+أحزاب\\b")
+    private val NO_PARTIES_REGEX = Regex("(?i)\\b(لا\\s+أحزاب|لا\\s+الحفلات)\\b")
     private val PLAY_BALL_REGEX = Regex("(?i)\\bللعب\\s+الكرة\\b")
     private val CATCH_DRIFT_REGEX = Regex("(?i)\\bفهمت\\s+انجرافي\\b")
     private val EUROPEAN_RIDE_REGEX = Regex("(?i)\\bرحلة\\s+أوروبية\\b")
@@ -65,9 +68,10 @@ object TranslationQualityPolisher {
         s = EUROPEAN_RIDE_REGEX.replace(s, "سيارة أوروبية")
         s = LOCK_ON_REGEX.replace(s, "تحديد الهدف")
         s = PROMISE_ME_REGEX.replace(s, "عدني$1")
+        s = FEMININE_OBJECT_PRONOUN_REGEX.replace(s, "$1ها")
 
         // 2. Arabic Typography Spacing Normalization
-        s = WAW_CONJUNCTION_REGEX.replace(s, "و$1")
+        s = WAW_CONJUNCTION_REGEX.replace(s, "$1و")
         s = PUNCTUATION_SPACING_REGEX.replace(s, "$1")
         s = MULTIPLE_WHITESPACE_REGEX.replace(s, " ").trim()
 

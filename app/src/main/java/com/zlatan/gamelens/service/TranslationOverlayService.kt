@@ -157,6 +157,8 @@ class TranslationOverlayService : Service() {
     private val frameDiffEngine = FrameDiffEngine()
     private val fastPixelDiffGate = com.zlatan.gamelens.ocr.FastPixelDiffGate()
     private val ocrEngine = OcrEngine()
+    private val subtitleGeneration = java.util.concurrent.atomic.AtomicLong(0)
+    private var activeTranslationJob: Job? = null
     private var lastOcrTimestamp: Long = 0L
     private var lastDisplayedEnglishText: String = ""
     private var candidateEnglishText: String = ""
@@ -501,7 +503,7 @@ class TranslationOverlayService : Service() {
         captureJob?.cancel()
         captureJob = serviceScope.launch {
             Log.d(TAG, "Precision ROI OCR Pipeline active")
-            DiagnosticLogger.log("Precision ROI OCR loop started (150ms)")
+            DiagnosticLogger.log("Precision ROI OCR loop started (100ms)")
             while (isActive) {
                 val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
                 val isOpaqueCover = prefs.getString(MainActivity.KEY_OVERLAY_RENDER_MODE, MainActivity.MODE_OFFSET_ABOVE) == MainActivity.MODE_OPAQUE_COVER
@@ -512,7 +514,7 @@ class TranslationOverlayService : Service() {
                     Log.e(TAG, "Error in Pipeline: ${t.message}", t)
                     DiagnosticLogger.log("Pipeline error: ${t.javaClass.simpleName} - ${t.message}")
                 }
-                delay(150L)
+                delay(100L)
             }
         }
     }
@@ -545,7 +547,10 @@ class TranslationOverlayService : Service() {
 
         // 1. Auto-pause during rapid display resize transition or when GameLens is in the foreground
         val nowRealtime = android.os.SystemClock.elapsedRealtime()
-        if ((nowRealtime - lastResizeTimestampMs < 650L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
+        if ((nowRealtime - lastResizeTimestampMs < 650L) ||
+            com.zlatan.gamelens.MainActivity.AppForegroundState.isMainUiVisible.get() ||
+            com.zlatan.gamelens.MainActivity.isAppInForeground
+        ) {
             if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
@@ -655,8 +660,13 @@ class TranslationOverlayService : Service() {
         forceInstantPass = false
         lastOcrTimestamp = now
 
-        // 5. Stage 3: Dual-Pass OCR with Quality Scoring (Raw ROI vs MortFilter lum >= 155)
-        val rawLines = ocrEngine.recognizeRoi(croppedRoi)
+        // 5. Stage 3: Dual-Pass OCR with Adaptive Downscaling & Quality Scoring (Raw ROI vs MortFilter lum >= 155)
+        val ocrInput = com.zlatan.gamelens.ocr.OcrProcessor.downscaleRoiIfNeeded(croppedRoi)
+        if (ocrInput !== croppedRoi && !croppedRoi.isRecycled) {
+            croppedRoi.recycle()
+        }
+
+        val rawLines = ocrEngine.recognizeRoi(ocrInput)
         val rawText = rawLines.joinToString(" ")
         val rawScore = ocrEngine.scoreOcrQuality(rawText)
 
@@ -665,10 +675,12 @@ class TranslationOverlayService : Service() {
         var bestScore = rawScore
 
         if (rawLines.isEmpty() || rawScore < 0.80f) {
-            val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(croppedRoi)
+            val mortBitmap = com.zlatan.gamelens.ocr.MortFilter.filter(ocrInput)
             if (mortBitmap != null) {
-                val mortLines = ocrEngine.recognizeRoi(mortBitmap)
-                if (!mortBitmap.isRecycled) mortBitmap.recycle()
+                val scaledMort = com.zlatan.gamelens.ocr.OcrProcessor.downscaleRoiIfNeeded(mortBitmap)
+                if (scaledMort !== mortBitmap && !mortBitmap.isRecycled) mortBitmap.recycle()
+                val mortLines = ocrEngine.recognizeRoi(scaledMort)
+                if (!scaledMort.isRecycled) scaledMort.recycle()
                 if (mortLines.isNotEmpty()) {
                     val mortText = mortLines.joinToString(" ")
                     val mortScore = ocrEngine.scoreOcrQuality(mortText)
@@ -681,8 +693,8 @@ class TranslationOverlayService : Service() {
             }
         }
 
-        if (!croppedRoi.isRecycled) {
-            croppedRoi.recycle()
+        if (!ocrInput.isRecycled) {
+            ocrInput.recycle()
         }
 
         // Hard Quality Floor (0.55f): Unconditionally discard if bestScore < 0.55f (never queue for confirmation)
@@ -692,27 +704,7 @@ class TranslationOverlayService : Service() {
                 Log.d(TAG, dropMsg)
                 DiagnosticLogger.log(dropMsg)
             }
-            consecutiveEmptyRoiCount++
-            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
-            if (consecutiveEmptyRoiCount == 1) {
-                forceInstantPass = true
-                if (isSubtitleShowing) {
-                    serviceScope.launch {
-                        delay(100L)
-                        forceInstantPass = true
-                    }
-                }
-            }
-            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2) {
-                seamlessOverlayRenderer?.clear()
-                lastDisplayedEnglishText = ""
-                candidateEnglishText = ""
-                pendingStreamingText = ""
-                streamingStartTime = 0L
-                lastDisplayWasPatch = false
-                lastPatchEnglishText = ""
-                consecutiveEmptyRoiCount = 0
-            }
+            handleEmptyRoiDetection(isOpaqueCover)
             return
         }
 
@@ -736,28 +728,9 @@ class TranslationOverlayService : Service() {
                 Log.d(TAG, "OCR skipped [$dropReason]: \"$mergedRaw\"")
                 DiagnosticLogger.log("OCR skipped [$dropReason]: \"$mergedRaw\"")
             }
-            consecutiveEmptyRoiCount++
-            val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
-            if (consecutiveEmptyRoiCount == 1) {
-                forceInstantPass = true
-                if (isSubtitleShowing) {
-                    serviceScope.launch {
-                        delay(100L)
-                        forceInstantPass = true
-                    }
-                }
-            }
-            if (isSubtitleShowing && consecutiveEmptyRoiCount >= 2) {
-                seamlessOverlayRenderer?.clear()
-                lastDisplayedEnglishText = ""
-                candidateEnglishText = ""
-                pendingStreamingText = ""
-                streamingStartTime = 0L
-                lastDisplayWasPatch = false
-                lastPatchEnglishText = ""
-                consecutiveEmptyRoiCount = 0
-            }
+            handleEmptyRoiDetection(isOpaqueCover)
             return
+        }
         }
 
         // Subtitle detected: reset empty counter and update last visible timestamp
@@ -801,7 +774,8 @@ class TranslationOverlayService : Service() {
         // Clean-Superset Overwrite Guard & Delta-Aware Progressive Auto-Typewriter
         if (lastDisplayedEnglishText.isNotEmpty() && (now - lastSubtitleDisplayTimestamp < 6000L)) {
             val verdict = com.zlatan.gamelens.ocr.OcrEngine.classifySupersetExpansion(lastDisplayedEnglishText, mergedEnglish)
-            if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CREDIT_POLLUTION &&
+            val isFuzzyPolluted = com.zlatan.gamelens.ocr.OcrEngine.isPollutedFuzzySuperset(lastDisplayedEnglishText, mergedEnglish)
+            if ((verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CREDIT_POLLUTION || isFuzzyPolluted) &&
                 PatchManager.lookup(mergedEnglish) == null
             ) {
                 val dropMsg = "OCR skipped [credit-polluted-superset]: \"$mergedEnglish\" (polluted re-read of: \"$lastDisplayedEnglishText\")"
@@ -939,54 +913,114 @@ class TranslationOverlayService : Service() {
         val (finalW, finalH, _) = getRealScreenDimensions()
         val (finalCurW, finalCurH) = captureMgr.getDimensions()
         val finalRealtime = android.os.SystemClock.elapsedRealtime()
-        if ((finalRealtime - lastResizeTimestampMs < 650L) || com.zlatan.gamelens.MainActivity.isAppInForeground) {
+        if ((finalRealtime - lastResizeTimestampMs < 650L) ||
+            com.zlatan.gamelens.MainActivity.AppForegroundState.isMainUiVisible.get() ||
+            com.zlatan.gamelens.MainActivity.isAppInForeground
+        ) {
             return
         }
 
-        val rawArabic = if (patchMatch != null) {
-            patchMatch
-        } else {
-            val memMatch = translationManager.getFromMemoryCache(promptNormalized)
-            if (memMatch != null) {
-                memMatch
+        // Decoupled asynchronous translation with Generation Epoch
+        val capturedGen = subtitleGeneration.incrementAndGet()
+        activeTranslationJob?.cancel()
+        activeTranslationJob = serviceScope.launch {
+            val rawArabic = if (patchMatch != null) {
+                patchMatch
             } else {
-                withContext(Dispatchers.IO) {
-                    translationManager.translate(promptNormalized)
+                val memMatch = translationManager.getFromMemoryCache(promptNormalized)
+                if (memMatch != null) {
+                    memMatch
+                } else {
+                    withContext(Dispatchers.IO) {
+                        translationManager.translate(promptNormalized)
+                    }
                 }
             }
+
+            if (capturedGen != subtitleGeneration.get()) {
+                Log.d(TAG, "Translation dropped due to newer generation (gen=$capturedGen, curr=${subtitleGeneration.get()}): \"$promptNormalized\"")
+                return@launch
+            }
+
+            val arabicTranslation = if (patchMatch != null) rawArabic else translationManager.repairGluedArabicWords(rawArabic)
+
+            if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(promptNormalized.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
+                val dropMsg = "OCR skipped [empty-or-non-arabic]: \"$promptNormalized\" -> \"$arabicTranslation\""
+                Log.d(TAG, dropMsg)
+                DiagnosticLogger.log(dropMsg)
+                return@launch
+            }
+
+            withContext(Dispatchers.Main) {
+                if (capturedGen != subtitleGeneration.get()) return@withContext
+
+                lastDisplayedEnglishText = mergedEnglish
+                lastSubtitleDisplayTimestamp = android.os.SystemClock.uptimeMillis()
+                lastSubtitleVisibleOnScreenMs = android.os.SystemClock.uptimeMillis()
+                consecutiveEmptyRoiCount = 0
+                pendingStreamingText = ""
+                streamingStartTime = 0L
+
+                if (patchMatch != null) {
+                    lastPatchEnglishText = promptNormalized
+                    lastDisplayWasPatch = true
+                    lastPatchDisplayTimestamp = android.os.SystemClock.uptimeMillis()
+                } else {
+                    lastPatchEnglishText = ""
+                    lastDisplayWasPatch = false
+                    lastPatchDisplayTimestamp = 0L
+                }
+
+                // Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
+                seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)
+                pulseHeartbeat()
+                DiagnosticLogger.log("Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
+                Log.i(TAG, "Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
+            }
         }
+    }
 
-        val arabicTranslation = if (patchMatch != null) rawArabic else translationManager.repairGluedArabicWords(rawArabic)
+    private suspend fun handleEmptyRoiDetection(isOpaqueCover: Boolean) {
+        consecutiveEmptyRoiCount++
+        val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
+        if (isSubtitleShowing) {
+            if (consecutiveEmptyRoiCount == 1) {
+                // Cancel stale in-flight translation immediately
+                subtitleGeneration.incrementAndGet()
+                activeTranslationJob?.cancel()
 
-        if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(promptNormalized.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
-            val dropMsg = "OCR skipped [empty-or-non-arabic]: \"$promptNormalized\" -> \"$arabicTranslation\""
-            Log.d(TAG, dropMsg)
-            DiagnosticLogger.log(dropMsg)
-            return
+                delay(60L)
+                val verifyBmp = captureFrameForOcr(isOpaqueCover)
+                if (verifyBmp != null) {
+                    val scaledVerify = com.zlatan.gamelens.ocr.OcrProcessor.downscaleRoiIfNeeded(verifyBmp)
+                    val verifyLines = ocrEngine.recognizeRoi(scaledVerify)
+                    if (scaledVerify !== verifyBmp && !verifyBmp.isRecycled) verifyBmp.recycle()
+                    if (!scaledVerify.isRecycled) scaledVerify.recycle()
+
+                    val verifyClean = verifyLines.map { com.zlatan.gamelens.ocr.OcrTextCleaner.normalizeOcrArtifacts(it) }
+                        .filter { it.isNotBlank() && !com.zlatan.gamelens.ocr.OcrTextCleaner.isNoiseOrPrompt(it) }
+                    if (verifyClean.isEmpty()) {
+                        seamlessOverlayRenderer?.clear()
+                        lastDisplayedEnglishText = ""
+                        candidateEnglishText = ""
+                        pendingStreamingText = ""
+                        streamingStartTime = 0L
+                        lastDisplayWasPatch = false
+                        lastPatchEnglishText = ""
+                        consecutiveEmptyRoiCount = 0
+                    }
+                }
+            } else if (consecutiveEmptyRoiCount >= 2) {
+                seamlessOverlayRenderer?.clear()
+                lastDisplayedEnglishText = ""
+                candidateEnglishText = ""
+                pendingStreamingText = ""
+                streamingStartTime = 0L
+                lastDisplayWasPatch = false
+                lastPatchEnglishText = ""
+                consecutiveEmptyRoiCount = 0
+            }
         }
-
-        lastDisplayedEnglishText = mergedEnglish
-        lastSubtitleDisplayTimestamp = now
-        lastSubtitleVisibleOnScreenMs = now
-        consecutiveEmptyRoiCount = 0
-        pendingStreamingText = ""
-        streamingStartTime = 0L
-
-        if (patchMatch != null) {
-            lastPatchEnglishText = promptNormalized
-            lastDisplayWasPatch = true
-            lastPatchDisplayTimestamp = now
-        } else {
-            lastPatchEnglishText = ""
-            lastDisplayWasPatch = false
-            lastPatchDisplayTimestamp = 0L
-        }
-
-        // 8. Render onto the solid opaque bar with persisted font size and dynamic reading speed duration
-        seamlessOverlayRenderer?.renderSubtitle(arabicTranslation, promptNormalized)
-        pulseHeartbeat()
-        DiagnosticLogger.log("Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
-        Log.i(TAG, "Precision OCR [$filterSource]: \"$promptNormalized\" -> \"$arabicTranslation\"")
     }
 
     private fun normalizeForJitterGate(text: String): String {

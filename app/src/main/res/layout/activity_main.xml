@@ -291,6 +291,88 @@
                             android:orientation="vertical"
                             android:visibility="gone">
 
+                            <!-- One-Tap AI Provider Presets -->
+                            <TextView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:layout_marginBottom="4dp"
+                                android:text="إعدادات موفر الذكاء الاصطناعي الجاهزة (Presets):"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="11sp" />
+
+                            <HorizontalScrollView
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginBottom="8dp"
+                                android:scrollbars="none">
+
+                                <LinearLayout
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:orientation="horizontal">
+
+                                    <Button
+                                        android:id="@+id/btnPresetGemini"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:layout_marginEnd="4dp"
+                                        android:backgroundTint="#334155"
+                                        android:text="Gemini (مجاني)"
+                                        android:textColor="#34D399"
+                                        android:textSize="11sp"
+                                        android:paddingStart="10dp"
+                                        android:paddingEnd="10dp" />
+
+                                    <Button
+                                        android:id="@+id/btnPresetGroq"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:layout_marginEnd="4dp"
+                                        android:backgroundTint="#334155"
+                                        android:text="Groq (سريع)"
+                                        android:textColor="#38BDF8"
+                                        android:textSize="11sp"
+                                        android:paddingStart="10dp"
+                                        android:paddingEnd="10dp" />
+
+                                    <Button
+                                        android:id="@+id/btnPresetOpenAi"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:layout_marginEnd="4dp"
+                                        android:backgroundTint="#334155"
+                                        android:text="OpenAI"
+                                        android:textColor="#F8FAFC"
+                                        android:textSize="11sp"
+                                        android:paddingStart="10dp"
+                                        android:paddingEnd="10dp" />
+
+                                    <Button
+                                        android:id="@+id/btnPresetClaude"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:layout_marginEnd="4dp"
+                                        android:backgroundTint="#334155"
+                                        android:text="Claude"
+                                        android:textColor="#FBBF24"
+                                        android:textSize="11sp"
+                                        android:paddingStart="10dp"
+                                        android:paddingEnd="10dp" />
+
+                                    <Button
+                                        android:id="@+id/btnPresetLocal"
+                                        android:layout_width="wrap_content"
+                                        android:layout_height="36dp"
+                                        android:backgroundTint="#334155"
+                                        android:text="محلي (Local)"
+                                        android:textColor="#A78BFA"
+                                        android:textSize="11sp"
+                                        android:paddingStart="10dp"
+                                        android:paddingEnd="10dp" />
+                                </LinearLayout>
+                            </HorizontalScrollView>
+
                             <!-- Custom Base URL -->
                             <EditText
                                 android:id="@+id/etApiEndpoint"
@@ -334,6 +416,26 @@
                                 android:inputType="text"
                                 android:paddingStart="12dp"
                                 android:paddingEnd="12dp" />
+
+                            <!-- Live Connection Test -->
+                            <Button
+                                android:id="@+id/btnTestApi"
+                                android:layout_width="match_parent"
+                                android:layout_height="40dp"
+                                android:layout_marginTop="6dp"
+                                android:backgroundTint="#059669"
+                                android:text="اختبار الاتصال (Test API)"
+                                android:textColor="#FFFFFF"
+                                android:textSize="12sp" />
+
+                            <TextView
+                                android:id="@+id/tvTestApiResult"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="4dp"
+                                android:textColor="#34D399"
+                                android:textSize="12sp"
+                                android:visibility="gone" />
 
                             <com.google.android.material.switchmaterial.SwitchMaterial
                                 android:id="@+id/switchOnlineEnhanced"

@@ -309,6 +309,41 @@ class OcrEngine {
         }
 
         /**
+         * Normalized ordered word-containment superset protection.
+         * If >= 75% of words of oldText appear in newText and extra tokens contain credit/HUD noise,
+         * reject the noisier superset.
+         */
+        fun isPollutedFuzzySuperset(oldText: String, newText: String): Boolean {
+            val oldWords = oldText.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+            val newWords = newText.lowercase(java.util.Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+            if (oldWords.size < 2 || newWords.size <= oldWords.size) return false
+
+            var matchCount = 0
+            var searchIdx = 0
+            for (ow in oldWords) {
+                val found = (searchIdx until newWords.size).firstOrNull { idx ->
+                    val nw = newWords[idx]
+                    nw == ow || (ow.length >= 4 && nw.length >= 4 && (ow.startsWith(nw) || nw.startsWith(ow)))
+                }
+                if (found != null) {
+                    matchCount++
+                    searchIdx = found + 1
+                }
+            }
+            val recall = matchCount.toFloat() / oldWords.size.toFloat()
+            if (recall >= 0.75f) {
+                val extraWords = newWords.filter { !oldWords.contains(it) }
+                if (extraWords.isNotEmpty()) {
+                    val extraStr = extraWords.joinToString(" ")
+                    if (isCreditOrTitleLine(extraStr) || scoreOcrQuality(newText) < 0.72f || extraWords.any { it.length <= 2 }) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        /**
          * Rejects gibberish strings and HUD noise by requiring at least 60% of tokens to have
          * valid English vowel/consonant letter patterns (>= 3 letters) or known short English words.
          */
@@ -718,15 +753,44 @@ class OcrEngine {
                             !OcrTextCleaner.isDiacriticSelfOcrGarble(text)
                         }
 
+                    // Geometric Subtitle Band Clustering: filter out lines deviating >45% from dominant line height or short edge fragments
+                    val geometricallyFilteredClusters = if (filteredClusters.size <= 1) {
+                        filteredClusters
+                    } else {
+                        val dominantCluster = filteredClusters.maxByOrNull { c ->
+                            val words = c.text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }.size
+                            words * 1000 + (c.right - c.left)
+                        } ?: filteredClusters.first()
+
+                        val dominantHeight = (dominantCluster.bottom - dominantCluster.top).coerceAtLeast(1).toFloat()
+
+                        filteredClusters.filter { cluster ->
+                            if (cluster === dominantCluster) return@filter true
+
+                            val h = (cluster.bottom - cluster.top).coerceAtLeast(1).toFloat()
+                            val deviation = kotlin.math.abs(h - dominantHeight) / dominantHeight
+                            if (deviation > 0.45f) return@filter false
+
+                            val tokens = cluster.text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
+                            if (tokens.size <= 2 && !cluster.isCentered && dominantCluster.isCentered) {
+                                val verticalGap = kotlin.math.abs(cluster.centerY - dominantCluster.centerY)
+                                if (verticalGap > dominantHeight * 0.75f) {
+                                    return@filter false
+                                }
+                            }
+                            true
+                        }
+                    }
+
                     // Sort detected OCR lines strictly by line-center Y buckets (rowThreshold = medianLineHeight * 0.55f),
                     // then left-to-right by boundingBox.left inside each row bucket, so a fragment from Line 2 can NEVER jump into Line 1.
                     val sortedClusters = run {
-                        if (filteredClusters.isEmpty()) return@run emptyList<ElementCluster>()
-                        val heights = filteredClusters.map { (it.bottom - it.top).coerceAtLeast(1) }.sorted()
+                        if (geometricallyFilteredClusters.isEmpty()) return@run emptyList<ElementCluster>()
+                        val heights = geometricallyFilteredClusters.map { (it.bottom - it.top).coerceAtLeast(1) }.sorted()
                         val medianLineHeight = heights[heights.size / 2].toFloat().coerceAtLeast(12f)
                         val rowThreshold = medianLineHeight * 0.55f
 
-                        val sortedByCenterY = filteredClusters.sortedBy { it.centerY }
+                        val sortedByCenterY = geometricallyFilteredClusters.sortedBy { it.centerY }
                         val rows = mutableListOf<MutableList<ElementCluster>>()
                         for (cluster in sortedByCenterY) {
                             val matchingRow = rows.firstOrNull { row ->

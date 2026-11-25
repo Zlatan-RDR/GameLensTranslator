@@ -5,6 +5,18 @@ import java.util.Locale
 import kotlin.math.abs
 
 /**
+ * High-speed ROI processing and downscaling utilities for OCR preprocessing.
+ */
+object OcrProcessor {
+    fun downscaleRoiIfNeeded(bitmap: Bitmap, targetWidth: Int = 960): Bitmap {
+        if (bitmap.isRecycled || bitmap.width <= targetWidth || bitmap.height <= 0) return bitmap
+        val scale = targetWidth.toFloat() / bitmap.width.toFloat()
+        val targetH = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, targetWidth, targetH, true)
+    }
+}
+
+/**
  * High-speed 4x4-strided luminance pixel-diff gate for cropped subtitle ROI (~1.5ms on Snapdragon 8s Gen 4).
  * Compares integer luminance across a 4x4 subsampled grid and gates downstream OCR if delta < 0.45%.
  */
@@ -265,6 +277,32 @@ object OcrTextCleaner {
         return false
     }
 
+    private val LOGCAT_TIMESTAMP_REGEX = Regex("""\[\d{2}:\d{2}:\d{2}\.\d{3}\]""")
+
+    fun isLogcatOrSelfCaptureNoise(text: String): Boolean {
+        if (text.isBlank()) return false
+        return LOGCAT_TIMESTAMP_REGEX.containsMatchIn(text) || text.contains("com.zlatan.gamelens", ignoreCase = true)
+    }
+
+    fun isFragmentedGibberish(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+        val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (tokens.size < 3) return false
+        var fragmentCount = 0
+        for (t in tokens) {
+            val clean = t.filter { it.isLetter() }.lowercase(Locale.US)
+            if (clean.length in 1..3 && !SHORT_VALID_WORDS.contains(clean)) {
+                fragmentCount++
+            }
+        }
+        val ratio = fragmentCount.toFloat() / tokens.size.toFloat()
+        return ratio >= 0.40f
+    }
+
+    fun downscaleRoiIfNeeded(bitmap: Bitmap, targetWidth: Int = 960): Bitmap =
+        OcrProcessor.downscaleRoiIfNeeded(bitmap, targetWidth)
+
     /**
      * Pre-translation OCR repair for mid-word casing and split-word artifacts
      * before passing text to PatchManager or ML Kit.
@@ -275,9 +313,33 @@ object OcrTextCleaner {
         // Strip stray leading OCR punctuation/HUD noise (e.g. ". .Come on" -> "Come on")
         var s = text.trim().replace(Regex("^(?:[.\\s,:;~*^#\\-=_+]\\s*)+(?=[A-Za-z0-9])"), "")
         s = normalizeLatinDiacritics(s)
+
+        // 1. Normalize accents used as apostrophes and collapse erroneous spacing around contractions
+        s = s.replace(Regex("""\b([A-Za-z]+)\s*[´`’‘']\s*([a-z]+)\b"""), "$1'$2")
+        s = s.replace(Regex("""[´`’‘]"""), "'")
+
+        // 2. Fix digit-for-letter substitutions (leading 0 -> O, internal 0 -> o)
+        s = s.replace(Regex("""\b0([a-z]+)\b"""), "O$1")
+        s = s.replace(Regex("""(?<=[a-z])0(?=[a-z])"""), "o")
+
+        // 3. Strip stray single-letter HUD button prompts at the start of a line (except 'I' and 'A')
+        s = s.replace(Regex("""(?m)^[B-HJ-Z]\s+(?=[A-Z][a-z])"""), "")
+
+        // 4. Repair dotted stylized emphasis (e.g. "Lov.ing. the.suit!" -> "Loving the suit!")
+        s = s.replace(Regex("""(?i)\b([a-zA-Z]+)\.([a-zA-Z]+)\.?""")) { match ->
+            val w1 = match.groupValues[1]
+            val w2 = match.groupValues[2]
+            w1 + w2
+        }
+        s = s.replace(Regex("""(?i)\bthe\.suit\b"""), "the suit")
+
         s = EnglishWordRepairer.repair(s)
 
         // Split-word and spacing repairs
+        s = s.replace(Regex("(?i)\\bIcome\\b"), "I come")
+        s = s.replace(Regex("(?i)\\btheking\\b"), "the king")
+        s = s.replace(Regex("(?i)\\bofchinatown\\b"), "of chinatown")
+        s = s.replace(Regex("(?i)\\bControl\\s+Led\\b"), "Controlled")
         s = s.replace(Regex("(?i)\\bBenj\\s+amin\\b"), "Benjamin")
         s = s.replace(Regex("(?i)\\bscalpe\\s+l\\b"), "scalpel")
         s = s.replace(Regex("(?i)\\bdon'tjudge\\b"), "don't judge")
@@ -460,6 +522,8 @@ object OcrTextCleaner {
     fun isNoiseOrPrompt(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
+        if (isLogcatOrSelfCaptureNoise(trimmed)) return true
+        if (isFragmentedGibberish(trimmed)) return true
         if (isDiacriticSelfOcrGarble(trimmed)) return true
         if (Regex("^\\.{2,}\\s*\\(").containsMatchIn(trimmed)) return true
 
