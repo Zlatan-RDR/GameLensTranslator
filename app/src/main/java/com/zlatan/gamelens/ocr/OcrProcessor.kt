@@ -14,6 +14,18 @@ object OcrProcessor {
         val targetH = (bitmap.height * scale).toInt().coerceAtLeast(1)
         return Bitmap.createScaledBitmap(bitmap, targetWidth, targetH, true)
     }
+
+    fun scrubInlineDossierArtifacts(text: String): String =
+        OcrTextCleaner.scrubInlineDossierArtifacts(text)
+
+    fun isCleanSubsetUpgrade(newText: String, lastLockedText: String): Boolean =
+        OcrTextCleaner.isCleanSubsetUpgrade(newText, lastLockedText)
+
+    fun isCleanSupersetUpgrade(newText: String, lastLockedText: String): Boolean =
+        OcrTextCleaner.isCleanSupersetUpgrade(newText, lastLockedText)
+
+    fun isNoiseOrPrompt(text: String): Boolean =
+        OcrTextCleaner.isNoiseOrPrompt(text)
 }
 
 /**
@@ -21,7 +33,7 @@ object OcrProcessor {
  * Compares integer luminance across a 4x4 subsampled grid and gates downstream OCR if delta < 0.45%.
  */
 class FastPixelDiffGate(
-    private val stride: Int = 4,
+    private val stride: Int = 8,
     private val diffThresholdPercent: Float = 0.0045f // 0.45% delta (lowered from 2.5% to detect short 2-3 word subtitles)
 ) {
     private var lastLuminanceSamples: ByteArray? = null
@@ -533,6 +545,96 @@ object OcrTextCleaner {
         return false
     }
 
+    /**
+     * Strips broken OCR dossier fragments (e.g. "Ganma (condtetra eft 130 ") at the start or end of text.
+     */
+    fun scrubInlineDossierArtifacts(text: String): String {
+        if (text.isBlank()) return text
+        var s = text.trim()
+        s = s.replace(Regex("""(?i)^(?:\b(?:Ganma|Gamma|Rank|Hair|Nationality)\b\s*)?\(?\b(?:cond|eff|condtetra|eft)\w*\b(?:\s+\b(?:eft|eff|cond)\w*\b)*\s*\d+\)?\s*"""), "")
+        s = s.replace(Regex("""(?i)\s*\(?\b(?:cond|eff|condtetra|eft)\w*\b(?:\s+\b(?:eft|eff|cond)\w*\b)*\s*\d+\)?$"""), "")
+        return s.trim()
+    }
+
+    /**
+     * Inspects removed tokens when newText is a shorter subset of lastLockedText.
+     * Allows upgrade if >= 50% of removed tokens are non-dictionary garbage/codes/metadata.
+     */
+    fun isCleanSubsetUpgrade(newText: String, lastLockedText: String): Boolean {
+        val n = newText.trim().lowercase(Locale.US)
+        val l = lastLockedText.trim().lowercase(Locale.US)
+        if (n.isEmpty() || l.isEmpty() || n == l || n.length >= l.length) return false
+
+        val newWords = n.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val lockedWords = l.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (newWords.isEmpty() || lockedWords.isEmpty()) return false
+
+        val lockedSet = lockedWords.toSet()
+        val overlap = newWords.count { lockedSet.contains(it) }.toFloat() / newWords.size.toFloat()
+        if (overlap < 0.75f && !l.contains(n)) return false
+
+        val newSet = newWords.toSet()
+        val removedTokens = lockedWords.filter { !newSet.contains(it) }
+        if (removedTokens.isEmpty()) return false
+
+        val garbageCount = removedTokens.count { token ->
+            val clean = token.filter { it.isLetter() }
+            clean.isEmpty() || (!SHORT_VALID_WORDS.contains(clean) && !EnglishWordRepairer.isWord(clean))
+        }
+
+        val garbageRatio = garbageCount.toFloat() / removedTokens.size.toFloat()
+        return garbageRatio >= 0.50f
+    }
+
+    /**
+     * Inspects added tokens when newText is longer than lastLockedText.
+     * Allows upgrade if added tokens contain >= 2 valid dictionary words with >= 75% dict ratio,
+     * zero ALL-CAPS metadata tokens, and no code/date patterns.
+     */
+    fun isCleanSupersetUpgrade(newText: String, lastLockedText: String): Boolean {
+        val n = newText.trim()
+        val l = lastLockedText.trim()
+        if (n.isEmpty() || l.isEmpty() || n.equals(l, ignoreCase = true) || n.length <= l.length) return false
+
+        val nLower = n.lowercase(Locale.US)
+        val lLower = l.lowercase(Locale.US)
+
+        val newTokensRaw = n.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val lockedTokensLower = lLower.split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
+        if (newTokensRaw.isEmpty() || lockedTokensLower.isEmpty()) return false
+
+        val newTokensLower = newTokensRaw.map { it.lowercase(Locale.US) }
+        val containedLockedCount = lockedTokensLower.count { newTokensLower.contains(it) }
+        val lockedRecall = containedLockedCount.toFloat() / lockedTokensLower.size.toFloat()
+        if (lockedRecall < 0.75f && !nLower.contains(lLower)) return false
+
+        val addedTokens = newTokensRaw.filter { !lockedTokensLower.contains(it.lowercase(Locale.US)) }
+        if (addedTokens.size < 2) return false
+
+        // Check for ALL-CAPS metadata tokens (len >= 4, e.g. HAIR, RANK, GAMMA, ATIONALITY)
+        val hasAllCapsMetadata = addedTokens.any { token ->
+            val clean = token.filter { it.isLetter() }
+            clean.length >= 4 && clean == clean.uppercase(Locale.US) && !SHORT_VALID_WORDS.contains(clean.lowercase(Locale.US))
+        }
+        if (hasAllCapsMetadata) return false
+
+        // Check for code/date patterns (e.g. 1306, cond, eff)
+        val hasCodeOrDate = addedTokens.any { token ->
+            val clean = token.lowercase(Locale.US)
+            Regex("""\d{3,}""").containsMatchIn(clean) || clean.startsWith("cond") || clean.startsWith("eff")
+        }
+        if (hasCodeOrDate) return false
+
+        // Count valid English dictionary words
+        val validDictCount = addedTokens.count { token ->
+            val clean = token.filter { it.isLetter() }.lowercase(Locale.US)
+            clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
+        }
+
+        val dictRatio = validDictCount.toFloat() / addedTokens.size.toFloat()
+        return validDictCount >= 2 && dictRatio >= 0.75f
+    }
+
     fun isNoiseOrPrompt(text: String): Boolean {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return true
@@ -564,9 +666,31 @@ object OcrTextCleaner {
         // Digits / score / counters like "12/30", "100", "5-2"
         if (STANDALONE_COUNTER_REGEX.matches(trimmed)) return true
 
-        // Reject single-word non-patch strings whose stripped alphabetic core is <= 4 chars or matches HUD action stems
+        // Drop broken dangling-preposition gibberish: reject <= 2-word strings ending with preposition and containing non-dict word
+        val DANGLING_PREPOSITIONS = setOf("with", "to", "for", "of", "from", "into", "at")
+        if (tokens.size in 1..2) {
+            val lastTokenClean = tokens.last().filter { it.isLetter() }.lowercase(Locale.US)
+            if (DANGLING_PREPOSITIONS.contains(lastTokenClean)) {
+                val hasNonDictWord = tokens.any { t ->
+                    val c = t.filter { it.isLetter() }.lowercase(Locale.US)
+                    c.isNotEmpty() && !SHORT_VALID_WORDS.contains(c) && !EnglishWordRepairer.isWord(c)
+                }
+                if (hasNonDictWord && com.zlatan.gamelens.patch.PatchManager.lookup(trimmed) == null) {
+                    return true
+                }
+            }
+        }
+
+        // Single-word check: allow punctuated dictionary single-word dialogue (e.g. "hello?", "wait!", "what?", "run!")
         if (tokens.size == 1) {
             val coreLetters = tokens[0].filter { it.isLetter() }.lowercase(Locale.US)
+            val hasDialoguePunct = trimmed.endsWith("?") || trimmed.endsWith("!")
+            val isDictWord = coreLetters.isNotEmpty() && (SHORT_VALID_WORDS.contains(coreLetters) || EnglishWordRepairer.isWord(coreLetters))
+
+            if (hasDialoguePunct && isDictWord && !HUD_ACTION_STEMS.contains(coreLetters)) {
+                return false
+            }
+
             val isShortOrHud = coreLetters.length <= 4 || HUD_ACTION_STEMS.contains(coreLetters)
             if (isShortOrHud && com.zlatan.gamelens.patch.PatchManager.lookup(trimmed) == null) {
                 return true

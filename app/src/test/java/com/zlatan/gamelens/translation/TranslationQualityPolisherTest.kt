@@ -35,10 +35,19 @@ class TranslationQualityPolisherTest {
         assertEquals("والسماء والطارق", TranslationQualityPolisher.polishArabic("و السماء و الطارق"))
         assertEquals("ذهب أحمد ومحمد", TranslationQualityPolisher.polishArabic("ذهب أحمد و محمد"))
         assertEquals("المعلومات والسرية", TranslationQualityPolisher.polishArabic("المعلومات و السرية"))
+        assertEquals("خطوط الاتصال والعملاء", TranslationQualityPolisher.polishArabic("خطوط الاتصال و العملاء"))
         assertEquals("وكالة. لقد قدمت المعلومات والسرية. وبعت الكمال.", TranslationQualityPolisher.polishArabic("وكالة. لقد قدمت المعلومات و السرية. وبعت الكمال."))
 
         // Punctuation spacing
         assertEquals("مرحباً بك، كيف حالك؟", TranslationQualityPolisher.polishArabic("مرحباً بك ، كيف حالك ؟"))
+    }
+
+    @Test
+    fun testFemaleGlossaryAgreement() {
+        val females = setOf("Victoria", "فيكتوريا")
+        val input = "أوه، يجب أن تكون فيكتوريا. ادخل يا طفل."
+        val expected = "أوه، يجب أن تكوني فيكتوريا. ادخلي يا طفلتي."
+        assertEquals(expected, TranslationQualityPolisher.polishArabic(input, femaleNames = females, sourceEnglishText = "Oh, you must be Victoria. Come in, kid."))
     }
 
     @Test

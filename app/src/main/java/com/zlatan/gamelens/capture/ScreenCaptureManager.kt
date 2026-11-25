@@ -50,6 +50,11 @@ class ScreenCaptureManager(
     private var hasLoggedGeomAfterRebind: Boolean = false
     private var lastRebindReason: String = "init"
 
+    private var reusableRoiBuffer: ByteBuffer? = null
+    private var reusableRoiBitmap: Bitmap? = null
+    private var lastRoiW: Int = 0
+    private var lastRoiH: Int = 0
+
     @Volatile
     private var isReleased: Boolean = false
     private var suppressResizeCallbackUntilMs: Long = 0L
@@ -375,19 +380,65 @@ class ScreenCaptureManager(
             }
 
             val rowBytes = cropW * pixelStride
-            val dest = ByteArray(rowBytes * cropH)
+            val roiBitmap: Bitmap = if (pixelStride == 4) {
+                try {
+                    val requiredBytes = rowBytes * cropH
+                    var buf = reusableRoiBuffer
+                    if (buf == null || buf.capacity() < requiredBytes) {
+                        buf = ByteBuffer.allocateDirect(requiredBytes)
+                        reusableRoiBuffer = buf
+                    }
+                    buf.clear()
 
-            for (row in 0 until cropH) {
-                val srcOffset = (cropTop + row) * rowStride + cropLeft * pixelStride
-                if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) {
-                    break
+                    val oldLimit = buffer.limit()
+                    for (row in 0 until cropH) {
+                        val srcOffset = (cropTop + row) * rowStride + cropLeft * 4
+                        if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) {
+                            break
+                        }
+                        buffer.position(srcOffset)
+                        buffer.limit(srcOffset + rowBytes)
+                        buf.put(buffer)
+                    }
+                    buffer.limit(oldLimit)
+                    buf.flip()
+
+                    var bmp = reusableRoiBitmap
+                    if (bmp == null || bmp.isRecycled || lastRoiW != cropW || lastRoiH != cropH) {
+                        bmp?.recycle()
+                        bmp = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
+                        reusableRoiBitmap = bmp
+                        lastRoiW = cropW
+                        lastRoiH = cropH
+                    }
+                    bmp.copyPixelsFromBuffer(buf)
+                    bmp
+                } catch (fallbackEx: Throwable) {
+                    // Safe fallback to original copy path if direct buffer transfer fails
+                    val dest = ByteArray(rowBytes * cropH)
+                    for (row in 0 until cropH) {
+                        val srcOffset = (cropTop + row) * rowStride + cropLeft * pixelStride
+                        if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) break
+                        buffer.position(srcOffset)
+                        buffer.get(dest, row * rowBytes, rowBytes)
+                    }
+                    val fbBmp = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
+                    fbBmp.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
+                    fbBmp
                 }
-                buffer.position(srcOffset)
-                buffer.get(dest, row * rowBytes, rowBytes)
+            } else {
+                // Non-4 pixelStride fallback
+                val dest = ByteArray(rowBytes * cropH)
+                for (row in 0 until cropH) {
+                    val srcOffset = (cropTop + row) * rowStride + cropLeft * pixelStride
+                    if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) break
+                    buffer.position(srcOffset)
+                    buffer.get(dest, row * rowBytes, rowBytes)
+                }
+                val fbBmp = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
+                fbBmp.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
+                fbBmp
             }
-
-            val roiBitmap = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
-            roiBitmap.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
 
             if (!hasLoggedRoiSuccess) {
                 hasLoggedRoiSuccess = true
@@ -622,8 +673,13 @@ class ScreenCaptureManager(
                 lastCapturedFullScreenBitmap?.let {
                     if (!it.isRecycled) it.recycle()
                 }
+                reusableRoiBitmap?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
             } catch (_: Throwable) {}
             lastCapturedFullScreenBitmap = null
+            reusableRoiBitmap = null
+            reusableRoiBuffer = null
             Log.d(TAG, "VirtualDisplay and ImageReader released successfully")
             DiagnosticLogger.log("Capture manager released")
         } catch (t: Throwable) {

@@ -83,7 +83,10 @@ class EnglishWordRepairerTest {
             "agent 47!s" to "agent 47's",
             "Put thison the table" to "Put this on the table",
             "Try Turningon the radio" to "Try Turning on the radio",
-            "They saw thewitnesses outside" to "They saw the witnesses outside"
+            "They saw thewitnesses outside" to "They saw the witnesses outside",
+            "youlistening? Sweet." to "you listening? Sweet.",
+            "himsellf" to "himself",
+            "He saw himsellf in the mirror" to "He saw himself in the mirror"
         )
 
         for ((input, expected) in cases) {

@@ -76,6 +76,20 @@ object GameGlossaryManager {
     }
 
     /**
+     * Extracts all female character names (English terms and Arabic targets) for targeted gender agreement.
+     */
+    fun getFemaleNames(entries: List<GlossaryEntry>): Set<String> {
+        val result = mutableSetOf<String>()
+        for (entry in entries) {
+            if (entry.gender == Gender.FEMININE) {
+                if (entry.term.isNotBlank()) result.add(entry.term.trim())
+                if (entry.target.isNotBlank()) result.add(entry.target.trim())
+            }
+        }
+        return result
+    }
+
+    /**
      * Protects glossary terms before sending to Machine Translation engines (Google Free / ML Kit)
      * by replacing them with numeric placeholders [9001], [9002], etc.
      * Sorts terms longest first to ensure multi-word phrases match before substrings.

@@ -22,6 +22,7 @@ import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -30,6 +31,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -227,6 +229,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -1094,7 +1097,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             val options = arrayOf("JSON Patch (تعديل اللعبة والمشاركة)", "SRT Subtitles (ملف ترجمة مرئي)")
-            AlertDialog.Builder(this)
+            val dialog = AlertDialog.Builder(this)
                 .setTitle("تصدير الحوارات المسجلة")
                 .setItems(options) { _, which ->
                     val format = if (which == 0) SubtitleHistoryManager.ExportFormat.JSON else SubtitleHistoryManager.ExportFormat.SRT
@@ -1106,7 +1109,9 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 .setNegativeButton("إلغاء", null)
-                .show()
+                .create()
+            styleDarkDialog(dialog)
+            dialog.show()
         }
     }
 
@@ -1133,6 +1138,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun styleDarkDialog(dialog: AlertDialog) {
+        val bg = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.parseColor("#1E293B"))
+            cornerRadius = 24f
+        }
+        dialog.window?.setBackgroundDrawable(bg)
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.parseColor("#34D399"))
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Color.parseColor("#CBD5E1"))
+            dialog.findViewById<TextView>(android.R.id.title)?.setTextColor(Color.parseColor("#F8FAFC"))
+            dialog.findViewById<TextView>(android.R.id.message)?.setTextColor(Color.parseColor("#E2E8F0"))
+        }
+    }
+
     private fun showUpdateDialog(release: ReleaseInfo) {
         val sizeMb = release.apkSizeBytes / (1024.0 * 1024.0)
         val cleanNotes = AppUpdateManager.cleanReleaseNotes(release.releaseNotes)
@@ -1143,13 +1162,16 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("لاحقاً", null)
             .create()
 
+        styleDarkDialog(dialog)
         dialog.setOnShowListener {
             val positiveBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             val negativeBtn = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
-            positiveBtn.setTextColor(Color.parseColor("#34D399"))
-            negativeBtn.setTextColor(Color.parseColor("#CBD5E1"))
+            positiveBtn?.setTextColor(Color.parseColor("#34D399"))
+            negativeBtn?.setTextColor(Color.parseColor("#CBD5E1"))
+            dialog.findViewById<TextView>(android.R.id.title)?.setTextColor(Color.parseColor("#F8FAFC"))
+            dialog.findViewById<TextView>(android.R.id.message)?.setTextColor(Color.parseColor("#E2E8F0"))
 
-            positiveBtn.setOnClickListener {
+            positiveBtn?.setOnClickListener {
                 positiveBtn.isEnabled = false
                 dialog.setMessage("جاري تنزيل التحديث (%s)... يرجى الانتظار.".format(release.tagName))
 
@@ -1227,10 +1249,24 @@ class MainActivity : AppCompatActivity() {
         binding.btnSaveNewProfile.setOnClickListener {
             val input = EditText(this).apply {
                 hint = getString(R.string.dialog_new_profile_hint)
+                setTextColor(Color.WHITE)
+                setHintTextColor(Color.parseColor("#94A3B8"))
+                val border = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(Color.parseColor("#0F172A"))
+                    setStroke(2, Color.parseColor("#334155"))
+                    cornerRadius = 16f
+                }
+                background = border
+                setPadding(32, 24, 32, 24)
+            }
+            val container = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(32, 16, 32, 8)
+                addView(input)
             }
             val dialog = AlertDialog.Builder(this)
                 .setTitle(R.string.dialog_new_profile_title)
-                .setView(input)
+                .setView(container)
                 .setPositiveButton(R.string.btn_create) { _, _ ->
                     val name = input.text.toString().trim()
                     if (name.isNotEmpty()) {
@@ -1264,9 +1300,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 .setNegativeButton(R.string.btn_cancel, null)
                 .create()
+            styleDarkDialog(dialog)
             dialog.show()
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.parseColor("#34D399"))
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Color.parseColor("#CBD5E1"))
         }
 
         binding.btnDeleteProfile.setOnClickListener {
@@ -1276,7 +1311,7 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
             val curProfile = GameProfileManager.getActiveProfile(this)
-            AlertDialog.Builder(this)
+            val dialog = AlertDialog.Builder(this)
                 .setTitle("تأكيد الحذف")
                 .setMessage("هل تريد بالتأكيد حذف ملف تعريف: ${curProfile.name}؟")
                 .setPositiveButton("حذف") { _, _ ->
@@ -1286,12 +1321,19 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this, "تم حذف الملف بنجاح", Toast.LENGTH_SHORT).show()
                 }
                 .setNegativeButton("إلغاء", null)
-                .show()
+                .create()
+            styleDarkDialog(dialog)
+            dialog.show()
         }
     }
 
     private fun showGlossaryDialog() {
         val active = GameProfileManager.getActiveProfile(this)
+        val border = android.graphics.drawable.GradientDrawable().apply {
+            setColor(Color.parseColor("#0F172A"))
+            setStroke(2, Color.parseColor("#334155"))
+            cornerRadius = 16f
+        }
         val input = EditText(this).apply {
             hint = "أدخل المصطلحات واسم الشخصية وسياق الجنس (سطر لكل مصطلح):\nVictoria = فيكتوريا [أنثى]\nAgent 47 = العميل 47 [ذكر]\nDiana = ديانا [أنثى]"
             setText(active.glossaryText)
@@ -1299,12 +1341,25 @@ class MainActivity : AppCompatActivity() {
             setHintTextColor(Color.parseColor("#94A3B8"))
             minLines = 6
             gravity = Gravity.TOP or Gravity.START
-            setBackgroundColor(Color.parseColor("#1E293B"))
+            background = border
             setPadding(32, 32, 32, 32)
         }
 
-        val scroll = ScrollView(this).apply {
+        val caption = TextView(this).apply {
+            text = "ملاحظة: وسوم [أنثى]/[ذكر] تفعل التأنيث التلقائي الكامل مع محرك الذكاء الاصطناعي (مثل Gemini المجاني) وتصحح الجمل المذكور فيها الاسم على المحرك المجاني."
+            setTextColor(Color.parseColor("#94A3B8"))
+            textSize = 12f
+            setPadding(8, 12, 8, 4)
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             addView(input)
+            addView(caption)
+        }
+
+        val scroll = ScrollView(this).apply {
+            addView(container)
             setPadding(24, 16, 24, 16)
         }
 
@@ -1320,9 +1375,8 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("إلغاء", null)
             .create()
 
+        styleDarkDialog(dialog)
         dialog.show()
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.parseColor("#34D399"))
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Color.parseColor("#CBD5E1"))
     }
 
     private fun openHyperOsPermissionSettings() {

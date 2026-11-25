@@ -215,6 +215,13 @@ object EnglishWordRepairer {
 
             val lower = core.lowercase(Locale.US)
 
+            // Double-letter collapse repair: e.g. "himsellf" -> "himself" (for len >= 5 words where collapsing 1 doubled letter yields valid dict word)
+            val doubleLetterRepaired = repairDoubleLetterTypo(core)
+            if (doubleLetterRepaired != core) {
+                finalTokens.add(p.leadingPunct + doubleLetterRepaired + p.trailingPunct)
+                continue
+            }
+
             // If word already in dictionary: check Pass C (stray mixed-case) and keep
             if (dictionaryMap.containsKey(lower)) {
                 var cleanedCore = core
@@ -386,6 +393,34 @@ object EnglishWordRepairer {
         }
 
         return finalTokens.joinToString(" ")
+    }
+
+    /**
+     * Safely collapses doubled letter typos for words (len >= 5) where collapsing yields a valid dictionary word.
+     * E.g. "himsellf" -> "himself"
+     */
+    fun repairDoubleLetterTypo(word: String): String {
+        val p = splitPunctuation(word)
+        val core = p.core
+        val coreLower = core.lowercase(Locale.US)
+        if (coreLower.length < 5 || dictionaryMap.containsKey(coreLower)) {
+            return word
+        }
+
+        for (i in 0 until coreLower.length - 1) {
+            if (coreLower[i] == coreLower[i + 1]) {
+                val candidate = coreLower.substring(0, i) + coreLower.substring(i + 1)
+                if (dictionaryMap.containsKey(candidate)) {
+                    val repairedCore = if (core[0].isUpperCase()) {
+                        candidate.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.US) else it.toString() }
+                    } else {
+                        candidate
+                    }
+                    return p.leadingPunct + repairedCore + p.trailingPunct
+                }
+            }
+        }
+        return word
     }
 
     private val KNOWN_CONTRACTIONS = setOf(

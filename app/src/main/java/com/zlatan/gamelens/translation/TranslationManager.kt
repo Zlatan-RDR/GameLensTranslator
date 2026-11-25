@@ -69,6 +69,33 @@ class TranslationManager(
             }
         }
 
+        internal fun buildOpenAiRequestBody(
+            endpointUrl: String,
+            modelName: String,
+            systemPrompt: String,
+            userContent: String,
+            includeGenerationParams: Boolean = true
+        ): JSONObject {
+            val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
+            return JSONObject().apply {
+                put("model", modelName)
+                if (includeGenerationParams && !isGemini) {
+                    put("temperature", 0.2)
+                }
+                put("max_tokens", 120)
+                put("messages", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "system")
+                        put("content", systemPrompt)
+                    })
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", userContent)
+                    })
+                })
+            }
+        }
+
         fun hasActiveInternet(context: Context): Boolean {
             return try {
                 val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
@@ -139,6 +166,7 @@ class TranslationManager(
     )
 
     private val fastMemoryCache = LruCache<String, String>(500)
+    val persistentCache = PersistentTranslationCache(context)
     private val recentContextLines = java.util.concurrent.ConcurrentLinkedDeque<DialogueContextEntry>()
     var activeGameProfile: String = ""
 
@@ -146,10 +174,48 @@ class TranslationManager(
         recentContextLines.clear()
     }
 
+    fun getEngineCacheKey(): String {
+        return when (config.mode) {
+            TranslationMode.CLOUD_OPENAI -> "AI:${config.modelName}"
+            TranslationMode.OFFLINE_MLKIT -> "OFFLINE"
+        }
+    }
+
+    fun getGlossaryCacheHash(): String {
+        return try {
+            val active = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(context)
+            PersistentTranslationCache.computeGlossaryHash(active.glossaryText)
+        } catch (_: Throwable) {
+            "noglossary"
+        }
+    }
+
     fun getFromMemoryCache(text: String): String? {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
-        return fastMemoryCache.get(trimmed) ?: findFuzzyMemoryCacheMatch(trimmed, 0.90f)
+        val eKey = getEngineCacheKey()
+        val gHash = getGlossaryCacheHash()
+        return persistentCache.get(eKey, gHash, trimmed)
+            ?: fastMemoryCache.get(trimmed)
+            ?: findFuzzyMemoryCacheMatch(trimmed, 0.90f)
+    }
+
+    fun putToCache(text: String, arabic: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || arabic.isBlank()) return
+        val eKey = getEngineCacheKey()
+        val gHash = getGlossaryCacheHash()
+        persistentCache.put(eKey, gHash, trimmed, arabic)
+        fastMemoryCache.put(trimmed, arabic)
+    }
+
+    fun flushPersistentCache() {
+        persistentCache.flushDirty()
+    }
+
+    fun switchGameProfile(profileId: String) {
+        activeGameProfile = profileId
+        persistentCache.switchProfile(profileId)
     }
 
     private val modelManager = RemoteModelManager.getInstance()
@@ -333,35 +399,33 @@ class TranslationManager(
         val trimmed = asrRepaired.trim()
         if (trimmed.isEmpty()) return@withContext ""
 
+        val activeProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(context)
+        val glossaryEntries = GameGlossaryManager.parse(activeProfile.glossaryText)
+        val femaleNames = GameGlossaryManager.getFemaleNames(glossaryEntries)
+
         // 0. Mandatory 0ms Game Patch Engine Match (Exact or Fuzzy Levenshtein >= 0.86)
         val patchMatch = com.zlatan.gamelens.patch.PatchManager.lookup(trimmed)
         if (patchMatch != null) {
-            return@withContext TranslationQualityPolisher.polishArabic(patchMatch)
+            return@withContext TranslationQualityPolisher.polishArabic(patchMatch, femaleNames, trimmed)
         }
 
-        // Fast In-Memory LRU Cache (0ms)
-        val memMatch = fastMemoryCache.get(trimmed)
+        // Fast Two-Tier / In-Memory LRU Cache (0ms)
+        val memMatch = getFromMemoryCache(trimmed)
         if (memMatch != null) {
-            return@withContext TranslationQualityPolisher.polishArabic(memMatch)
-        }
-
-        // Fuzzy In-Memory Cache (0ms, >= 0.90 similarity)
-        val fuzzyMatch = findFuzzyMemoryCacheMatch(trimmed, 0.90f)
-        if (fuzzyMatch != null) {
-            return@withContext TranslationQualityPolisher.polishArabic(fuzzyMatch)
+            return@withContext TranslationQualityPolisher.polishArabic(memMatch, femaleNames, trimmed)
         }
 
         // 1. Direct Game Glossary Exact Match
         val glossaryMatch = glossaryManager.findExactMatch(trimmed)
         if (glossaryMatch != null) {
-            return@withContext TranslationQualityPolisher.polishArabic(glossaryMatch)
+            return@withContext TranslationQualityPolisher.polishArabic(glossaryMatch, femaleNames, trimmed)
         }
 
         // 2. Instant Cache (Memory LRU -> Room Persistent DB)
         val cached = cacheManager.get(trimmed)
         if (cached != null) {
-            val polished = TranslationQualityPolisher.polishArabic(cached)
-            fastMemoryCache.put(trimmed, polished)
+            val polished = TranslationQualityPolisher.polishArabic(cached, femaleNames, trimmed)
+            putToCache(trimmed, polished)
             return@withContext polished
         }
 
@@ -370,8 +434,8 @@ class TranslationManager(
         if (cleanKillPrefixMatch != null) {
             val remainder = cleanKillPrefixMatch.groupValues[1].trim()
             val translatedRemainder = translate(remainder, isFinal)
-            val result = "قتل صامت - $translatedRemainder".trim()
-            fastMemoryCache.put(trimmed, result)
+            val result = TranslationQualityPolisher.polishArabic("قتل صامت - $translatedRemainder".trim(), femaleNames, trimmed)
+            putToCache(trimmed, result)
             cacheManager.put(trimmed, result)
             if (isFinal) {
                 com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, trimmed, result, isFinal = true)
@@ -380,8 +444,8 @@ class TranslationManager(
         }
 
         if (Regex("(?i)^clean\\s*kill[!.?]?$").matches(trimmed)) {
-            val result = "قتل صامت"
-            fastMemoryCache.put(trimmed, result)
+            val result = TranslationQualityPolisher.polishArabic("قتل صامت", femaleNames, trimmed)
+            putToCache(trimmed, result)
             cacheManager.put(trimmed, result)
             if (isFinal) {
                 com.zlatan.gamelens.patch.PatchManager.logSessionEntry(context, trimmed, result, isFinal = true)
@@ -394,8 +458,8 @@ class TranslationManager(
 
         val rawHadInterjection = Regex("(?i)\\b[ua]rgh!?\\b").containsMatchIn(trimmed)
         if (preprocessed.isBlank() && rawHadInterjection) {
-            val result = "آه!"
-            fastMemoryCache.put(trimmed, result)
+            val result = TranslationQualityPolisher.polishArabic("آه!", femaleNames, trimmed)
+            putToCache(trimmed, result)
             cacheManager.put(trimmed, result)
             return@withContext result
         }
@@ -405,8 +469,6 @@ class TranslationManager(
             .getBoolean(com.zlatan.gamelens.MainActivity.KEY_ONLINE_TRANSLATE_ENHANCED, false)
 
         val hasNet = hasActiveInternet(context)
-        val activeProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(context)
-        val glossaryEntries = GameGlossaryManager.parse(activeProfile.glossaryText)
         val normalizedForMt = EnglishIdiomNormalizer.normalize(preprocessed)
         val (mtInput, mtPlaceholders) = GameGlossaryManager.protectBeforeMt(normalizedForMt, glossaryEntries)
 
@@ -477,10 +539,10 @@ class TranslationManager(
         }
 
         // Universal Gaming Idiom & Arabic Polish Layer
-        finalResult = TranslationQualityPolisher.polishArabic(finalResult)
+        finalResult = TranslationQualityPolisher.polishArabic(finalResult, femaleNames, trimmed)
 
         // 7. Save to Cache for subsequent 0ms hits
-        fastMemoryCache.put(trimmed, finalResult)
+        putToCache(trimmed, finalResult)
         cacheManager.put(trimmed, finalResult)
 
         // 8. Log unique pair to Session Exporter (only for completed final sentences, skipping partial chunks)
@@ -779,21 +841,7 @@ class TranslationManager(
                     .post(anthropicBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                     .build()
             } else {
-                val openAiBody = JSONObject().apply {
-                    put("model", config.modelName)
-                    put("temperature", 0.2)
-                    put("max_tokens", 120)
-                    put("messages", JSONArray().apply {
-                        put(JSONObject().apply {
-                            put("role", "system")
-                            put("content", systemPrompt)
-                        })
-                        put(JSONObject().apply {
-                            put("role", "user")
-                            put("content", userContent)
-                        })
-                    })
-                }
+                val openAiBody = buildOpenAiRequestBody(endpointUrl, config.modelName, systemPrompt, userContent, includeGenerationParams = true)
                 Request.Builder()
                     .url(endpointUrl)
                     .addHeader("Authorization", "Bearer ${config.apiKey}")
@@ -807,7 +855,28 @@ class TranslationManager(
                 .readTimeout(2500L, TimeUnit.MILLISECONDS)
                 .build()
 
-            val response = aiClient.newCall(request).execute()
+            var response = aiClient.newCall(request).execute()
+            if (!response.isSuccessful && response.code == 400 && !isAnthropic) {
+                val errBody = response.body?.use { it.string() } ?: ""
+                if (errBody.contains("temperature", ignoreCase = true) ||
+                    errBody.contains("top_p", ignoreCase = true) ||
+                    errBody.contains("top_k", ignoreCase = true) ||
+                    errBody.contains("unsupported", ignoreCase = true) ||
+                    errBody.contains("INVALID_ARGUMENT", ignoreCase = true)) {
+                    Log.w(TAG, "AI 400 parameter error; retrying once without generation params: $errBody")
+                    val retryBody = buildOpenAiRequestBody(endpointUrl, config.modelName, systemPrompt, userContent, includeGenerationParams = false)
+                    val retryRequest = Request.Builder()
+                        .url(endpointUrl)
+                        .addHeader("Authorization", "Bearer ${config.apiKey}")
+                        .addHeader("Content-Type", "application/json")
+                        .post(retryBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    response = aiClient.newCall(retryRequest).execute()
+                } else {
+                    Log.w(TAG, "AI translation failed with HTTP 400: $errBody")
+                    return@withContext null
+                }
+            }
             if (!response.isSuccessful) {
                 Log.w(TAG, "AI translation failed with HTTP code: ${response.code}")
                 return@withContext null
@@ -834,7 +903,10 @@ class TranslationManager(
                 while (recentContextLines.size > 6) {
                     recentContextLines.pollFirst()
                 }
-                TranslationQualityPolisher.polishArabic(cleaned)
+                val activeProf = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(context)
+                val entries = GameGlossaryManager.parse(activeProf.glossaryText)
+                val femaleNames = GameGlossaryManager.getFemaleNames(entries)
+                TranslationQualityPolisher.polishArabic(cleaned, femaleNames, text)
             } else null
         } catch (e: Exception) {
             Log.e(TAG, "Error translating via AI API: ${e.message}", e)

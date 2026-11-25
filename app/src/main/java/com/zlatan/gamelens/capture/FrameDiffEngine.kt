@@ -72,6 +72,8 @@ class FrameDiffEngine(
         hasChanged
     }
 
+    private var reusableRow = IntArray(0)
+
     private fun populateSampleHash(bitmap: Bitmap, excludedRect: Rect?) {
         val width = bitmap.width
         val height = bitmap.height
@@ -79,15 +81,21 @@ class FrameDiffEngine(
         val stepX = (width / sampleGridSize).coerceAtLeast(1)
         val stepY = (height / sampleGridSize).coerceAtLeast(1)
 
+        if (reusableRow.size < width) {
+            reusableRow = IntArray(width)
+        }
+        val row = reusableRow
+
         var idx = 0
         for (y in 0 until sampleGridSize) {
             val sampleY = (y * stepY).coerceAtMost(height - 1)
+            bitmap.getPixels(row, 0, width, 0, sampleY, width, 1)
             for (x in 0 until sampleGridSize) {
                 val sampleX = (x * stepX).coerceAtMost(width - 1)
                 if (excludedRect != null && excludedRect.contains(sampleX, sampleY)) {
                     currentSampleHash[idx++] = -1L
                 } else {
-                    val pixel = bitmap.getPixel(sampleX, sampleY)
+                    val pixel = row[sampleX]
                     currentSampleHash[idx++] = pixel.toLong() and 0xFFFFFFFFL
                 }
             }

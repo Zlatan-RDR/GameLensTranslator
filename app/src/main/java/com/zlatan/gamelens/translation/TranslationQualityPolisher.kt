@@ -9,7 +9,7 @@ object TranslationQualityPolisher {
 
     // Fix Arabic typography spacing:
     // Conjunction 'و' attached to following Arabic word: "و الرجل" -> "والرجل", "المعلومات و السرية" -> "المعلومات والسرية"
-    private val WAW_CONJUNCTION_REGEX = Regex("(^|[\\s،.؟!\\p{Z}])و[\\s\\p{Z}]+(?=[\\u0621-\\u064A])")
+    private val WAW_CONJUNCTION_REGEX = Regex("""(^|[\s،.؟!])و\s+(?=[ء-يأإآؤئىة])""")
 
     // Feminine-object pronoun agreement: "تلك القلادة. لا تفقده" -> "تلك القلادة. لا تفقدها"
     private val FEMININE_OBJECT_PRONOUN_REGEX = Regex("(تلك\\s+[\\u0621-\\u064A]+[،.]\\s*لا\\s+[\\u0621-\\u064A]+)ه\\b")
@@ -46,9 +46,41 @@ object TranslationQualityPolisher {
     private val PROMISE_ME_REGEX = Regex("(?i)\\bوعد\\s+مني([.!]?)\\b")
 
     /**
+     * Targeted feminine agreement polish when a female character name is mentioned in source or target.
+     */
+    fun polishFemaleAgreement(text: String, femaleNames: Set<String>, sourceEnglishText: String = ""): String {
+        if (text.isBlank() || femaleNames.isEmpty()) return text
+
+        val namesMentioned = femaleNames.filter { name ->
+            (sourceEnglishText.isNotBlank() && sourceEnglishText.contains(name, ignoreCase = true)) ||
+            text.contains(name, ignoreCase = true)
+        }
+        if (namesMentioned.isEmpty()) return text
+
+        var s = text
+        for (name in namesMentioned) {
+            val esc = Regex.escape(name)
+            s = s.replace(Regex("يجب\\s+أن\\s+تكون\\s+$esc"), "يجب أن تكوني $name")
+            s = s.replace(Regex("لا\\s+بد\\s+أنك\\s+$esc"), "لا بد أنكِ $name")
+        }
+
+        s = s.replace(Regex("ادخل\\s+يا\\s+طفل\\b"), "ادخلي يا طفلتي")
+        s = s.replace(Regex("تعال\\s+يا\\s+طفل\\b"), "تعالي يا طفلتي")
+
+        s = s.replace(Regex("(?<=[.؟!،]\\s*)ادخل([.!]?)"), "ادخلي$1")
+        s = s.replace(Regex("(?<=[.؟!،]\\s*)تعال([.!]?)"), "تعالي$1")
+
+        return s
+    }
+
+    /**
      * Applies post-processing polish to Arabic translations.
      */
-    fun polishArabic(text: String): String {
+    fun polishArabic(
+        text: String,
+        femaleNames: Set<String> = emptySet(),
+        sourceEnglishText: String = ""
+    ): String {
         if (text.isBlank()) return text
         var s = text.trim()
 
@@ -70,7 +102,12 @@ object TranslationQualityPolisher {
         s = PROMISE_ME_REGEX.replace(s, "عدني$1")
         s = FEMININE_OBJECT_PRONOUN_REGEX.replace(s, "$1ها")
 
-        // 2. Arabic Typography Spacing Normalization
+        // 2. Targeted Female Agreement Polish
+        if (femaleNames.isNotEmpty()) {
+            s = polishFemaleAgreement(s, femaleNames, sourceEnglishText)
+        }
+
+        // 3. Arabic Typography Spacing Normalization
         while (WAW_CONJUNCTION_REGEX.containsMatchIn(s)) {
             val next = WAW_CONJUNCTION_REGEX.replace(s, "$1و")
             if (next == s) break

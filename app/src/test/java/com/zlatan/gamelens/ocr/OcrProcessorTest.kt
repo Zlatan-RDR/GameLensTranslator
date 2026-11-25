@@ -76,5 +76,43 @@ class OcrProcessorTest {
         assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("[12:34:56.789] D/GameLens: precision loop"))
         assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("com.zlatan.gamelens.MainActivity"))
         assertFalse(OcrTextCleaner.isLogcatOrSelfCaptureNoise("This is normal game dialogue"))
+
+        // Single-word dialogue allowed when punctuated with ? or !
+        assertFalse(OcrTextCleaner.isNoiseOrPrompt("hello?"))
+        assertFalse(OcrTextCleaner.isNoiseOrPrompt("wait!"))
+        assertFalse(OcrTextCleaner.isNoiseOrPrompt("what?"))
+        assertFalse(OcrTextCleaner.isNoiseOrPrompt("run!"))
+
+        // Broken dangling preposition gibberish dropped
+        assertTrue(OcrTextCleaner.isNoiseOrPrompt("Swapife with"))
+        assertFalse(OcrTextCleaner.isNoiseOrPrompt("First Aid"))
+    }
+
+    @Test
+    fun testSymmetricCleanUpgradeRules() {
+        // 1. Clean-Subset Upgrade: allow if >= 50% removed tokens are garbage/metadata
+        val lockedGarbageSubset = "Ganma (condtetra eft 130 Call me back when"
+        val cleanSubsetCandidate = "Call me back when"
+        assertTrue(OcrTextCleaner.isCleanSubsetUpgrade(cleanSubsetCandidate, lockedGarbageSubset))
+
+        // Normal sentence subset with valid dictionary words must NOT upgrade (kept as shorter-subset)
+        val fullSentence = "Take this. It's important. Take this."
+        val validWordSubset = "Take this."
+        assertFalse(OcrTextCleaner.isCleanSubsetUpgrade(validWordSubset, fullSentence))
+
+        // 2. Clean-Superset Upgrade: allow if added tokens contain >= 2 valid dictionary words
+        val baseText = "Call me back when"
+        val cleanSupersetCandidate = "Call me back when you're done, got it?"
+        assertTrue(OcrTextCleaner.isCleanSupersetUpgrade(cleanSupersetCandidate, baseText))
+
+        // Credit/metadata-polluted superset must NOT upgrade
+        val pollutedSupersetCandidate = "Call me back when you're done RANK GAMMA 1306"
+        assertFalse(OcrTextCleaner.isCleanSupersetUpgrade(pollutedSupersetCandidate, "Call me back when you're done"))
+
+        // 3. Inline Dossier Prefix/Suffix Scrubber
+        val prefixedDossier = "Ganma (condtetra eft 130 Call me back when you're done"
+        val suffixedDossier = "Call me back when you're done (condtetra eft 130"
+        assertEquals("Call me back when you're done", OcrTextCleaner.scrubInlineDossierArtifacts(prefixedDossier))
+        assertEquals("Call me back when you're done", OcrTextCleaner.scrubInlineDossierArtifacts(suffixedDossier))
     }
 }
