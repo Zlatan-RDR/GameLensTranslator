@@ -46,6 +46,8 @@ class TranslationManager(
     private var config: TranslationConfig = TranslationConfig()
 ) {
 
+    enum class GeminiThinkingMode { BUDGET_0, MINIMAL, NONE }
+
     companion object {
         private const val TAG = "TranslationManager"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -72,8 +74,6 @@ class TranslationManager(
             }
             return if (base.contains("?key=")) base else "$base?key=$apiKey"
         }
-
-        enum class GeminiThinkingMode { BUDGET_0, MINIMAL, NONE }
 
         val geminiThinkingModeCache = java.util.concurrent.ConcurrentHashMap<String, GeminiThinkingMode>()
 
