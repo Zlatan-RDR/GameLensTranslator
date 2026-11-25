@@ -115,4 +115,27 @@ class OcrProcessorTest {
         assertEquals("Call me back when you're done", OcrTextCleaner.scrubInlineDossierArtifacts(prefixedDossier))
         assertEquals("Call me back when you're done", OcrTextCleaner.scrubInlineDossierArtifacts(suffixedDossier))
     }
+
+    @Test
+    fun testWordOverlapRatioAndLogcatNoise() {
+        // High word overlap between same sentence re-reads
+        val s1 = "Chris here, yeah, we got a situation."
+        val s1Polluted = "Chris here, yeah, we got a situation.EDDY Row"
+        val ratio1 = OcrProcessor.computeWordOverlapRatio(s1Polluted, s1)
+        assertTrue(ratio1 >= 0.70f)
+
+        // Low word overlap between two different dialogue lines
+        val s2 = "you tell me that huh?"
+        val ratio2 = OcrProcessor.computeWordOverlapRatio(s2, s1)
+        assertTrue(ratio2 < 0.45f)
+
+        // Expanded logcat noise patterns
+        assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("12:34:56.789 D/DiagnosticLogger: acquireCroppedRoi"))
+        assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("FrameDiffEngine: diff=0.005"))
+        assertTrue(OcrTextCleaner.isLogcatOrSelfCaptureNoise("TranslationOverlayService: poll"))
+
+        // Punctuation spacing normalization
+        assertEquals("Chinatown. 12", OcrTextCleaner.normalizeOcrArtifacts("Chinatown . 12"))
+        assertEquals("Hello, world", OcrTextCleaner.normalizeOcrArtifacts("Hello , world"))
+    }
 }

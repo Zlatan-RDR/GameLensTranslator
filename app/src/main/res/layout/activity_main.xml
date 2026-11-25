@@ -735,6 +735,17 @@
                             android:textColor="@color/text_primary"
                             android:textSize="12sp" />
 
+                        <!-- Auto Subtitle Tracker Switch -->
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchAutoSubtitleTracking"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="تتبع مكان الحوار تلقائياً (Auto-ROI)"
+                            android:textColor="@color/text_primary"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
                         <!-- Action Buttons: ROI Calibration & 3s Overlay Preview -->
                         <LinearLayout
                             android:layout_width="match_parent"

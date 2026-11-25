@@ -9,7 +9,7 @@ object TranslationQualityPolisher {
 
     // Fix Arabic typography spacing:
     // Conjunction 'و' attached to following Arabic word: "و الرجل" -> "والرجل", "المعلومات و السرية" -> "المعلومات والسرية"
-    private val WAW_CONJUNCTION_REGEX = Regex("""(^|[\s،.؟!])و\s+(?=[ء-يأإآؤئىة])""")
+    private val WAW_CONJUNCTION_REGEX = Regex("""(^|[\s،.؟!])و[\s\u00A0\u200E\u200F]+(?=[ء-يأإآؤئىة])""")
 
     // Feminine-object pronoun agreement: "تلك القلادة. لا تفقده" -> "تلك القلادة. لا تفقدها"
     private val FEMININE_OBJECT_PRONOUN_REGEX = Regex("(تلك\\s+[\\u0621-\\u064A]+[،.]\\s*لا\\s+[\\u0621-\\u064A]+)ه\\b")
@@ -60,8 +60,8 @@ object TranslationQualityPolisher {
         var s = text
         for (name in namesMentioned) {
             val esc = Regex.escape(name)
-            s = s.replace(Regex("يجب\\s+أن\\s+تكون\\s+$esc"), "يجب أن تكوني $name")
-            s = s.replace(Regex("لا\\s+بد\\s+أنك\\s+$esc"), "لا بد أنكِ $name")
+            s = s.replace(Regex("يجب\\s+أن\\s+تكون\\s+$esc", RegexOption.IGNORE_CASE), "يجب أن تكوني $name")
+            s = s.replace(Regex("لا\\s+بد\\s+أنك\\s+$esc", RegexOption.IGNORE_CASE), "لا بد أنكِ $name")
         }
 
         s = s.replace(Regex("ادخل\\s+يا\\s+طفل\\b"), "ادخلي يا طفلتي")
@@ -108,6 +108,7 @@ object TranslationQualityPolisher {
         }
 
         // 3. Arabic Typography Spacing Normalization
+        s = MULTIPLE_WHITESPACE_REGEX.replace(s, " ").trim()
         while (WAW_CONJUNCTION_REGEX.containsMatchIn(s)) {
             val next = WAW_CONJUNCTION_REGEX.replace(s, "$1و")
             if (next == s) break

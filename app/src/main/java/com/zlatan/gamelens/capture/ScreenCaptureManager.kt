@@ -40,6 +40,19 @@ class ScreenCaptureManager(
         private val BOT_LEFT_PROBE_Y = floatArrayOf(0.88f, 0.91f, 0.94f, 0.97f)
 
         /**
+         * Computes hardware-scaled dimensions capping the longest edge to max 1440px
+         * while preserving exact aspect ratio.
+         */
+        internal fun computeScaledDimensions(rawW: Int, rawH: Int, maxEdge: Int = 1440): Pair<Int, Int> {
+            val longest = maxOf(rawW, rawH)
+            if (longest <= maxEdge) return Pair(rawW, rawH)
+            val scale = maxEdge.toFloat() / longest.toFloat()
+            val scaledW = Math.round(rawW * scale).coerceAtLeast(1)
+            val scaledH = Math.round(rawH * scale).coerceAtLeast(1)
+            return Pair(scaledW, scaledH)
+        }
+
+        /**
          * Fast row-strided RGBA copy from an ImageReader ByteBuffer into destination ByteBuffer.
          * Boundary-safe against GPU/Adreno row padding: does NOT mutate src.limit(),
          * verifies total buffer limits upfront, and restores src.position(0) cleanly.
@@ -192,26 +205,27 @@ class ScreenCaptureManager(
     private fun setupVirtualDisplay() {
         if (virtualDisplay != null) return
         try {
+            val (capW, capH) = computeScaledDimensions(screenWidth, screenHeight)
             imageReader?.close()
             imageReader = ImageReader.newInstance(
-                screenWidth,
-                screenHeight,
+                capW,
+                capH,
                 PixelFormat.RGBA_8888,
                 2
             )
 
             virtualDisplay = mediaProjection.createVirtualDisplay(
                 VIRTUAL_DISPLAY_NAME,
-                screenWidth,
-                screenHeight,
+                capW,
+                capH,
                 screenDensityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader?.surface,
                 null,
                 backgroundHandler
             )
-            DiagnosticLogger.log("VirtualDisplay created: ${screenWidth}x${screenHeight} @ ${screenDensityDpi}dpi")
-            Log.d(TAG, "VirtualDisplay created: ${screenWidth}x${screenHeight} @ ${screenDensityDpi}dpi")
+            DiagnosticLogger.log("VirtualDisplay created: ${capW}x${capH} (raw=${screenWidth}x${screenHeight}) @ ${screenDensityDpi}dpi")
+            Log.d(TAG, "VirtualDisplay created: ${capW}x${capH} (raw=${screenWidth}x${screenHeight}) @ ${screenDensityDpi}dpi")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to create VirtualDisplay: ${t.message}", t)
             DiagnosticLogger.log("VirtualDisplay create error: ${t.javaClass.simpleName} - ${t.message}")
@@ -232,8 +246,9 @@ class ScreenCaptureManager(
             return
         }
 
-        Log.i(TAG, "forceRebindVirtualDisplay: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH} @ ${screenDensityDpi}dpi (reason: $reason)")
-        DiagnosticLogger.log("VirtualDisplay rebind [$reason]: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH}")
+        val (capW, capH) = computeScaledDimensions(targetW, targetH)
+        Log.i(TAG, "forceRebindVirtualDisplay: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH} (scaled: ${capW}x${capH}) @ ${screenDensityDpi}dpi (reason: $reason)")
+        DiagnosticLogger.log("VirtualDisplay rebind [$reason]: ${screenWidth}x${screenHeight} -> ${targetW}x${targetH} (scaled: ${capW}x${capH})")
 
         this.screenWidth = targetW
         this.screenHeight = targetH
@@ -251,16 +266,16 @@ class ScreenCaptureManager(
 
             // 2. Invalidate DisplayManagerService / SurfaceFlinger projection cache via real dimension/DPI nudge
             suppressResizeCallbackUntilMs = SystemClock.elapsedRealtime() + 800L
-            val nudgeW = (targetW - 2).coerceAtLeast(16)
+            val nudgeW = (capW - 2).coerceAtLeast(16)
             val nudgeDpi = (screenDensityDpi - 1).coerceAtLeast(120)
-            vd.resize(nudgeW, targetH, nudgeDpi)
-            vd.resize(targetW, targetH, screenDensityDpi)
+            vd.resize(nudgeW, capH, nudgeDpi)
+            vd.resize(capW, capH, screenDensityDpi)
 
             // 3. Close old ImageReader, create a fresh ImageReader, and attach surface
             val oldReader = imageReader
             val newReader = ImageReader.newInstance(
-                targetW,
-                targetH,
+                capW,
+                capH,
                 PixelFormat.RGBA_8888,
                 2
             )
@@ -272,7 +287,7 @@ class ScreenCaptureManager(
             } catch (_: Throwable) {}
 
             Log.i(TAG, "VirtualDisplay rebind completed successfully ($reason)")
-            DiagnosticLogger.log("VirtualDisplay rebind success: ${targetW}x${targetH} ($reason)")
+            DiagnosticLogger.log("VirtualDisplay rebind success: ${capW}x${capH} ($reason)")
         } catch (t: Throwable) {
             Log.e(TAG, "Error during forceRebindVirtualDisplay: ${t.message}", t)
             DiagnosticLogger.log("VirtualDisplay rebind error: ${t.javaClass.simpleName} - ${t.message}")

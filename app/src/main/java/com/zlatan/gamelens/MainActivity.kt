@@ -87,6 +87,7 @@ class MainActivity : AppCompatActivity() {
         const val KEY_SUBTITLE_BG_OPACITY = "key_subtitle_bg_opacity"
         const val KEY_SUBTITLE_TEXT_SHADOW = "key_subtitle_text_shadow"
         const val KEY_DEVELOPER_MODE = "key_developer_mode"
+        const val KEY_AUTO_SUBTITLE_TRACKING = "key_auto_subtitle_tracking"
         const val DEFAULT_FONT_SIZE_SP = 18f
         const val KEY_TYPEWRITER_MODE = "typewriter_mode_enabled"
         const val MODE_OPAQUE_COVER = "opaque_cover"
@@ -684,7 +685,7 @@ class MainActivity : AppCompatActivity() {
         }
         val apiKey = binding.etApiKey.text?.toString()?.trim() ?: ""
         val apiEndpoint = binding.etApiEndpoint.text?.toString()?.trim() ?: ""
-        val modelName = binding.etModelName.text?.toString()?.trim() ?: "gpt-4o-mini"
+        val modelName = binding.etModelName.text?.toString()?.trim()?.lowercase() ?: "gpt-4o-mini"
 
         val finalEndpoint = if (apiEndpoint.isBlank()) "https://api.openai.com/v1" else apiEndpoint
         val (isValid, errorMsg) = SecureApiKeyStorage.isValidEndpointUrl(finalEndpoint)
@@ -751,12 +752,13 @@ class MainActivity : AppCompatActivity() {
                 val result = tempManager.testCustomAiConnection("Oh, you must be Victoria. Come on in, child.")
                 val latency = android.os.SystemClock.elapsedRealtime() - startTime
                 withContext(Dispatchers.Main) {
-                    if (result != null && result.isNotBlank()) {
+                    if (result.success && !result.translation.isNullOrBlank()) {
                         binding.tvTestApiResult.setTextColor(Color.parseColor("#34D399"))
-                        binding.tvTestApiResult.text = "✅ ${latency}ms: $result"
+                        binding.tvTestApiResult.text = "✅ ${latency}ms: ${result.translation}"
                     } else {
                         binding.tvTestApiResult.setTextColor(Color.parseColor("#F87171"))
-                        binding.tvTestApiResult.text = "❌ فشل الاتصال: تأكد من صحة المفتاح والموديل والرابط."
+                        val err = result.errorMessage ?: "فشل الاتصال: تأكد من صحة المفتاح والموديل والرابط."
+                        binding.tvTestApiResult.text = "❌ $err"
                     }
                 }
             } catch (e: Exception) {
@@ -803,7 +805,7 @@ class MainActivity : AppCompatActivity() {
         // One-Tap AI Provider Presets
         binding.btnPresetGemini.setOnClickListener {
             binding.etApiEndpoint.setText("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
-            binding.etModelName.setText("gemini-2.5-flash-lite")
+            binding.etModelName.setText("gemini-3.5-flash")
             autoSaveTranslationConfig()
         }
         binding.btnPresetGroq.setOnClickListener {
@@ -1226,6 +1228,25 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        binding.switchAutoSubtitleTracking.setOnCheckedChangeListener(null)
+        binding.switchAutoSubtitleTracking.isChecked = curActiveProfile.autoSubtitleTracking
+        binding.btnCalibrateBox.isEnabled = !curActiveProfile.autoSubtitleTracking
+        binding.btnCalibrateBox.alpha = if (curActiveProfile.autoSubtitleTracking) 0.5f else 1.0f
+        binding.switchAutoSubtitleTracking.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_AUTO_SUBTITLE_TRACKING, isChecked).apply()
+            val cur = GameProfileManager.getActiveProfile(this)
+            GameProfileManager.saveProfile(this, cur.copy(autoSubtitleTracking = isChecked))
+            binding.btnCalibrateBox.isEnabled = !isChecked
+            binding.btnCalibrateBox.alpha = if (isChecked) 0.5f else 1.0f
+            Toast.makeText(this, if (isChecked) "تم تفعيل التتبع التلقائي لمكان الحوار (Auto-ROI)" else "تم العودة لمنطقة المعايرة اليدوية", Toast.LENGTH_SHORT).show()
+            try {
+                val intent = Intent(this, TranslationOverlayService::class.java).apply {
+                    action = TranslationOverlayService.ACTION_RELOAD_SETTINGS
+                }
+                startService(intent)
+            } catch (_: Throwable) {}
+        }
+
         binding.btnGlossary.setOnClickListener {
             showGlossaryDialog()
         }
@@ -1237,6 +1258,9 @@ class MainActivity : AppCompatActivity() {
                 if (selectedProfile.id != GameProfileManager.getActiveProfileId(this@MainActivity)) {
                     GameProfileManager.applyProfile(this@MainActivity, selectedProfile.id)
                     binding.switchHighContrastOcr.isChecked = selectedProfile.highContrastOcr
+                    binding.switchAutoSubtitleTracking.isChecked = selectedProfile.autoSubtitleTracking
+                    binding.btnCalibrateBox.isEnabled = !selectedProfile.autoSubtitleTracking
+                    binding.btnCalibrateBox.alpha = if (selectedProfile.autoSubtitleTracking) 0.5f else 1.0f
                     isUpdatingProfileUi = true
                     loadSettings()
                     isUpdatingProfileUi = false
@@ -1277,6 +1301,7 @@ class MainActivity : AppCompatActivity() {
                         val textColor = prefs.getString(KEY_SUBTITLE_TEXT_COLOR, "#FFFFFF") ?: "#FFFFFF"
                         val bgOpacity = prefs.getInt(KEY_SUBTITLE_BG_OPACITY, 88)
                         val shadow = prefs.getBoolean(KEY_SUBTITLE_TEXT_SHADOW, true)
+                        val autoTracking = prefs.getBoolean(KEY_AUTO_SUBTITLE_TRACKING, false)
                         val newId = "profile_" + System.currentTimeMillis()
                         val newProfile = GameProfile(
                             id = newId,
@@ -1290,7 +1315,8 @@ class MainActivity : AppCompatActivity() {
                             typewriterMode = typewriter,
                             textColorHex = textColor,
                             bgOpacityPct = bgOpacity,
-                            textShadow = shadow
+                            textShadow = shadow,
+                            autoSubtitleTracking = autoTracking
                         )
                         GameProfileManager.saveProfile(this, newProfile)
                         GameProfileManager.applyProfile(this, newId)

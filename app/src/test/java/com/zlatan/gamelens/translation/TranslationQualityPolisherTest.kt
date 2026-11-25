@@ -33,6 +33,7 @@ class TranslationQualityPolisherTest {
     fun testArabicTypographySpacing() {
         // Conjunction 'و' should connect directly to subsequent word
         assertEquals("والسماء والطارق", TranslationQualityPolisher.polishArabic("و السماء و الطارق"))
+        assertEquals("والسماء والطارق", TranslationQualityPolisher.polishArabic("و\u00A0السماء و\u200Eالطارق"))
         assertEquals("ذهب أحمد ومحمد", TranslationQualityPolisher.polishArabic("ذهب أحمد و محمد"))
         assertEquals("المعلومات والسرية", TranslationQualityPolisher.polishArabic("المعلومات و السرية"))
         assertEquals("خطوط الاتصال والعملاء", TranslationQualityPolisher.polishArabic("خطوط الاتصال و العملاء"))
@@ -48,6 +49,10 @@ class TranslationQualityPolisherTest {
         val input = "أوه، يجب أن تكون فيكتوريا. ادخل يا طفل."
         val expected = "أوه، يجب أن تكوني فيكتوريا. ادخلي يا طفلتي."
         assertEquals(expected, TranslationQualityPolisher.polishArabic(input, femaleNames = females, sourceEnglishText = "Oh, you must be Victoria. Come in, kid."))
+
+        val lowercaseInput = "أوه، يجب أن تكون victoria. ادخل يا طفل."
+        val expectedLowercase = "أوه، يجب أن تكوني victoria. ادخلي يا طفلتي."
+        assertEquals(expectedLowercase, TranslationQualityPolisher.polishArabic(lowercaseInput, femaleNames = females, sourceEnglishText = "Oh, you must be victoria. Come in, kid."))
     }
 
     @Test

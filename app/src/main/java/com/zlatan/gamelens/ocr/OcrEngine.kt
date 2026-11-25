@@ -622,6 +622,49 @@ class OcrEngine {
 
 
     /**
+     * Rapidly recognizes lines and their bounding boxes from a cropped ROI for dynamic tracking.
+     */
+    suspend fun recognizeDetailedRoi(bitmap: Bitmap): List<OcrLine> = suspendCancellableCoroutine { continuation ->
+        if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) {
+            continuation.resume(emptyList())
+            return@suspendCancellableCoroutine
+        }
+
+        val argbBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
+            try {
+                bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (_: Exception) {
+                bitmap
+            }
+        } else {
+            bitmap
+        }
+
+        try {
+            val inputImage = InputImage.fromBitmap(argbBitmap, 0)
+            recognizer.process(inputImage)
+                .addOnSuccessListener { visionText ->
+                    val out = mutableListOf<OcrLine>()
+                    for (block in visionText.textBlocks) {
+                        for (line in block.lines) {
+                            val box = line.boundingBox ?: continue
+                            val txt = line.text.trim()
+                            if (txt.isNotEmpty()) {
+                                out.add(OcrLine(txt, box))
+                            }
+                        }
+                    }
+                    continuation.resume(out)
+                }
+                .addOnFailureListener {
+                    continuation.resume(emptyList())
+                }
+        } catch (_: Throwable) {
+            continuation.resume(emptyList())
+        }
+    }
+
+    /**
      * Rapidly recognizes text from a cropped ROI or MORT-filtered bitmap.
      * Extracts all valid lines, filters HUD prompts and noise, and sorts lines top-to-bottom.
      */

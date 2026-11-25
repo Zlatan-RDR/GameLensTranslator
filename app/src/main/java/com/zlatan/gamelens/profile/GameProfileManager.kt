@@ -24,7 +24,8 @@ data class GameProfile(
     val bgOpacityPct: Int = 88,
     val textShadow: Boolean = true,
     val highContrastOcr: Boolean = false,
-    val glossaryText: String = ""
+    val glossaryText: String = "",
+    val autoSubtitleTracking: Boolean = false
 ) {
     fun toJsonObject(): JSONObject {
         return JSONObject().apply {
@@ -43,6 +44,7 @@ data class GameProfile(
             put("textShadow", textShadow)
             put("highContrastOcr", highContrastOcr)
             put("glossaryText", glossaryText)
+            put("autoSubtitleTracking", autoSubtitleTracking)
         }
     }
 
@@ -63,7 +65,8 @@ data class GameProfile(
                 bgOpacityPct = obj.optInt("bgOpacityPct", 88),
                 textShadow = obj.optBoolean("textShadow", true),
                 highContrastOcr = obj.optBoolean("highContrastOcr", false),
-                glossaryText = obj.optString("glossaryText", "")
+                glossaryText = obj.optString("glossaryText", ""),
+                autoSubtitleTracking = obj.optBoolean("autoSubtitleTracking", false)
             )
         }
     }
@@ -193,6 +196,7 @@ object GameProfileManager {
             .putString(MainActivity.KEY_SUBTITLE_TEXT_COLOR, profile.textColorHex)
             .putInt(MainActivity.KEY_SUBTITLE_BG_OPACITY, profile.bgOpacityPct)
             .putBoolean(MainActivity.KEY_SUBTITLE_TEXT_SHADOW, profile.textShadow)
+            .putBoolean(MainActivity.KEY_AUTO_SUBTITLE_TRACKING, profile.autoSubtitleTracking)
             .apply()
 
         try {

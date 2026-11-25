@@ -24,6 +24,9 @@ object OcrProcessor {
     fun isCleanSupersetUpgrade(newText: String, lastLockedText: String): Boolean =
         OcrTextCleaner.isCleanSupersetUpgrade(newText, lastLockedText)
 
+    fun computeWordOverlapRatio(textA: String, textB: String): Float =
+        OcrTextCleaner.computeWordOverlapRatio(textA, textB)
+
     fun isNoiseOrPrompt(text: String): Boolean =
         OcrTextCleaner.isNoiseOrPrompt(text)
 }
@@ -294,11 +297,34 @@ object OcrTextCleaner {
         return false
     }
 
-    private val LOGCAT_TIMESTAMP_REGEX = Regex("""\[\d{2}:\d{2}:\d{2}\.\d{3}\]""")
+    private val LOGCAT_TIMESTAMP_REGEX = Regex("""(?:\[|\b)\d{2}:\d{2}:?\s*\d{2}\.\d{3,4}(?:\]|\b)""")
+    private val SELF_LOG_PHRASES = listOf(
+        "com.zlatan.gamelens",
+        "gamelens",
+        "diagnosticlogger",
+        "acquirecroppedroi",
+        "translationoverlayservice",
+        "framediff",
+        "mortfilter",
+        "ocrprocessor",
+        "self-read",
+        "screencapturemanager"
+    )
 
     fun isLogcatOrSelfCaptureNoise(text: String): Boolean {
         if (text.isBlank()) return false
-        return LOGCAT_TIMESTAMP_REGEX.containsMatchIn(text) || text.contains("com.zlatan.gamelens", ignoreCase = true)
+        if (LOGCAT_TIMESTAMP_REGEX.containsMatchIn(text)) return true
+        val lower = text.lowercase(Locale.US)
+        return SELF_LOG_PHRASES.any { lower.contains(it) }
+    }
+
+    fun computeWordOverlapRatio(textA: String, textB: String): Float {
+        val wordsA = textA.lowercase(Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }.toSet()
+        val wordsB = textB.lowercase(Locale.US).split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }.toSet()
+        if (wordsA.isEmpty() || wordsB.isEmpty()) return 0f
+        val common = wordsA.count { wordsB.contains(it) }
+        val minSize = minOf(wordsA.size, wordsB.size)
+        return common.toFloat() / minSize.toFloat()
     }
 
     fun isFragmentedGibberish(text: String): Boolean {
@@ -481,6 +507,10 @@ object OcrTextCleaner {
                 token
             }
         }
+
+        // Normalize punctuation spacing (e.g. "Chinatown . 12" -> "Chinatown. 12", "Hello , world" -> "Hello, world")
+        s = s.replace(Regex("""(?<!\.)\s+([.,!?])"""), "$1")
+        s = s.replace(Regex("""([,!?]|(?<!\.)\.(?!\.))(?=[A-Za-z0-9])"""), "$1 ")
 
         s = s.replace(Regex("\\s+"), " ")
 

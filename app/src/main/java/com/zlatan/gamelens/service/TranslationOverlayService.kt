@@ -157,6 +157,7 @@ class TranslationOverlayService : Service() {
     private var gameAudioTranslator: GameAudioTranslator? = null
     private val frameDiffEngine = FrameDiffEngine()
     private val fastPixelDiffGate = com.zlatan.gamelens.ocr.FastPixelDiffGate()
+    private val dynamicSubtitleTracker = com.zlatan.gamelens.ocr.DynamicSubtitleTracker()
     private val ocrEngine = OcrEngine()
     private val subtitleGeneration = java.util.concurrent.atomic.AtomicLong(0)
     private var activeTranslationJob: Job? = null
@@ -387,6 +388,7 @@ class TranslationOverlayService : Service() {
 
                 val activeProfId = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfileId(this)
                 val activeProf = com.zlatan.gamelens.profile.GameProfileManager.getProfiles(this).find { it.id == activeProfId }
+                dynamicSubtitleTracker.reset()
                 translationManager?.activeGameProfile = activeProf?.name ?: ""
                 translationManager?.clearDialogueContext()
 
@@ -600,7 +602,12 @@ class TranslationOverlayService : Service() {
 
         // 3. Stage 1: Strict Calibrated ROI Crop directly from ImageReader buffer
         val prefs = getSharedPreferences(MainActivity.PREFS_NAME, Context.MODE_PRIVATE)
-        val calRect = com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
+        val activeProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(this)
+        val calRect = if (activeProfile.autoSubtitleTracking) {
+            dynamicSubtitleTracker.getLockedRoi() ?: com.zlatan.gamelens.overlay.CalibrationOverlay.PRESET_BOTTOM_SUBTITLES
+        } else {
+            com.zlatan.gamelens.overlay.CalibrationOverlay.getCalibratedRect(prefs)
+        }
         val now = android.os.SystemClock.uptimeMillis()
 
         // In Offset Above mode, never hide overlay during capture (0% flicker, 0% self-OCR, instant 140ms capture).
@@ -709,6 +716,22 @@ class TranslationOverlayService : Service() {
 
         val ocrDurationMs = android.os.SystemClock.uptimeMillis() - ocrStartTime
 
+        if (activeProfile.autoSubtitleTracking) {
+            val (screenW, screenH, _) = getRealScreenDimensions()
+            if (dynamicSubtitleTracker.getState() == com.zlatan.gamelens.ocr.DynamicSubtitleTracker.State.DISCOVERY) {
+                val detailed = ocrEngine.recognizeDetailedRoi(ocrInput).map {
+                    com.zlatan.gamelens.ocr.DynamicSubtitleTracker.DetectedLine(it.text, it.boundingBox)
+                }
+                dynamicSubtitleTracker.onDiscoveryFrame(detailed, screenW, screenH)
+            } else {
+                val detailed = ocrEngine.recognizeDetailedRoi(ocrInput)
+                for (dl in detailed) {
+                    val trBox = com.zlatan.gamelens.ocr.DynamicSubtitleTracker.TrackerRect.fromRect(dl.boundingBox)
+                    dynamicSubtitleTracker.checkAutoGrow(trBox, croppedRoi.width, croppedRoi.height)
+                }
+            }
+        }
+
         if (!ocrInput.isRecycled) {
             ocrInput.recycle()
         }
@@ -753,6 +776,7 @@ class TranslationOverlayService : Service() {
         // Subtitle detected: reset empty counter and update last visible timestamp
         consecutiveEmptyRoiCount = 0
         lastSubtitleVisibleOnScreenMs = now
+        dynamicSubtitleTracker.notifyFrameOcrStatus(isEmpty = false, hasMotionElsewhere = false, nowMs = now)
         seamlessOverlayRenderer?.keepSubtitleAlive()
 
         // Spaceless Jitter Gate: compare with currently displayed subtitle while continuously visible
@@ -777,7 +801,8 @@ class TranslationOverlayService : Service() {
 
         // Continuous Anti-Pollution Lock: ignore shorter subsets unless clean-subset upgrade (consecutiveEmptyRoiCount == 0)
         if (lastDisplayedEnglishText.isNotEmpty() && (consecutiveEmptyRoiCount == 0 || now - lastSubtitleDisplayTimestamp < 5000L)) {
-            if (com.zlatan.gamelens.ocr.OcrTextCleaner.isShorterSubsetOrPrefix(mergedEnglish, lastDisplayedEnglishText)) {
+            val wordOverlap = com.zlatan.gamelens.ocr.OcrProcessor.computeWordOverlapRatio(mergedEnglish, lastDisplayedEnglishText)
+            if (wordOverlap >= 0.45f && com.zlatan.gamelens.ocr.OcrTextCleaner.isShorterSubsetOrPrefix(mergedEnglish, lastDisplayedEnglishText)) {
                 val allowCleanSubsetUpgrade = consecutiveEmptyRoiCount == 0 &&
                         com.zlatan.gamelens.ocr.OcrProcessor.isCleanSubsetUpgrade(mergedEnglish, lastDisplayedEnglishText)
 
@@ -797,11 +822,12 @@ class TranslationOverlayService : Service() {
 
         // Clean-Superset Overwrite Guard & Delta-Aware Progressive Auto-Typewriter
         if (lastDisplayedEnglishText.isNotEmpty() && (consecutiveEmptyRoiCount == 0 || now - lastSubtitleDisplayTimestamp < 6000L)) {
+            val wordOverlap = com.zlatan.gamelens.ocr.OcrProcessor.computeWordOverlapRatio(mergedEnglish, lastDisplayedEnglishText)
             val isCleanSuperset = com.zlatan.gamelens.ocr.OcrProcessor.isCleanSupersetUpgrade(mergedEnglish, lastDisplayedEnglishText)
             val verdict = if (isCleanSuperset) com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION else com.zlatan.gamelens.ocr.OcrEngine.classifySupersetExpansion(lastDisplayedEnglishText, mergedEnglish)
             val isFuzzyPolluted = if (isCleanSuperset) false else com.zlatan.gamelens.ocr.OcrEngine.isPollutedFuzzySuperset(lastDisplayedEnglishText, mergedEnglish)
 
-            if (!isCleanSuperset && (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CREDIT_POLLUTION || isFuzzyPolluted) &&
+            if (wordOverlap >= 0.45f && !isCleanSuperset && (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CREDIT_POLLUTION || isFuzzyPolluted) &&
                 PatchManager.lookup(mergedEnglish) == null
             ) {
                 val dropMsg = "OCR skipped [credit-polluted-superset]: \"$mergedEnglish\" (polluted re-read of: \"$lastDisplayedEnglishText\")"
@@ -1025,6 +1051,7 @@ class TranslationOverlayService : Service() {
     }
 
     private suspend fun handleEmptyRoiDetection(isOpaqueCover: Boolean) {
+        dynamicSubtitleTracker.notifyFrameOcrStatus(isEmpty = true, hasMotionElsewhere = true, nowMs = android.os.SystemClock.uptimeMillis())
         consecutiveEmptyRoiCount++
         val isSubtitleShowing = seamlessOverlayRenderer?.isSubtitleVisible() == true
         if (isSubtitleShowing) {

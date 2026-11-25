@@ -69,20 +69,28 @@ class TranslationManager(
             }
         }
 
+        private val modelReasoningEffortCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
         internal fun buildOpenAiRequestBody(
             endpointUrl: String,
             modelName: String,
             systemPrompt: String,
             userContent: String,
-            includeGenerationParams: Boolean = true
+            includeGenerationParams: Boolean = true,
+            reasoningEffort: String? = null
         ): JSONObject {
             val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
+            val normalizedModel = modelName.trim().lowercase()
             return JSONObject().apply {
-                put("model", modelName)
+                put("model", normalizedModel)
                 if (includeGenerationParams && !isGemini) {
                     put("temperature", 0.2)
                 }
-                put("max_tokens", 120)
+                if (isGemini) {
+                    val effort = reasoningEffort ?: modelReasoningEffortCache[normalizedModel] ?: "none"
+                    put("reasoning_effort", effort)
+                }
+                put("max_tokens", 512)
                 put("messages", JSONArray().apply {
                     put(JSONObject().apply {
                         put("role", "system")
@@ -820,10 +828,11 @@ class TranslationManager(
                 text
             }
 
+            val normalizedModel = config.modelName.trim().lowercase()
             val request = if (isAnthropic) {
                 val anthropicBody = JSONObject().apply {
-                    put("model", if (config.modelName.isNotBlank() && !config.modelName.equals("gpt-4o-mini", ignoreCase = true)) config.modelName else "claude-3-5-haiku-20241022")
-                    put("max_tokens", 120)
+                    put("model", if (normalizedModel.isNotBlank() && !normalizedModel.equals("gpt-4o-mini", ignoreCase = true)) normalizedModel else "claude-3-5-haiku-20241022")
+                    put("max_tokens", 512)
                     put("temperature", 0.2)
                     put("system", systemPrompt)
                     put("messages", JSONArray().apply {
@@ -841,7 +850,9 @@ class TranslationManager(
                     .post(anthropicBody.toString().toRequestBody(JSON_MEDIA_TYPE))
                     .build()
             } else {
-                val openAiBody = buildOpenAiRequestBody(endpointUrl, config.modelName, systemPrompt, userContent, includeGenerationParams = true)
+                val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
+                val effort = if (isGemini) (modelReasoningEffortCache[normalizedModel] ?: "none") else null
+                val openAiBody = buildOpenAiRequestBody(endpointUrl, normalizedModel, systemPrompt, userContent, includeGenerationParams = true, reasoningEffort = effort)
                 Request.Builder()
                     .url(endpointUrl)
                     .addHeader("Authorization", "Bearer ${config.apiKey}")
@@ -851,20 +862,35 @@ class TranslationManager(
             }
 
             val aiClient = sharedHttpClient.newBuilder()
-                .callTimeout(2500L, TimeUnit.MILLISECONDS)
-                .readTimeout(2500L, TimeUnit.MILLISECONDS)
+                .callTimeout(5000L, TimeUnit.MILLISECONDS)
+                .readTimeout(5000L, TimeUnit.MILLISECONDS)
+                .connectTimeout(3000L, TimeUnit.MILLISECONDS)
                 .build()
 
             var response = aiClient.newCall(request).execute()
+            val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
             if (!response.isSuccessful && response.code == 400 && !isAnthropic) {
                 val errBody = response.body?.use { it.string() } ?: ""
-                if (errBody.contains("temperature", ignoreCase = true) ||
+                if (isGemini && errBody.contains("reasoning", ignoreCase = true)) {
+                    Log.w(TAG, "Gemini reasoning effort rejected, retrying with minimal: $errBody")
+                    val retryBody = buildOpenAiRequestBody(endpointUrl, normalizedModel, systemPrompt, userContent, includeGenerationParams = true, reasoningEffort = "minimal")
+                    val retryRequest = Request.Builder()
+                        .url(endpointUrl)
+                        .addHeader("Authorization", "Bearer ${config.apiKey}")
+                        .addHeader("Content-Type", "application/json")
+                        .post(retryBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    response = aiClient.newCall(retryRequest).execute()
+                    if (response.isSuccessful) {
+                        modelReasoningEffortCache[normalizedModel] = "minimal"
+                    }
+                } else if (errBody.contains("temperature", ignoreCase = true) ||
                     errBody.contains("top_p", ignoreCase = true) ||
                     errBody.contains("top_k", ignoreCase = true) ||
                     errBody.contains("unsupported", ignoreCase = true) ||
                     errBody.contains("INVALID_ARGUMENT", ignoreCase = true)) {
                     Log.w(TAG, "AI 400 parameter error; retrying once without generation params: $errBody")
-                    val retryBody = buildOpenAiRequestBody(endpointUrl, config.modelName, systemPrompt, userContent, includeGenerationParams = false)
+                    val retryBody = buildOpenAiRequestBody(endpointUrl, normalizedModel, systemPrompt, userContent, includeGenerationParams = false)
                     val retryRequest = Request.Builder()
                         .url(endpointUrl)
                         .addHeader("Authorization", "Bearer ${config.apiKey}")
@@ -880,6 +906,8 @@ class TranslationManager(
             if (!response.isSuccessful) {
                 Log.w(TAG, "AI translation failed with HTTP code: ${response.code}")
                 return@withContext null
+            } else if (isGemini && !modelReasoningEffortCache.containsKey(normalizedModel)) {
+                modelReasoningEffortCache[normalizedModel] = "none"
             }
 
             val responseBody = response.body?.use { it.string() } ?: return@withContext null
@@ -914,8 +942,121 @@ class TranslationManager(
         }
     }
 
-    suspend fun testCustomAiConnection(prompt: String): String? = withContext(Dispatchers.IO) {
-        translateViaOpenAi(prompt)
+    data class ApiTestResult(
+        val success: Boolean,
+        val translation: String? = null,
+        val errorMessage: String? = null
+    )
+
+    suspend fun testCustomAiConnection(prompt: String): ApiTestResult = withContext(Dispatchers.IO) {
+        try {
+            val (isEndpointValid, validationError) = SecureApiKeyStorage.isValidEndpointUrl(config.apiEndpoint)
+            if (!isEndpointValid) {
+                return@withContext ApiTestResult(false, null, "عنوان API محظور أو غير آمن ($validationError)")
+            }
+
+            val endpointUrl = normalizeApiUrl(config.apiEndpoint)
+            val isAnthropic = endpointUrl.contains("anthropic.com", ignoreCase = true)
+            val isGemini = endpointUrl.contains("generativelanguage.googleapis.com", ignoreCase = true)
+            val normalizedModel = config.modelName.trim().lowercase()
+            val systemPrompt = "You are a professional video game translator. Translate to Arabic. Output ONLY the Arabic translation."
+
+            val request = if (isAnthropic) {
+                val anthropicBody = JSONObject().apply {
+                    put("model", if (normalizedModel.isNotBlank() && !normalizedModel.equals("gpt-4o-mini", ignoreCase = true)) normalizedModel else "claude-3-5-haiku-20241022")
+                    put("max_tokens", 512)
+                    put("temperature", 0.2)
+                    put("system", systemPrompt)
+                    put("messages", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", prompt)
+                        })
+                    })
+                }
+                Request.Builder()
+                    .url(endpointUrl)
+                    .addHeader("x-api-key", config.apiKey)
+                    .addHeader("anthropic-version", "2023-06-01")
+                    .addHeader("content-type", "application/json")
+                    .post(anthropicBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+            } else {
+                val effort = if (isGemini) (modelReasoningEffortCache[normalizedModel] ?: "none") else null
+                val openAiBody = buildOpenAiRequestBody(endpointUrl, normalizedModel, systemPrompt, prompt, includeGenerationParams = true, reasoningEffort = effort)
+                Request.Builder()
+                    .url(endpointUrl)
+                    .addHeader("Authorization", "Bearer ${config.apiKey}")
+                    .addHeader("Content-Type", "application/json")
+                    .post(openAiBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
+            }
+
+            val testClient = sharedHttpClient.newBuilder()
+                .callTimeout(8000L, TimeUnit.MILLISECONDS)
+                .readTimeout(8000L, TimeUnit.MILLISECONDS)
+                .connectTimeout(3000L, TimeUnit.MILLISECONDS)
+                .build()
+
+            var response = testClient.newCall(request).execute()
+            if (!response.isSuccessful && response.code == 400 && isGemini) {
+                val errBody = response.body?.use { it.string() } ?: ""
+                if (errBody.contains("reasoning", ignoreCase = true)) {
+                    val retryBody = buildOpenAiRequestBody(endpointUrl, normalizedModel, systemPrompt, prompt, includeGenerationParams = true, reasoningEffort = "minimal")
+                    val retryReq = Request.Builder()
+                        .url(endpointUrl)
+                        .addHeader("Authorization", "Bearer ${config.apiKey}")
+                        .addHeader("Content-Type", "application/json")
+                        .post(retryBody.toString().toRequestBody(JSON_MEDIA_TYPE))
+                        .build()
+                    response = testClient.newCall(retryReq).execute()
+                    if (response.isSuccessful) {
+                        modelReasoningEffortCache[normalizedModel] = "minimal"
+                    }
+                }
+            }
+
+            if (!response.isSuccessful) {
+                val errJson = try {
+                    val rawErr = response.body?.use { it.string() } ?: ""
+                    val parsed = JSONObject(rawErr)
+                    parsed.optJSONObject("error")?.optString("message", "") ?: rawErr.take(120)
+                } catch (_: Throwable) {
+                    ""
+                }
+                val shortMsg = if (errJson.isNotBlank()) " - $errJson" else ""
+                return@withContext ApiTestResult(false, null, "HTTP ${response.code}$shortMsg")
+            }
+
+            val responseBody = response.body?.use { it.string() } ?: return@withContext ApiTestResult(false, null, "استجابة فارغة من الخادم")
+            val responseJson = JSONObject(responseBody)
+
+            val rawContent = if (isAnthropic) {
+                val contentArr = responseJson.optJSONArray("content")
+                if (contentArr == null || contentArr.length() == 0) return@withContext ApiTestResult(false, null, "لا يوجد محتوى في رد Claude")
+                contentArr.getJSONObject(0).optString("text", "").trim()
+            } else {
+                val choices = responseJson.optJSONArray("choices")
+                if (choices == null || choices.length() == 0) return@withContext ApiTestResult(false, null, "لا يوجد choices في رد الخادم")
+                val firstChoice = choices.getJSONObject(0)
+                val message = firstChoice.optJSONObject("message")
+                message?.optString("content", "")?.trim() ?: ""
+            }
+
+            if (rawContent.isNotBlank()) {
+                val cleaned = rawContent.removeSurrounding("\"").removeSurrounding("«", "»").trim()
+                if (isGemini && !modelReasoningEffortCache.containsKey(normalizedModel)) {
+                    modelReasoningEffortCache[normalizedModel] = "none"
+                }
+                ApiTestResult(true, cleaned, null)
+            } else {
+                ApiTestResult(false, null, "النص المترجم فارغ")
+            }
+        } catch (e: Exception) {
+            val isTimeout = e is java.net.SocketTimeoutException || e.message?.contains("timeout", ignoreCase = true) == true
+            val msg = if (isTimeout) "Timeout (>8000ms)" else "${e.javaClass.simpleName}: ${e.message}"
+            ApiTestResult(false, null, msg)
+        }
     }
 
     fun trimMemory() {
