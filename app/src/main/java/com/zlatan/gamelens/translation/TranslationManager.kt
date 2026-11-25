@@ -54,7 +54,7 @@ class TranslationManager(
 
         fun isGeminiNativeEndpoint(url: String): Boolean {
             val clean = url.trim().lowercase(java.util.Locale.US)
-            return clean.contains("generativelanguage.googleapis.com") && !clean.contains("/openai/")
+            return clean.contains("generativelanguage.googleapis.com") && !clean.contains("/openai")
         }
 
         fun resolveGeminiNativeUrl(endpointUrl: String, model: String, apiKey: String): String {

@@ -584,7 +584,7 @@ object OcrTextCleaner {
     fun scrubInlineDossierArtifacts(text: String): String {
         if (text.isBlank()) return text
         var s = text.trim()
-        s = s.replace(Regex("""(?i)\s*\b(?:dana\s+penelope|HAIR\s+[A-Za-z]+|Gamma|Ganma|\(?\s*cond\.?\s*Tetra\s*eff\)?)\b.*$"""), "")
+        s = s.replace(Regex("""(?i)\s*\b(?:dana\s+penelope|HAIR\s+[A-Za-z]+|\(?\s*cond\.?\s*Tetra\s*eff\)?)\b.*$"""), "")
         s = s.replace(Regex("""(?i)^(?:\b(?:Ganma|Gamma|Rank|Hair|Nationality)\b\s*)?\(?\b(?:cond|eff|condtetra|eft)\w*\b(?:\s+\b(?:eft|eff|cond)\w*\b)*\s*\d+\)?\s*"""), "")
         s = s.replace(Regex("""(?i)\s*\(?\b(?:cond|eff|condtetra|eft)\w*\b(?:\s+\b(?:eft|eff|cond)\w*\b)*\s*\d+\)?$"""), "")
         return s.trim()
