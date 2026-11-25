@@ -38,6 +38,78 @@ class ScreenCaptureManager(
         // 12 sample points across bottom-left strip: x in 8%..42%, y in 86%..97%
         private val BOT_LEFT_PROBE_X = floatArrayOf(0.12f, 0.26f, 0.40f)
         private val BOT_LEFT_PROBE_Y = floatArrayOf(0.88f, 0.91f, 0.94f, 0.97f)
+
+        /**
+         * Fast row-strided RGBA copy from an ImageReader ByteBuffer into destination ByteBuffer.
+         * Boundary-safe against GPU/Adreno row padding: does NOT mutate src.limit(),
+         * verifies total buffer limits upfront, and restores src.position(0) cleanly.
+         */
+        internal fun copyRoiRgbaRows(
+            src: ByteBuffer,
+            rowStride: Int,
+            roiLeft: Int,
+            roiTop: Int,
+            roiWidth: Int,
+            roiHeight: Int,
+            dst: ByteBuffer,
+            rowScratch: ByteArray? = null
+        ): Boolean {
+            if (roiWidth <= 0 || roiHeight <= 0 || roiLeft < 0 || roiTop < 0) return false
+            val roiRowBytes = roiWidth * 4
+            val maxOffsetNeeded = (roiTop + roiHeight - 1).toLong() * rowStride + (roiLeft + roiWidth).toLong() * 4L
+            val bufLimit = src.limit().toLong()
+            if (maxOffsetNeeded > bufLimit) return false
+            if (dst.remaining() < roiRowBytes * roiHeight) return false
+
+            val scratch = if (rowScratch != null && rowScratch.size >= roiRowBytes) rowScratch else ByteArray(roiRowBytes)
+            return try {
+                for (row in 0 until roiHeight) {
+                    val srcOffset = (roiTop + row) * rowStride + roiLeft * 4
+                    src.position(srcOffset)
+                    src.get(scratch, 0, roiRowBytes)
+                    dst.put(scratch, 0, roiRowBytes)
+                }
+                true
+            } catch (_: Throwable) {
+                false
+            } finally {
+                src.position(0)
+            }
+        }
+
+        /**
+         * Fast row-strided RGBA copy from an ImageReader ByteBuffer into destination ByteArray.
+         */
+        internal fun copyRoiRgbaRows(
+            src: ByteBuffer,
+            rowStride: Int,
+            roiLeft: Int,
+            roiTop: Int,
+            roiWidth: Int,
+            roiHeight: Int,
+            dst: ByteArray,
+            rowScratch: ByteArray? = null
+        ): Boolean {
+            if (roiWidth <= 0 || roiHeight <= 0 || roiLeft < 0 || roiTop < 0) return false
+            val roiRowBytes = roiWidth * 4
+            val maxOffsetNeeded = (roiTop + roiHeight - 1).toLong() * rowStride + (roiLeft + roiWidth).toLong() * 4L
+            val bufLimit = src.limit().toLong()
+            if (maxOffsetNeeded > bufLimit) return false
+            if (dst.size < roiRowBytes * roiHeight) return false
+
+            return try {
+                for (row in 0 until roiHeight) {
+                    val srcOffset = (roiTop + row) * rowStride + roiLeft * 4
+                    src.position(srcOffset)
+                    src.get(dst, row * roiRowBytes, roiRowBytes)
+                }
+                true
+            } catch (_: Throwable) {
+                false
+            } finally {
+                src.position(0)
+            }
+        }
     }
 
     private var imageReader: ImageReader? = null
@@ -52,6 +124,7 @@ class ScreenCaptureManager(
 
     private var reusableRoiBuffer: ByteBuffer? = null
     private var reusableRoiBitmap: Bitmap? = null
+    private var reusableRowScratch: ByteArray? = null
     private var lastRoiW: Int = 0
     private var lastRoiH: Int = 0
 
@@ -380,7 +453,10 @@ class ScreenCaptureManager(
             }
 
             val rowBytes = cropW * pixelStride
-            val roiBitmap: Bitmap = if (pixelStride == 4) {
+            var roiBitmap: Bitmap? = null
+
+            // Fast zero-allocation path for RGBA_8888 (pixelStride == 4)
+            if (pixelStride == 4) {
                 try {
                     val requiredBytes = rowBytes * cropH
                     var buf = reusableRoiBuffer
@@ -390,31 +466,47 @@ class ScreenCaptureManager(
                     }
                     buf.clear()
 
-                    val oldLimit = buffer.limit()
-                    for (row in 0 until cropH) {
-                        val srcOffset = (cropTop + row) * rowStride + cropLeft * 4
-                        if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) {
-                            break
-                        }
-                        buffer.position(srcOffset)
-                        buffer.limit(srcOffset + rowBytes)
-                        buf.put(buffer)
+                    var scratch = reusableRowScratch
+                    if (scratch == null || scratch.size < rowBytes) {
+                        scratch = ByteArray(rowBytes)
+                        reusableRowScratch = scratch
                     }
-                    buffer.limit(oldLimit)
-                    buf.flip()
 
-                    var bmp = reusableRoiBitmap
-                    if (bmp == null || bmp.isRecycled || lastRoiW != cropW || lastRoiH != cropH) {
-                        bmp?.recycle()
-                        bmp = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
-                        reusableRoiBitmap = bmp
-                        lastRoiW = cropW
-                        lastRoiH = cropH
+                    val success = copyRoiRgbaRows(
+                        src = buffer,
+                        rowStride = rowStride,
+                        roiLeft = cropLeft,
+                        roiTop = cropTop,
+                        roiWidth = cropW,
+                        roiHeight = cropH,
+                        dst = buf,
+                        rowScratch = scratch
+                    )
+
+                    if (success) {
+                        buf.flip()
+                        var bmp = reusableRoiBitmap
+                        if (bmp == null || bmp.isRecycled || lastRoiW != cropW || lastRoiH != cropH) {
+                            bmp?.recycle()
+                            bmp = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
+                            reusableRoiBitmap = bmp
+                            lastRoiW = cropW
+                            lastRoiH = cropH
+                        }
+                        bmp.copyPixelsFromBuffer(buf)
+                        roiBitmap = bmp
+                    } else {
+                        Log.w(TAG, "copyRoiRgbaRows returned false, falling back to full copy")
                     }
-                    bmp.copyPixelsFromBuffer(buf)
-                    bmp
-                } catch (fallbackEx: Throwable) {
-                    // Safe fallback to original copy path if direct buffer transfer fails
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Fast ROI row-copy failed, falling back: ${e.message}")
+                }
+            }
+
+            // Guaranteed Fallback if fast path was skipped, returned false, or threw
+            if (roiBitmap == null) {
+                try {
+                    buffer.position(0)
                     val dest = ByteArray(rowBytes * cropH)
                     for (row in 0 until cropH) {
                         val srcOffset = (cropTop + row) * rowStride + cropLeft * pixelStride
@@ -422,22 +514,13 @@ class ScreenCaptureManager(
                         buffer.position(srcOffset)
                         buffer.get(dest, row * rowBytes, rowBytes)
                     }
+                    buffer.position(0)
                     val fbBmp = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
                     fbBmp.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
-                    fbBmp
+                    roiBitmap = fbBmp
+                } catch (fbErr: Throwable) {
+                    Log.e(TAG, "Fallback ROI copy failed: ${fbErr.message}", fbErr)
                 }
-            } else {
-                // Non-4 pixelStride fallback
-                val dest = ByteArray(rowBytes * cropH)
-                for (row in 0 until cropH) {
-                    val srcOffset = (cropTop + row) * rowStride + cropLeft * pixelStride
-                    if (srcOffset < 0 || srcOffset + rowBytes > bufLimit) break
-                    buffer.position(srcOffset)
-                    buffer.get(dest, row * rowBytes, rowBytes)
-                }
-                val fbBmp = Bitmap.createBitmap(cropW, cropH, Bitmap.Config.ARGB_8888)
-                fbBmp.copyPixelsFromBuffer(ByteBuffer.wrap(dest))
-                fbBmp
             }
 
             if (!hasLoggedRoiSuccess) {
@@ -680,6 +763,7 @@ class ScreenCaptureManager(
             lastCapturedFullScreenBitmap = null
             reusableRoiBitmap = null
             reusableRoiBuffer = null
+            reusableRowScratch = null
             Log.d(TAG, "VirtualDisplay and ImageReader released successfully")
             DiagnosticLogger.log("Capture manager released")
         } catch (t: Throwable) {
