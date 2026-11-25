@@ -230,21 +230,19 @@ object EnglishWordRepairer {
                         prev.endsWith(".'") || prev.endsWith("!'") || prev.endsWith("?'")
             }
             if (idx > 0 && !followsPunctuation && core[0].isUpperCase() && core.substring(1).all { it.isLowerCase() }) {
-                // Check if TitleCase token can cleanly split into 2 common dictionary words (e.g. Turningon -> Turning on)
-                val canSplit = run {
+                // Only allow splitting if trailing piece is a common grammatical particle (e.g. Turningon -> Turning on)
+                val canSplitParticle = run {
                     val n = lower.length
                     for (s in 1 until n) {
                         val w1 = lower.substring(0, s)
                         val w2 = lower.substring(s)
-                        if ((w1.length == 1 && w1 != "a" && w1 != "i") || (w2.length == 1 && w2 != "a" && w2 != "i")) continue
-                        if (maxOf(w1.length, w2.length) < 3) continue
-                        val r1 = dictionaryMap[w1] ?: continue
-                        val r2 = dictionaryMap[w2] ?: continue
-                        if (r1 <= 8000 && r2 <= 8000) return@run true
+                        if (w2 in GLUE_PARTICLES && dictionaryMap.containsKey(w1)) {
+                            return@run true
+                        }
                     }
                     false
                 }
-                if (!canSplit) {
+                if (!canSplitParticle) {
                     finalTokens.add(tok)
                     continue
                 }
@@ -348,5 +346,10 @@ object EnglishWordRepairer {
         "there's", "who's", "where's", "let's", "you're", "they're", "we're",
         "i'm", "i've", "you've", "we've", "they've", "i'll", "you'll", "he'll",
         "she'll", "we'll", "they'll", "i'd", "you'd", "he'd", "she'd", "we'd", "they'd"
+    )
+
+    private val GLUE_PARTICLES = setOf(
+        "on", "in", "to", "of", "off", "up", "at", "by", "for", "out", "with",
+        "the", "it", "me", "you", "him", "her", "us", "them", "is", "as", "be", "so"
     )
 }
