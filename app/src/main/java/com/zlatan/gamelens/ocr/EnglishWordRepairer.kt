@@ -277,19 +277,14 @@ object EnglishWordRepairer {
                         prev.endsWith(".'") || prev.endsWith("!'") || prev.endsWith("?'")
             }
             if (idx > 0 && !followsPunctuation && core[0].isUpperCase() && core.substring(1).all { it.isLowerCase() }) {
-                // Only allow splitting if trailing piece is a common grammatical particle or both parts are common words
+                // Only allow splitting if trailing piece is a common grammatical particle (e.g. Turningon -> Turning on)
                 val canSplitParticle = run {
                     val n = lower.length
                     for (s in 1 until n) {
                         val w1 = lower.substring(0, s)
                         val w2 = lower.substring(s)
-                        if (dictionaryMap.containsKey(w1)) {
-                            if (w2 in GLUE_PARTICLES) return@run true
-                            val r1 = dictionaryMap[w1] ?: Int.MAX_VALUE
-                            val r2 = dictionaryMap[w2] ?: Int.MAX_VALUE
-                            if (r1 <= 15000 && r2 <= 15000 && w1.length >= 3 && w2.length >= 3) {
-                                return@run true
-                            }
+                        if (w2 in GLUE_PARTICLES && dictionaryMap.containsKey(w1)) {
+                            return@run true
                         }
                     }
                     false

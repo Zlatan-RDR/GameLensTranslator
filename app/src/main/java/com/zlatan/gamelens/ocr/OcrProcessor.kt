@@ -294,16 +294,10 @@ object OcrTextCleaner {
         if (trimmed.isEmpty()) return false
         val tokens = trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
         if (tokens.size < 3) return false
-        val validWordCount = tokens.count { token ->
-            val clean = token.filter { it.isLetter() }.lowercase(Locale.US)
-            clean.isNotEmpty() && (SHORT_VALID_WORDS.contains(clean) || EnglishWordRepairer.isWord(clean))
-        }
-        if (validWordCount >= 3) return false // NEVER drop string containing >= 3 valid English words
-
         var fragmentCount = 0
         for (t in tokens) {
             val clean = t.filter { it.isLetter() }.lowercase(Locale.US)
-            if (clean.length in 1..3 && !SHORT_VALID_WORDS.contains(clean) && !EnglishWordRepairer.isWord(clean)) {
+            if (clean.length in 1..3 && !SHORT_VALID_WORDS.contains(clean)) {
                 fragmentCount++
             }
         }
