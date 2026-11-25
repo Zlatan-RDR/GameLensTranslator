@@ -769,7 +769,7 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         binding.tvTestApiResult.setTextColor(Color.parseColor("#F87171"))
                         val err = result.errorMessage ?: "فشل الاتصال: تأكد من صحة المفتاح والموديل والرابط."
-                        binding.tvTestApiResult.text = "❌ $err"
+                        binding.tvTestApiResult.text = if (err.startsWith("❌")) err else "❌ $err"
                     }
                 }
             } catch (e: Exception) {

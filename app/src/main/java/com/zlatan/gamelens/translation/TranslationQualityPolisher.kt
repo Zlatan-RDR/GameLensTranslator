@@ -9,7 +9,7 @@ object TranslationQualityPolisher {
 
     // Fix Arabic typography spacing:
     // Conjunction 'و' attached to following Arabic word: "و الرجل" -> "والرجل", "المعلومات و السرية" -> "المعلومات والسرية"
-    private val WAW_CONJUNCTION_REGEX = Regex("""(^|[\s،.؟!])و[\s\u00A0\u200E\u200F]+(?=[ء-يأإآؤئىة])""")
+    private val WAW_CONJUNCTION_REGEX = Regex("""(^|[\s\u00A0،.؟!؛:\)\]\}»"'])و[\s\u00A0\u200B-\u200D\uFEFF\u200E\u200F]+(?=[ء-يأإآؤئىة])""")
 
     // Feminine-object pronoun agreement: "تلك القلادة. لا تفقده" -> "تلك القلادة. لا تفقدها"
     private val FEMININE_OBJECT_PRONOUN_REGEX = Regex("(تلك\\s+[\\u0621-\\u064A]+[،.]\\s*لا\\s+[\\u0621-\\u064A]+)ه\\b")

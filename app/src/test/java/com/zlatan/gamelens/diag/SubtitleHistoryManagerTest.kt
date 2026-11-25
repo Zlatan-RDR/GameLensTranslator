@@ -77,4 +77,30 @@ class SubtitleHistoryManagerTest {
         // Block 1: start 0ms, nextStart 200ms. safeMax is 200 - 10 = 190ms (strict zero overlap)
         assertTrue(blocks[0].startsWith("1\n00:00:00,000 --> 00:00:00,190\nسريع"))
     }
+
+    @Test
+    fun testReplaceTruncatedEntryInHistoryOnFastUpgrade() {
+        SubtitleHistoryManager.clear()
+
+        val s1 = "That's all I got, homes. Call me back when"
+        val ar1 = "هذا كل ما لدي، يا صاح. اتصل بي عندما"
+        SubtitleHistoryManager.recordOrUpgradeStreaming(s1, ar1)
+
+        val hist1 = SubtitleHistoryManager.historyFlow.value
+        assertEquals(1, hist1.size)
+        assertEquals(s1, hist1[0].source)
+        assertEquals(ar1, hist1[0].arabic)
+
+        // Fast upgrade within <= 2500ms
+        val s2 = "Thats all I got, homes. Call me back when you're done, got it?"
+        val ar2 = "هذا كل ما لدي، يا صاح. اتصل بي عندما تنتهي، فهمت؟"
+        SubtitleHistoryManager.recordOrUpgradeStreaming(s2, ar2)
+
+        val hist2 = SubtitleHistoryManager.historyFlow.value
+        assertEquals(1, hist2.size)
+        assertEquals(s2, hist2[0].source)
+        assertEquals(ar2, hist2[0].arabic)
+
+        SubtitleHistoryManager.clear()
+    }
 }

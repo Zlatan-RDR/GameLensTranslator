@@ -138,4 +138,23 @@ class OcrProcessorTest {
         assertEquals("Chinatown. 12", OcrTextCleaner.normalizeOcrArtifacts("Chinatown . 12"))
         assertEquals("Hello, world", OcrTextCleaner.normalizeOcrArtifacts("Hello , world"))
     }
+
+    @Test
+    fun testDegradedReReadGate() {
+        val cleanLocked = "For years, Diana was my sole handler at the Agency. She supplied information and secrecy. And I sold perfection."
+        val degradedReRead = "For years, Diana was my sole handler at the CTIZAgency. She supplied information and secrecy. andi sold perfection."
+
+        val overlap = OcrProcessor.computeWordOverlapRatio(degradedReRead, cleanLocked)
+        assertTrue("Overlap must be >= 65%, was $overlap", overlap >= 0.65f)
+
+        assertTrue(
+            "Garbled re-read with CTIZAgency and andi sold must be flagged as degraded",
+            OcrProcessor.isDegradedReRead(degradedReRead, cleanLocked, newScore = 0.98f, lockedScore = 1.00f)
+        )
+
+        assertFalse(
+            "Identical text must not be degraded",
+            OcrProcessor.isDegradedReRead(cleanLocked, cleanLocked)
+        )
+    }
 }

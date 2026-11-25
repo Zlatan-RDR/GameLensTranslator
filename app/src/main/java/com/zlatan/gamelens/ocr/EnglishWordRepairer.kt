@@ -14,6 +14,7 @@ object EnglishWordRepairer {
     private const val ASSET_FILE = "en_dict.txt"
 
     private val WHITESPACE_REGEX = Regex("\\s+")
+    private val SPLIT_CURRENCY_OR_DECIMAL_REGEX = Regex("""([$€£¥]?\d+)\.\s+(\d{2}\b)""")
     private val CONTRACTION_LEFT_REGEX = Regex("^([A-Za-z]+(?:n['’]t|['’](?:s|ve|re|ll|d|m)))([A-Za-z]+)$", RegexOption.IGNORE_CASE)
     private val CONTRACTION_RIGHT_REGEX = Regex("^([A-Za-z]+)(he['’]s|she['’]s|it['’]s|that['’]s|what['’]s|there['’]s|who['’]s|where['’]s|won['’]t|can['’]t)$", RegexOption.IGNORE_CASE)
     private val CAMEL_CASE_REGEX = Regex("^([A-Z][a-z]{2,})([A-Z][a-z]+|[a-z]{2,})$")
@@ -105,6 +106,21 @@ object EnglishWordRepairer {
         return validCount.toFloat() / tokens.size.toFloat()
     }
 
+    /**
+     * Counts tokens that are non-dictionary / unknown English words.
+     */
+    fun unknownTokenCount(text: String): Int {
+        val tokens = text.split(WHITESPACE_REGEX).filter { it.isNotBlank() }
+        var unknown = 0
+        for (t in tokens) {
+            val clean = t.filter { it.isLetter() }.lowercase(Locale.US)
+            if (clean.length >= 2 && !dictionaryMap.containsKey(clean) && !com.zlatan.gamelens.ocr.OcrEngine.SHORT_VALID_WORDS.contains(clean)) {
+                unknown++
+            }
+        }
+        return unknown
+    }
+
     private data class TokenParts(val leadingPunct: String, val core: String, val trailingPunct: String)
 
     private fun splitPunctuation(token: String): TokenParts {
@@ -129,11 +145,38 @@ object EnglishWordRepairer {
      * Pass C: Stray Mixed-Case Cleanup
      */
     fun repair(text: String): String {
-        if (text.isBlank() || dictionaryMap.isEmpty()) return text
+        if (text.isBlank()) return text
 
         val normalizedInput = text.replace(POSSESSIVE_EXCLAMATION_REGEX, "'s")
-        val rawTokens = normalizedInput.trim().split(WHITESPACE_REGEX).filter { it.isNotEmpty() }
-        if (rawTokens.isEmpty()) return text
+        val currencyRepaired = SPLIT_CURRENCY_OR_DECIMAL_REGEX.replace(normalizedInput) { match ->
+            val prefix = match.groupValues[1]
+            val cents = match.groupValues[2]
+            val hasCurrency = prefix.any { it in "$€£¥" }
+            if (hasCurrency) {
+                "$prefix.$cents"
+            } else {
+                val afterMatch = normalizedInput.substring(match.range.last + 1).trimStart()
+                val beforeMatch = normalizedInput.substring(0, match.range.first).trimEnd()
+                val isSentenceOrList = beforeMatch.endsWith("chapter", ignoreCase = true) ||
+                        beforeMatch.endsWith("section", ignoreCase = true) ||
+                        beforeMatch.endsWith("part", ignoreCase = true) ||
+                        afterMatch.startsWith("minutes", ignoreCase = true) ||
+                        afterMatch.startsWith("seconds", ignoreCase = true) ||
+                        afterMatch.startsWith("hours", ignoreCase = true) ||
+                        afterMatch.startsWith("days", ignoreCase = true) ||
+                        afterMatch.startsWith("years", ignoreCase = true) ||
+                        prefix.length == 1
+                if (isSentenceOrList) {
+                    match.value
+                } else {
+                    "$prefix.$cents"
+                }
+            }
+        }
+        if (dictionaryMap.isEmpty()) return currencyRepaired
+
+        val rawTokens = currencyRepaired.trim().split(WHITESPACE_REGEX).filter { it.isNotEmpty() }
+        if (rawTokens.isEmpty()) return currencyRepaired
 
         // Pass A — Adjacent Split-Word Rejoining (3-fragment and 2-fragment)
         val rejoinedTokens = ArrayList<String>(rawTokens.size)

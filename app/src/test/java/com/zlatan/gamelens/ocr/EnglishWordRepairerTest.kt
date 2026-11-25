@@ -142,4 +142,20 @@ class EnglishWordRepairerTest {
         assertTrue(EnglishWordRepairer.dictionaryCoverage(highCoverage) >= 0.90f)
         assertTrue(EnglishWordRepairer.dictionaryCoverage(lowCoverage) <= 0.10f)
     }
+
+    @Test
+    fun testRepairSplitCurrencyAndDecimal() {
+        assertEquals(
+            "$37.50 a night. No parties.",
+            EnglishWordRepairer.repair("$37. 50 a night. No parties.")
+        )
+        assertEquals(
+            "End of chapter 1. 20 minutes later.",
+            EnglishWordRepairer.repair("End of chapter 1. 20 minutes later.")
+        )
+        assertEquals(
+            "Hello world. This is test 2. 50 days passed.",
+            EnglishWordRepairer.repair("Hello world. This is test 2. 50 days passed.")
+        )
+    }
 }

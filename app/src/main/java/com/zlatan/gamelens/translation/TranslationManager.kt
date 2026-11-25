@@ -144,7 +144,9 @@ class TranslationManager(
             "Travis" to "ترافيس",
             "Benjamin" to "بنيامين",
             "Agent 47" to "العميل 47",
-            "Chicago" to "شيكاغو"
+            "Chicago" to "شيكاغو",
+            "Victoria" to "فيكتوريا",
+            "Diana" to "ديانا"
         )
 
         /**
@@ -159,7 +161,21 @@ class TranslationManager(
         }
     }
 
+    private object Ipv4FirstDns : okhttp3.Dns {
+        override fun lookup(hostname: String): List<java.net.InetAddress> {
+            val addresses = okhttp3.Dns.SYSTEM.lookup(hostname)
+            return addresses.sortedWith { a, b ->
+                when {
+                    a is java.net.Inet4Address && b is java.net.Inet6Address -> -1
+                    a is java.net.Inet6Address && b is java.net.Inet4Address -> 1
+                    else -> 0
+                }
+            }
+        }
+    }
+
     private val sharedHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .dns(Ipv4FirstDns)
         .connectionPool(okhttp3.ConnectionPool(5, 5L, TimeUnit.MINUTES))
         .connectTimeout(3000L, TimeUnit.MILLISECONDS)
         .readTimeout(8000L, TimeUnit.MILLISECONDS)
@@ -755,11 +771,18 @@ class TranslationManager(
 
         // 2. Insert space between non-connecting terminal letters and definite-article prefix or particles/pronouns
         // Guard: never split before الة (e.g. بإزالة / إزالة) or when preceded by a stem fragment like بإز
+        // Guard: never split 'و' before 'ال' (e.g. والسرية / والرجل)
         val gluedPattern = Regex(
+            "([\\u0627\\u0649\\u0629\\u0647\\u062F\\u0630\\u0631\\u0632])" +
+            "(?=\\u0627\\u0644(?![\u0629\u0649])[\u0600-\u06FF]{2,})|" +
             "([\\u0627\\u0649\\u0629\\u0647\\u062F\\u0630\\u0631\\u0632\\u0648])" +
-            "(?=\\u0627\\u0644(?![\u0629\u0649])[\u0600-\u06FF]{2,}|(?:(?:\\u0647\\u064A|\\u0647\\u0648|\\u0647\\u0645|\\u064A\\u062C\\u0628|\\u0623\\u0646|\\u0623\\u0648|\\u0625\\u0644\\u0649|\\u0639\\u0644\\u0649|\\u0645\\u0646|\\u0639\\u0646|\\u0645\\u0639|\\u0647\\u0630\\u0627|\\u0647\\u0630\\u0647|\\u0630\\u0644\\u0643)\\b))"
+            "(?=(?:(?:\\u0647\\u064A|\\u0647\\u0648|\\u0647\\u0645|\\u064A\\u062C\\u0628|\\u0623\\u0646|\\u0623\\u0648|\\u0625\\u0644\\u0649|\\u0639\\u0644\\u0649|\\u0645\\u0646|\\u0639\\u0646|\\u0645\\u0639|\\u0647\\u0630\\u0627|\\u0647\\u0630\\u0647|\\u0630\\u0644\\u0643)\\b))"
         )
-        sanitized = sanitized.replace(gluedPattern, "$1 ")
+        sanitized = sanitized.replace(gluedPattern) { match ->
+            val g1 = match.groups[1]?.value
+            val g2 = match.groups[2]?.value
+            "${g1 ?: g2} "
+        }
         sanitized = sanitized.replace(Regex("\\bبإز\\s+الة\\b"), "بإزالة")
         sanitized = sanitized.replace(Regex("بإز\\s+الة"), "بإزالة")
         sanitized = sanitized.replace(Regex("إز\\s+الة"), "إزالة")
@@ -1002,9 +1025,9 @@ class TranslationManager(
             }
 
             val testClient = sharedHttpClient.newBuilder()
-                .callTimeout(8000L, TimeUnit.MILLISECONDS)
-                .readTimeout(8000L, TimeUnit.MILLISECONDS)
+                .callTimeout(11000L, TimeUnit.MILLISECONDS)
                 .connectTimeout(3000L, TimeUnit.MILLISECONDS)
+                .readTimeout(8000L, TimeUnit.MILLISECONDS)
                 .build()
 
             var response = testClient.newCall(request).execute()
@@ -1062,8 +1085,16 @@ class TranslationManager(
                 ApiTestResult(false, null, "النص المترجم فارغ")
             }
         } catch (e: Exception) {
-            val isTimeout = e is java.net.SocketTimeoutException || e.message?.contains("timeout", ignoreCase = true) == true
-            val msg = if (isTimeout) "Timeout (>8000ms)" else "${e.javaClass.simpleName}: ${e.message}"
+            val msg = when {
+                e is java.net.SocketTimeoutException && (e.message?.contains("connect", ignoreCase = true) == true || e.message?.contains("failed to connect", ignoreCase = true) == true) ->
+                    "Connect Timeout (>3s)"
+                e is java.net.SocketTimeoutException ->
+                    "Read Timeout (>8s)"
+                e.message?.contains("timeout", ignoreCase = true) == true ->
+                    "Timeout (>8000ms)"
+                else ->
+                    "${e.javaClass.simpleName}: ${e.message}"
+            }
             ApiTestResult(false, null, msg)
         }
     }

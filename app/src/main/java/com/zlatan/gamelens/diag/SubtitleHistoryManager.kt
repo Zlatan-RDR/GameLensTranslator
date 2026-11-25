@@ -50,7 +50,13 @@ object SubtitleHistoryManager {
         val last = entries.peekLast()
         if (last != null && (now - last.recordTimeMs <= 6000L)) {
             val verdict = com.zlatan.gamelens.ocr.OcrEngine.classifySupersetExpansion(last.source, cleanSrc)
-            if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION) {
+            val isFastUpgrade = (now - last.recordTimeMs <= 2500L) && (
+                com.zlatan.gamelens.ocr.OcrProcessor.isCleanSupersetUpgrade(cleanSrc, last.source) ||
+                com.zlatan.gamelens.ocr.OcrProcessor.isCleanSubsetUpgrade(cleanSrc, last.source) ||
+                (com.zlatan.gamelens.ocr.OcrProcessor.computeWordOverlapRatio(cleanSrc, last.source) >= 0.65f && cleanSrc.length > last.source.length)
+            )
+
+            if (verdict == com.zlatan.gamelens.ocr.OcrEngine.SupersetVerdict.CLEAN_PROGRESSIVE_EXPANSION || isFastUpgrade) {
                 entries.pollLast()
                 val updated = HistoryEntry(last.timestamp, cleanSrc, cleanAr, now)
                 entries.add(updated)

@@ -108,4 +108,26 @@ class TranslationManagerTest {
         org.junit.Assert.assertFalse("Retry payload must omit temperature", retryBody.has("temperature"))
         assertEquals(512, retryBody.getInt("max_tokens"))
     }
+
+    @Test
+    fun testGlossaryFemaleAgreementAndConjunctionPolish() {
+        val glossaryText = "Diana [أنثى]\nVictoria [أنثى]"
+        val entries = GameGlossaryManager.parse(glossaryText)
+        val femaleNames = GameGlossaryManager.getFemaleNames(entries)
+
+        // 1. Conjunction 'و ' polish (including with NBSP \u00A0)
+        val rawConjunction = "لقد قدمت المعلومات و\u00A0السرية."
+        val polishedConjunction = TranslationQualityPolisher.polishArabic(rawConjunction, femaleNames)
+        assertEquals("لقد قدمت المعلومات والسرية.", polishedConjunction)
+
+        val rawConjunctionNormalSpace = "لقد قدمت المعلومات و السرية."
+        val polishedNormal = TranslationQualityPolisher.polishArabic(rawConjunctionNormalSpace, femaleNames)
+        assertEquals("لقد قدمت المعلومات والسرية.", polishedNormal)
+
+        // 2. Female agreement with Victoria
+        val sourceEnglish = "Oh, you must be victoria. Come on in, child."
+        val rawMt = "أوه، يجب أن تكون فيكتوريا. ادخل يا طفل."
+        val polishedFemale = TranslationQualityPolisher.polishArabic(rawMt, femaleNames, sourceEnglish)
+        assertEquals("أوه، يجب أن تكوني فيكتوريا. ادخلي يا طفلتي.", polishedFemale)
+    }
 }

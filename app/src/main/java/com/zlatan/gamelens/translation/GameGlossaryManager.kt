@@ -50,7 +50,18 @@ object GameGlossaryManager {
                 else -> -1 to 0
             }
 
-            if (delimiterIndex.first <= 0) continue
+            if (delimiterIndex.first <= 0) {
+                // Support standalone character tag format: e.g. "Diana [أنثى]", "Victoria [female]"
+                if (GENDER_ANY_TAG_REGEX.containsMatchIn(line)) {
+                    val gender = if (GENDER_FEMININE_REGEX.containsMatchIn(line)) Gender.FEMININE else Gender.MASCULINE
+                    val clean = GENDER_ANY_TAG_REGEX.replace(line, "").trim()
+                    if (clean.isNotEmpty() && !seenTerms.contains(clean.lowercase(Locale.US))) {
+                        seenTerms.add(clean.lowercase(Locale.US))
+                        result.add(GlossaryEntry(clean, clean, gender))
+                    }
+                }
+                continue
+            }
 
             val rawTerm = line.substring(0, delimiterIndex.first).trim()
             val rawTarget = line.substring(delimiterIndex.first + delimiterIndex.second).trim()
@@ -75,6 +86,15 @@ object GameGlossaryManager {
         return result
     }
 
+    private val COMMON_FEMALE_TRANSLITERATIONS = mapOf(
+        "victoria" to "فيكتوريا",
+        "diana" to "ديانا",
+        "sarah" to "سارة",
+        "mary" to "ماري",
+        "elena" to "إيلينا",
+        "lara" to "لارا"
+    )
+
     /**
      * Extracts all female character names (English terms and Arabic targets) for targeted gender agreement.
      */
@@ -82,8 +102,16 @@ object GameGlossaryManager {
         val result = mutableSetOf<String>()
         for (entry in entries) {
             if (entry.gender == Gender.FEMININE) {
-                if (entry.term.isNotBlank()) result.add(entry.term.trim())
-                if (entry.target.isNotBlank()) result.add(entry.target.trim())
+                if (entry.term.isNotBlank()) {
+                    val t = entry.term.trim()
+                    result.add(t)
+                    COMMON_FEMALE_TRANSLITERATIONS[t.lowercase(Locale.US)]?.let { result.add(it) }
+                }
+                if (entry.target.isNotBlank()) {
+                    val tg = entry.target.trim()
+                    result.add(tg)
+                    COMMON_FEMALE_TRANSLITERATIONS[tg.lowercase(Locale.US)]?.let { result.add(it) }
+                }
             }
         }
         return result

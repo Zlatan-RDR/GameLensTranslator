@@ -163,6 +163,7 @@ class TranslationOverlayService : Service() {
     private var activeTranslationJob: Job? = null
     private var lastOcrTimestamp: Long = 0L
     private var lastDisplayedEnglishText: String = ""
+    private var lastDisplayedQualityScore: Float = 0.0f
     private var candidateEnglishText: String = ""
     private var candidateTimestamp: Long = 0L
     private var pendingStreamingText: String = ""
@@ -562,6 +563,7 @@ class TranslationOverlayService : Service() {
             if (seamlessOverlayRenderer?.isSubtitleVisible() == true) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
+                lastDisplayedQualityScore = 0.0f
                 candidateEnglishText = ""
                 pendingStreamingText = ""
                 streamingStartTime = 0L
@@ -591,6 +593,7 @@ class TranslationOverlayService : Service() {
         if (android.os.SystemClock.elapsedRealtime() - lastResizeTimestampMs < 650L) {
             seamlessOverlayRenderer?.clear()
             lastDisplayedEnglishText = ""
+            lastDisplayedQualityScore = 0.0f
             candidateEnglishText = ""
             pendingStreamingText = ""
             streamingStartTime = 0L
@@ -796,6 +799,20 @@ class TranslationOverlayService : Service() {
                 return
             }
             Log.d(TAG, "OCR quality-upgrade allowed for active subtitle: \"$lastDisplayedEnglishText\" -> \"$mergedEnglish\"")
+        }
+
+        // Degraded Re-Read Gate: while continuously visible (emptyCount == 0), prevent garbled re-read from overwriting cleaner locked subtitle
+        if (lastDisplayedEnglishText.isNotEmpty() && (consecutiveEmptyRoiCount == 0 || now - lastSubtitleDisplayTimestamp < 5000L)) {
+            val isDegraded = com.zlatan.gamelens.ocr.OcrProcessor.isDegradedReRead(mergedEnglish, lastDisplayedEnglishText, bestScore, lastDisplayedQualityScore)
+            if (isDegraded && PatchManager.lookup(mergedEnglish) == null) {
+                val dropMsg = "OCR skipped [degraded-reread]: \"$mergedEnglish\" (degraded re-read of: \"$lastDisplayedEnglishText\")"
+                Log.d(TAG, dropMsg)
+                DiagnosticLogger.log(dropMsg)
+                consecutiveEmptyRoiCount = 0
+                lastSubtitleVisibleOnScreenMs = now
+                seamlessOverlayRenderer?.keepSubtitleAlive()
+                return
+            }
         }
 
         // Continuous Anti-Pollution Lock: ignore shorter subsets unless clean-subset upgrade (consecutiveEmptyRoiCount == 0)
@@ -1004,7 +1021,16 @@ class TranslationOverlayService : Service() {
                 return@launch
             }
 
-            val arabicTranslation = if (patchMatch != null) rawArabic else translationManager.repairGluedArabicWords(rawArabic)
+            val curProfile = com.zlatan.gamelens.profile.GameProfileManager.getActiveProfile(this@TranslationOverlayService)
+            val glossaryEntries = com.zlatan.gamelens.translation.GameGlossaryManager.parse(curProfile.glossaryText)
+            val femaleNames = com.zlatan.gamelens.translation.GameGlossaryManager.getFemaleNames(glossaryEntries)
+
+            val arabicTranslation = if (patchMatch != null) {
+                com.zlatan.gamelens.translation.TranslationQualityPolisher.polishArabic(rawArabic, femaleNames, textToTranslate)
+            } else {
+                val repaired = translationManager.repairGluedArabicWords(rawArabic)
+                com.zlatan.gamelens.translation.TranslationQualityPolisher.polishArabic(repaired, femaleNames, textToTranslate)
+            }
 
             if (arabicTranslation.isBlank() || arabicTranslation.trim().equals(textToTranslate.trim(), ignoreCase = true) || !ARABIC_REGEX.containsMatchIn(arabicTranslation)) {
                 val dropMsg = "OCR skipped [empty-or-non-arabic]: \"$promptNormalized\" -> \"$arabicTranslation\""
@@ -1024,6 +1050,7 @@ class TranslationOverlayService : Service() {
                 if (capturedGen != subtitleGeneration.get()) return@withContext
 
                 lastDisplayedEnglishText = mergedEnglish
+                lastDisplayedQualityScore = bestScore
                 lastSubtitleDisplayTimestamp = android.os.SystemClock.uptimeMillis()
                 lastSubtitleVisibleOnScreenMs = android.os.SystemClock.uptimeMillis()
                 consecutiveEmptyRoiCount = 0
@@ -1072,6 +1099,7 @@ class TranslationOverlayService : Service() {
                     if (verifyClean.isEmpty()) {
                         seamlessOverlayRenderer?.clear()
                         lastDisplayedEnglishText = ""
+                        lastDisplayedQualityScore = 0.0f
                         candidateEnglishText = ""
                         pendingStreamingText = ""
                         streamingStartTime = 0L
@@ -1083,6 +1111,7 @@ class TranslationOverlayService : Service() {
             } else if (consecutiveEmptyRoiCount >= 2) {
                 seamlessOverlayRenderer?.clear()
                 lastDisplayedEnglishText = ""
+                lastDisplayedQualityScore = 0.0f
                 candidateEnglishText = ""
                 pendingStreamingText = ""
                 streamingStartTime = 0L

@@ -24,6 +24,9 @@ object OcrProcessor {
     fun isCleanSupersetUpgrade(newText: String, lastLockedText: String): Boolean =
         OcrTextCleaner.isCleanSupersetUpgrade(newText, lastLockedText)
 
+    fun isDegradedReRead(newText: String, lastLockedText: String, newScore: Float = 0f, lockedScore: Float = 0f): Boolean =
+        OcrTextCleaner.isDegradedReRead(newText, lastLockedText, newScore, lockedScore)
+
     fun computeWordOverlapRatio(textA: String, textB: String): Float =
         OcrTextCleaner.computeWordOverlapRatio(textA, textB)
 
@@ -663,6 +666,35 @@ object OcrTextCleaner {
 
         val dictRatio = validDictCount.toFloat() / addedTokens.size.toFloat()
         return validDictCount >= 2 && dictRatio >= 0.75f
+    }
+
+    /**
+     * Degraded Re-Read Gate:
+     * When newText shares >= 65% normalized word overlap with lastLockedText,
+     * checks if newText is a garbled degradation of lastLockedText (more unknown tokens, lower quality score, worse dict coverage).
+     * Prevents garbled frames (e.g. "CTIZAgency", "andi sold") from overwriting clean locked subtitles.
+     */
+    fun isDegradedReRead(newText: String, lastLockedText: String, newScore: Float = 0f, lockedScore: Float = 0f): Boolean {
+        val n = newText.trim()
+        val l = lastLockedText.trim()
+        if (n.isEmpty() || l.isEmpty() || n.equals(l, ignoreCase = true)) return false
+
+        val overlap = computeWordOverlapRatio(n, l)
+        if (overlap < 0.65f) return false
+
+        // Never flag legitimate clean upgrades as degraded
+        if (isCleanSubsetUpgrade(n, l) || isCleanSupersetUpgrade(n, l)) {
+            return false
+        }
+
+        val newCov = EnglishWordRepairer.dictionaryCoverage(n)
+        val lockedCov = EnglishWordRepairer.dictionaryCoverage(l)
+        val newUnknown = EnglishWordRepairer.unknownTokenCount(n)
+        val lockedUnknown = EnglishWordRepairer.unknownTokenCount(l)
+
+        val qDegraded = (newScore > 0f && lockedScore > 0f && newScore < lockedScore)
+
+        return newUnknown > lockedUnknown || (lockedCov - newCov) >= 0.05f || qDegraded
     }
 
     fun isNoiseOrPrompt(text: String): Boolean {
